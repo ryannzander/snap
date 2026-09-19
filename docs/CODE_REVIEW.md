@@ -113,7 +113,7 @@ The PR description is stale in one important way: it says the devnet RPC still 4
 ### Tests and project
 
 - Seven tests added; one vacuous test (`testTraceSinceIsExclusive`) made real; the split suite removed.
-- `project.yml` carries `DEVELOPMENT_TEAM` and `ASSETCATALOG_COMPILER_APPICON_NAME` so `xcodegen` stops dropping signing and the icon; the unused `processing` background mode is removed; the shared scheme skips `SnapUITests` by default, matching that test's own instructions.
+- `project.yml` carries `DEVELOPMENT_TEAM` and `ASSETCATALOG_COMPILER_APPICON_NAME` so `xcodegen` stops dropping signing and the icon; the unused `processing` background mode is removed; `SnapUITests` stays in the scheme (a scheme-level skip also blocks `-only-testing`); the unit-only run uses `-skip-testing:SnapUITests`.
 - `.gitignore` gains the Apple signing files and Solana's default `id.json`.
 
 ### Docs
