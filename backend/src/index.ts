@@ -8,6 +8,8 @@
  * /webhooks/* needs `Authorization: Bearer <token>`.
  */
 
+import type { ChannelName } from './channel';
+import { normalizeInbound, verifySignature } from './channels/linq';
 import { directoryStub } from './directory';
 import { HttpError, errorResponse, json, toResponse } from './http';
 import { newUserId, userIdFromToken } from './ids';
@@ -56,6 +58,10 @@ async function route(request: Request, env: Env): Promise<Response> {
       requireMethod(request, 'GET');
       return getTrace(request, url, env);
 
+    case '/webhooks/linq':
+      requireMethod(request, 'POST');
+      return linqWebhook(request, env);
+
     default:
       return errorResponse(404, 'not_found', `no route for ${request.method} ${path}`);
   }
@@ -99,6 +105,72 @@ async function getTrace(request: Request, url: URL, env: Env): Promise<Response>
   const { token, stub } = authenticate(request, env);
   const since = parseSince(url.searchParams.get('since'));
   return toResponse(await stub.getTrace(token, since));
+}
+
+/**
+ * Inbound from Linq. Unauthenticated by design — the signature is the auth —
+ * so it verifies, de-duplicates, and then answers 200 for everything.
+ *
+ * A non-200 makes Linq retry, and a retry of a message we could not route is
+ * no more routable the second time, so unknown events and unlinked chats are
+ * acknowledged rather than rejected.
+ */
+async function linqWebhook(request: Request, env: Env): Promise<Response> {
+  const rawBody = await request.text();
+
+  if (env.LINQ_SIGNING_SECRET) {
+    const valid = await verifySignature(
+      request.headers,
+      rawBody,
+      env.LINQ_SIGNING_SECRET,
+      Date.now(),
+    );
+    if (!valid) return errorResponse(401, 'bad_signature', 'webhook signature did not verify');
+  }
+
+  let body: unknown;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return json({ ok: true, ignored: 'unparseable' });
+  }
+
+  const inbound = normalizeInbound(body);
+  if (!inbound) return json({ ok: true, ignored: 'not an inbound text' });
+
+  const directory = directoryStub(env);
+  if (!(await directory.claimEvent(inbound.eventId))) {
+    return json({ ok: true, ignored: 'duplicate delivery' });
+  }
+
+  return deliver(env, inbound.channel, inbound.chatId, inbound.text);
+}
+
+/** `yo <code>` links a chat to a user; anything else goes to the linked user. */
+async function deliver(
+  env: Env,
+  channel: ChannelName,
+  chatId: string,
+  text: string,
+): Promise<Response> {
+  const code = /^\s*yo[\s,]+(\d{4})\s*[.!]?\s*$/i.exec(text)?.[1];
+
+  if (code) {
+    const userId = await directoryStub(env).lookupLinkCode(code);
+    // An unknown code gets no reply: answering would burn a message from the
+    // sandbox budget and tell a stranger whether a code exists.
+    if (!userId) return json({ ok: true, ignored: 'unknown link code' });
+
+    await directoryStub(env).bindChat(channel, chatId, userId);
+    const result = await userStub(env, userId).linkChat(channel, chatId);
+    return result.ok ? json({ ok: true, linked: true }) : json({ ok: true, ignored: 'no such user' });
+  }
+
+  const userId = await directoryStub(env).lookupChat(channel, chatId);
+  if (!userId) return json({ ok: true, ignored: 'chat not linked' });
+
+  await userStub(env, userId).receiveMessage(text);
+  return json({ ok: true, received: true });
 }
 
 // --- plumbing --------------------------------------------------------------

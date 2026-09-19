@@ -1,6 +1,10 @@
 import { DurableObject } from 'cloudflare:workers';
 
+import type { Channel, ChannelName } from './channel';
+import { LinqChannel } from './channels/linq';
+import { TraceChannel } from './channels/trace';
 import { fail, ok, type DoResult } from './http';
+import { isOptOut } from './optout';
 import { issueToken, secureEquals } from './ids';
 import { parseIso, startOfWeek } from './time';
 import type {
@@ -55,8 +59,10 @@ interface Profile {
 interface Link {
   linkCode: string;
   linked: boolean;
-  channel: string | null;
+  channel: ChannelName | null;
   chatId: string | null;
+  /** Set by an inbound STOP. Nothing is ever sent again while true. */
+  optedOut: boolean;
 }
 
 interface StoredWorkout extends WorkoutInput {
@@ -118,6 +124,7 @@ export class UserAgent extends DurableObject<Env> {
       linked: false,
       channel: null,
       chatId: null,
+      optedOut: false,
     };
 
     await this.ctx.storage.put({
@@ -239,6 +246,77 @@ export class UserAgent extends DurableObject<Env> {
     });
 
     return ok({ events: [...events.values()] });
+  }
+
+  // --- channel ------------------------------------------------------------
+
+  /**
+   * Binds a chat to this user. Called when `yo <code>` arrives on any channel.
+   * Idempotent: texting the code twice re-links the same chat without a
+   * second greeting.
+   */
+  async linkChat(channel: ChannelName, chatId: string): Promise<DoResult<{ greeted: boolean }>> {
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    if (!link) return fail(404, 'not_found', 'no such user');
+
+    const alreadyHere = link.linked && link.channel === channel && link.chatId === chatId;
+    await this.ctx.storage.put(KEY.link, {
+      ...link,
+      linked: true,
+      channel,
+      chatId,
+    } satisfies Link);
+
+    if (alreadyHere) return ok({ greeted: false });
+
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    await this.sendTexts([`yo ${profile?.name?.toLowerCase() ?? 'bro'}`, 'im in. what are we doing today']);
+    return ok({ greeted: true });
+  }
+
+  /** Records an inbound text. The agent acts on it in step 3. */
+  async receiveMessage(text: string): Promise<DoResult<{ optedOut: boolean }>> {
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    if (!link) return fail(404, 'not_found', 'no such user');
+
+    await this.appendTraces([{ kind: 'message_received', summary: text }]);
+
+    const optedOut = isOptOut(text);
+    // Linq clears an opt-out as soon as the recipient replies again with
+    // anything that is not itself a keyword, so mirror that rather than
+    // keeping our own permanent block — otherwise one STOP kills the user
+    // forever even after they text back.
+    if (optedOut !== link.optedOut) {
+      await this.ctx.storage.put(KEY.link, { ...link, optedOut } satisfies Link);
+    }
+    return ok({ optedOut });
+  }
+
+  /**
+   * Sends a burst of texts and traces each one. Every channel is traced the
+   * same way, so the brain screen is identical whether or not delivery is real.
+   */
+  async sendTexts(texts: string[]): Promise<void> {
+    if (texts.length === 0) return;
+
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    if (!link?.linked || !link.chatId || !link.channel) return;
+    if (link.optedOut) return;
+
+    await this.appendTraces(texts.map((text) => ({ kind: 'message_sent' as const, summary: text })));
+
+    try {
+      await this.channelFor(link.channel).send(link.chatId, texts);
+    } catch (error) {
+      // A send failure must not lose the trace or fail the caller's request;
+      // the brain screen still shows what Snap decided to say.
+      console.error('channel send failed', error);
+    }
+  }
+
+  private channelFor(name: ChannelName): Channel {
+    if (name === 'linq' && this.env.LINQ_API_KEY) return new LinqChannel(this.env.LINQ_API_KEY);
+    return new TraceChannel();
   }
 
   // --- internals -----------------------------------------------------------

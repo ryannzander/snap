@@ -1,0 +1,9 @@
+# Copy to .dev.vars (gitignored) and fill in. Never commit the real file.
+# In production these are set with `wrangler secret put <NAME>`.
+
+# Linq Partner API bearer token, from the sandbox signup.
+LINQ_API_KEY=""
+
+# Signing secret from the Linq webhook subscription (starts with whsec_).
+# Leave empty locally to skip signature checks; required in production.
+LINQ_SIGNING_SECRET=""

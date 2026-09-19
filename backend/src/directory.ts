@@ -27,9 +27,29 @@ export class Directory extends DurableObject<Env> {
     throw new Error('could not allocate an unused link code');
   }
 
-  /** Resolves `yo <code>` to a userId. Used by the channel webhooks in step 2. */
+  /** Resolves `yo <code>` to a userId. */
   async lookupLinkCode(code: string): Promise<string | null> {
     return (await this.ctx.storage.get<string>(`code:${code}`)) ?? null;
+  }
+
+  /** Remembers which user a chat belongs to, so later texts route without a code. */
+  async bindChat(channel: string, chatId: string, userId: string): Promise<void> {
+    await this.ctx.storage.put(`chat:${channel}:${chatId}`, userId);
+  }
+
+  async lookupChat(channel: string, chatId: string): Promise<string | null> {
+    return (await this.ctx.storage.get<string>(`chat:${channel}:${chatId}`)) ?? null;
+  }
+
+  /**
+   * Webhook de-duplication. Linq retries deliveries, and a replayed `yo <code>`
+   * would otherwise re-greet the user. Returns true the first time only.
+   */
+  async claimEvent(eventId: string): Promise<boolean> {
+    const key = `event:${eventId}`;
+    if (await this.ctx.storage.get(key)) return false;
+    await this.ctx.storage.put(key, 1);
+    return true;
   }
 }
 
