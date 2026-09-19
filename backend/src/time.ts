@@ -65,3 +65,42 @@ export function parseIso(value: string): number | null {
   const ms = Date.parse(value);
   return Number.isNaN(ms) ? null : ms;
 }
+
+/**
+ * UTC instant of the next local midnight in `tz` — the moment "end of day"
+ * passes, which is when a stake may be slashed (DESIGN.md → Stake rules).
+ */
+export function endOfLocalDay(instant: number, tz: string): number {
+  const local = new Date(instant + tzOffsetMs(instant, tz));
+  const nextMidnight = Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate() + 1,
+  );
+  const firstGuess = nextMidnight - tzOffsetMs(instant, tz);
+  return nextMidnight - tzOffsetMs(firstGuess, tz);
+}
+
+/**
+ * Turns a local wall-clock time the model named ("7pm") into a UTC instant.
+ * The model is never asked to convert timezones — it got that wrong in
+ * testing, and this is already property-tested across zones and DST edges.
+ */
+export function localTimeToInstant(
+  reference: number,
+  tz: string,
+  hour: number,
+  minute: number,
+  dayOffset = 0,
+): number {
+  const local = new Date(reference + tzOffsetMs(reference, tz));
+  const wallClock = Date.UTC(
+    local.getUTCFullYear(),
+    local.getUTCMonth(),
+    local.getUTCDate() + dayOffset,
+    hour,
+    minute,
+  );
+  const firstGuess = wallClock - tzOffsetMs(reference, tz);
+  return wallClock - tzOffsetMs(firstGuess, tz);
+}
