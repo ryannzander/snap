@@ -60,3 +60,18 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 
 - Apple Watch starts a real workout on stage to close the loop. **The Watch's workouts only land in HealthKit on the iPhone it's paired with — that iPhone has to be the demo phone**, with the app installed and onboarded.
 - iPhone mirrored to a laptop (QuickTime) so judges see the trace and the incoming text together.
+- **Demo phone = whichever iPhone the Apple Watch is paired with.** That phone needs the build installed, onboarded, and linked to Snap on both Linq and Telegram by Saturday night. No Watch on the day → debug panel's simulated workout, and say it's simulated.
+- **Seeded history:** a debug action seeds a plausible week for the demo user (2/4 done, skipped yesterday, one earlier excuse). Seeded data, real reasoning — say so if asked.
+- **Fallbacks:** Telegram already linked on the demo phone as a second channel; phone hotspot, not venue wifi; 60-second screen recording of a clean run done by Sun 6 AM (also the Devpost video).
+- **Feature freeze: Sun 4 AM.** Last four hours are rehearsal and polish only.
+
+### The 5 minutes (no slides, rehearse 5+ times)
+
+| Time | Beat |
+|------|------|
+| 0:00 | "Snap is a gym bro who texts you first — and takes your money if you skip." |
+| 0:20 | Text the commitment + stake live. Trace shows the lock on Solana. |
+| 1:00 | Time-warp past the deadline. Phone buzzes. Brain screen shows why it decided to text. |
+| 2:00 | Reply with an excuse. It negotiates or refuses, based on history. |
+| 3:00 | Start the Watch workout. Stake released, hype text. |
+| 4:00 | 30 seconds of architecture, naming each sponsor's piece. |

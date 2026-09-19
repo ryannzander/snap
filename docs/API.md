@@ -80,6 +80,10 @@ Demo only. Requires header `X-Debug-Key`.
 
 Sets the agent's clock for this user and fires any alarm that is now due. `{ "now": null }` resets.
 
+## POST /debug/seed
+
+Demo only. Requires header `X-Debug-Key`. No body. Seeds a plausible week of history for this user (2/4 done, skipped yesterday, one earlier excuse).
+
 ## Webhooks (backend only)
 
 - `POST /webhooks/telegram`
