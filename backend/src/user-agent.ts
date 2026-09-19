@@ -26,7 +26,7 @@ import { TraceChannel } from './channels/trace';
 import { fail, ok, type DoResult } from './http';
 import { isOptOut } from './optout';
 import { issueToken, secureEquals } from './ids';
-import { endOfLocalDay, parseIso, startOfWeek } from './time';
+import { endOfLocalDay, localTimeToInstant, parseIso, startOfWeek } from './time';
 import type {
   Commitment,
   StateResponse,
@@ -49,13 +49,20 @@ const KEY = {
   /** Deliberately has no colon: a `trace:` prefixed key would land inside the
    *  lexicographic range that getTrace() scans. */
   traceSeq: 'traceSeq',
+  clockOffset: 'clockOffset',
   workout: (hkUuid: string) => `workout:${hkUuid}`,
+  /** Sorts by fire time, so a range scan finds everything due. */
+  alarm: (at: number, suffix: string) => `alarm:${String(at).padStart(14, '0')}:${suffix}`,
   commitment: (id: string) => `commitment:${id}`,
   trace: (id: number) => `trace:${String(id).padStart(12, '0')}`,
 } as const;
 
-/** '~' sorts above every digit, so it caps the trace range scan. */
+/** '~' sorts above every digit, so it caps a range scan. */
 const TRACE_RANGE_END = 'trace:~';
+const ALARM_RANGE_START = 'alarm:';
+
+/** Snap asks about the day at this hour, local, when nothing is committed. */
+const MORNING_HOUR = 9;
 const TRACE_PAGE_LIMIT = 200;
 
 /** Durable Object storage takes at most 128 keys per batched get/put. */
@@ -96,6 +103,20 @@ interface StoredCommitment extends Commitment {
   renegotiations: number;
 }
 
+/**
+ * A Durable Object has exactly one alarm, but Snap needs several wake-ups
+ * pending at once — a grace check, an end-of-day slash, tomorrow's check-in.
+ * They are stored as keys sorted by fire time and the single alarm is always
+ * armed for the earliest.
+ */
+type AlarmKind = 'grace' | 'end_of_day' | 'morning';
+
+interface ScheduledAlarm {
+  at: number;
+  kind: AlarmKind;
+  commitmentId?: string;
+}
+
 interface PendingTrace {
   kind: TraceKind;
   summary: string;
@@ -113,10 +134,59 @@ export interface InitializeInput {
 export class UserAgent extends DurableObject<Env> {
   /**
    * The agent's clock. Everything time-dependent reads this rather than
-   * Date.now() so POST /debug/timewarp (step 5) can move it for the demo.
+   * Date.now(), so POST /debug/timewarp can move this user into the future
+   * without touching anyone else's.
+   *
+   * Cached in memory because now() is called all over and a storage read per
+   * call would be absurd; loadClock() refreshes it when the object wakes.
    */
+  private clockOffsetMs = 0;
+  private clockLoaded = false;
+
   private now(): number {
-    return Date.now();
+    return Date.now() + this.clockOffsetMs;
+  }
+
+  private async loadClock(): Promise<void> {
+    if (this.clockLoaded) return;
+    this.clockOffsetMs = (await this.ctx.storage.get<number>(KEY.clockOffset)) ?? 0;
+    this.clockLoaded = true;
+  }
+
+  /**
+   * Moves this user's clock to `now`, or back to real time with null, then
+   * fires whatever that made due. The 1:00 beat of the demo.
+   */
+  async timewarp(token: string, to: string | null): Promise<DoResult<{ now: string; fired: number }>> {
+    await this.loadClock();
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    if (to === null) {
+      this.clockOffsetMs = 0;
+      this.clockLoaded = true;
+      await this.ctx.storage.delete(KEY.clockOffset);
+    } else {
+      const target = parseIso(to);
+      if (target === null) return fail(400, 'bad_request', 'now must be an ISO 8601 timestamp or null');
+      this.clockOffsetMs = target - Date.now();
+      this.clockLoaded = true;
+      await this.ctx.storage.put(KEY.clockOffset, this.clockOffsetMs);
+    }
+
+    await this.appendTraces([
+      {
+        kind: 'alarm_fired',
+        summary:
+          to === null
+            ? 'clock reset to real time'
+            : `clock moved to ${clockOnly(this.now(), auth.value.timezone)}`,
+        data: { timewarp: to },
+      },
+    ]);
+
+    const fired = await this.fireDueAlarms();
+    return ok({ now: this.nowIso(), fired });
   }
 
   private nowIso(): string {
@@ -153,6 +223,10 @@ export class UserAgent extends DurableObject<Env> {
       [KEY.link]: link,
     });
 
+    // The daily rhythm starts now: if tomorrow morning arrives with no plan,
+    // Snap asks first. Same alarm mechanism as everything else.
+    await this.scheduleMorning(profile, 0);
+
     return ok({ token });
   }
 
@@ -162,6 +236,7 @@ export class UserAgent extends DurableObject<Env> {
     token: string,
     incoming: WorkoutInput[],
   ): Promise<DoResult<WorkoutsResponse>> {
+    await this.loadClock();
     const auth = await this.authenticate(token);
     if (!auth.ok) return auth;
 
@@ -222,12 +297,27 @@ export class UserAgent extends DurableObject<Env> {
 
     await this.appendTraces(traces);
 
+    // BACKEND_TASKS step 4: a workout that covers an open commitment closes
+    // the loop — release the stake and hype them up. Backgrounded so POST
+    // /workouts stays fast; the phone is waiting on this response.
+    if (traces.length > 0) {
+      const closing = await this.coveredCommitment(auth.value);
+      if (closing) {
+        this.ctx.waitUntil(
+          this.runAgent(
+            `a workout just showed up on their watch and it covers "${closing.text}". that is the commitment met — give them their ${solText(closing.stake.lamports)} back and hype them up.`,
+          ) as unknown as Promise<unknown>,
+        );
+      }
+    }
+
     // Every workout in the request was stored, resends included — the app is
     // told to resend freely, so a resend must not look like a rejection.
     return ok({ accepted: workouts.length });
   }
 
   async getState(token: string): Promise<DoResult<StateResponse>> {
+    await this.loadClock();
     const auth = await this.authenticate(token);
     if (!auth.ok) return auth;
     const profile = auth.value;
@@ -276,6 +366,7 @@ export class UserAgent extends DurableObject<Env> {
    * second greeting.
    */
   async linkChat(channel: ChannelName, chatId: string): Promise<DoResult<{ greeted: boolean }>> {
+    await this.loadClock();
     const link = await this.ctx.storage.get<Link>(KEY.link);
     if (!link) return fail(404, 'not_found', 'no such user');
 
@@ -296,6 +387,7 @@ export class UserAgent extends DurableObject<Env> {
 
   /** Records an inbound text. The agent acts on it in step 3. */
   async receiveMessage(text: string): Promise<DoResult<{ optedOut: boolean }>> {
+    await this.loadClock();
     const link = await this.ctx.storage.get<Link>(KEY.link);
     if (!link) return fail(404, 'not_found', 'no such user');
 
@@ -339,6 +431,166 @@ export class UserAgent extends DurableObject<Env> {
     return new TraceChannel();
   }
 
+  // --- alarms -------------------------------------------------------------
+
+  /**
+   * Fires whatever is due, then re-arms for the next thing. This is what makes
+   * Snap proactive — DESIGN.md is explicit that it is alarms, not cron.
+   */
+  async alarm(): Promise<void> {
+    await this.fireDueAlarms();
+  }
+
+  /**
+   * Runs every alarm at or before the agent's clock. Split out from alarm()
+   * so POST /debug/timewarp can move the clock and fire what is now due.
+   */
+  async fireDueAlarms(): Promise<number> {
+    await this.loadClock();
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return 0;
+
+    const due = await this.ctx.storage.list<ScheduledAlarm>({
+      start: ALARM_RANGE_START,
+      end: KEY.alarm(this.now() + 1, ''),
+    });
+
+    let fired = 0;
+    for (const [key, scheduled] of due) {
+      // Delete first: a wake-up that throws must not fire forever.
+      await this.ctx.storage.delete(key);
+      await this.runAlarm(scheduled, profile);
+      fired++;
+    }
+
+    await this.rearm();
+    return fired;
+  }
+
+  private async runAlarm(scheduled: ScheduledAlarm, profile: Profile): Promise<void> {
+    switch (scheduled.kind) {
+      case 'grace': {
+        const commitment = await this.commitment(scheduled.commitmentId);
+        // Already settled, or talked forward — nothing to check on.
+        if (!commitment || commitment.status !== 'pending') return;
+
+        const covering = findCoveringWorkout(
+          await this.loadWorkouts(),
+          parseIso(commitment.createdAt) ?? 0,
+          this.endOfDayFor(commitment, profile),
+        );
+        if (covering) return;
+
+        await this.appendTraces([
+          {
+            kind: 'alarm_fired',
+            summary: `${clockOnly(this.now(), profile.timezone)} — checking on ${commitment.text}`,
+            data: { commitmentId: commitment.id, kind: 'grace' },
+          },
+        ]);
+        await this.runAgent(
+          `you woke yourself up. "${commitment.text}" was due at ${clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone)} and the ${commitment.graceMin} minute grace has passed with no workout. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. decide whether to text them.`,
+        );
+        return;
+      }
+
+      case 'end_of_day': {
+        const commitment = await this.commitment(scheduled.commitmentId);
+        if (!commitment || (commitment.status !== 'pending' && commitment.status !== 'renegotiated')) return;
+
+        const covering = findCoveringWorkout(
+          await this.loadWorkouts(),
+          parseIso(commitment.createdAt) ?? 0,
+          this.endOfDayFor(commitment, profile),
+        );
+
+        await this.appendTraces([
+          {
+            kind: 'alarm_fired',
+            summary: covering
+              ? `end of day — ${commitment.text} was met`
+              : `end of day — ${commitment.text} is unmet`,
+            data: { commitmentId: commitment.id, kind: 'end_of_day' },
+          },
+        ]);
+        await this.runAgent(
+          covering
+            ? `end of day. "${commitment.text}" got done. release their ${solText(commitment.stake.lamports)} and hype them up.`
+            : `end of day. "${commitment.text}" never happened and no workout covers it. their ${solText(commitment.stake.lamports)} is yours to take now. decide.`,
+        );
+        return;
+      }
+
+      case 'morning': {
+        // Tomorrow's check-in is booked before this one runs anything, so a
+        // failure today does not end the daily rhythm.
+        await this.scheduleMorning(profile, 1);
+
+        const commitments = await this.loadCommitments();
+        const today = localDay(this.now(), profile.timezone);
+        const hasToday = commitments.some(
+          (c) =>
+            (c.status === 'pending' || c.status === 'renegotiated') &&
+            localDay(parseIso(c.dueAt) ?? 0, profile.timezone) === today,
+        );
+        if (hasToday) return;
+
+        const link = await this.ctx.storage.get<Link>(KEY.link);
+        if (!link?.linked || link.optedOut) return;
+
+        await this.appendTraces([
+          { kind: 'alarm_fired', summary: 'morning — no plan yet', data: { kind: 'morning' } },
+        ]);
+        await this.runAgent(
+          'morning check-in. they have not said what they are doing today. ask them the plan — short, and only if it is not nagging.',
+        );
+        return;
+      }
+    }
+  }
+
+  /** Points the object's single alarm at whichever wake-up comes first. */
+  private async rearm(): Promise<void> {
+    const next = await this.ctx.storage.list<ScheduledAlarm>({
+      start: ALARM_RANGE_START,
+      end: 'alarm:~',
+      limit: 1,
+    });
+    const first = [...next.values()][0];
+    if (first) await this.ctx.storage.setAlarm(first.at);
+    else await this.ctx.storage.deleteAlarm();
+  }
+
+  private async schedule(at: number, kind: AlarmKind, commitmentId?: string): Promise<void> {
+    const suffix = commitmentId ? `${kind}:${commitmentId}` : kind;
+    const entry: ScheduledAlarm = commitmentId ? { at, kind, commitmentId } : { at, kind };
+    await this.ctx.storage.put(KEY.alarm(at, suffix), entry);
+    await this.rearm();
+  }
+
+  /** Drops any pending wake-up of this kind for this commitment. */
+  private async unschedule(kind: AlarmKind, commitmentId: string): Promise<void> {
+    const all = await this.ctx.storage.list<ScheduledAlarm>({
+      start: ALARM_RANGE_START,
+      end: 'alarm:~',
+    });
+    for (const [key, scheduled] of all) {
+      if (scheduled.kind === kind && scheduled.commitmentId === commitmentId) {
+        await this.ctx.storage.delete(key);
+      }
+    }
+  }
+
+  private async scheduleMorning(profile: Profile, dayOffset: number): Promise<void> {
+    const at = localTimeToInstant(this.now(), profile.timezone, MORNING_HOUR, 0, dayOffset);
+    await this.schedule(at, 'morning');
+  }
+
+  private async commitment(id: string | undefined): Promise<StoredCommitment | null> {
+    if (!id) return null;
+    return (await this.ctx.storage.get<StoredCommitment>(KEY.commitment(id))) ?? null;
+  }
+
   // --- the agent ----------------------------------------------------------
 
   /**
@@ -348,6 +600,7 @@ export class UserAgent extends DurableObject<Env> {
    * is supposed to show the agent deciding *not* to act too.
    */
   async runAgent(instruction: string): Promise<DoResult<{ ran: boolean }>> {
+    await this.loadClock();
     const profile = await this.ctx.storage.get<Profile>(KEY.profile);
     if (!profile) return fail(404, 'not_found', 'no such user');
 
@@ -465,6 +718,12 @@ export class UserAgent extends DurableObject<Env> {
           renegotiations: 0,
         };
         await this.ctx.storage.put(KEY.commitment(commitment.id), commitment);
+
+        // Grace is the warning; end of day is when the money moves.
+        const dueAt = parseIso(commitment.dueAt) ?? now;
+        await this.schedule(dueAt + commitment.graceMin * 60_000, 'grace', commitment.id);
+        await this.schedule(this.endOfDayFor(commitment, profile), 'end_of_day', commitment.id);
+
         await this.appendTraces([
           {
             kind: 'commitment_created',
@@ -489,12 +748,22 @@ export class UserAgent extends DurableObject<Env> {
         );
         if (!guard.ok || !existing) return refuse(guard.ok ? 'no such commitment' : guard.reason);
 
-        await this.ctx.storage.put(KEY.commitment(existing.id), {
+        const moved: StoredCommitment = {
           ...existing,
           dueAt: guard.value.dueAt,
           status: 'renegotiated',
           renegotiations: existing.renegotiations + 1,
-        } satisfies StoredCommitment);
+        };
+        await this.ctx.storage.put(KEY.commitment(existing.id), moved);
+
+        // The old grace wake-up is about a deadline that no longer exists.
+        await this.unschedule('grace', existing.id);
+        await this.unschedule('end_of_day', existing.id);
+        const newDue = parseIso(moved.dueAt) ?? now;
+        await this.schedule(newDue + moved.graceMin * 60_000, 'grace', moved.id);
+        // A renegotiated deadline IS the slash point, not end of day.
+        await this.schedule(newDue, 'end_of_day', moved.id);
+
         await this.appendTraces([
           {
             kind: 'decision',
@@ -559,6 +828,12 @@ export class UserAgent extends DurableObject<Env> {
       status,
       stake: { ...commitment.stake, status: stake },
     } satisfies StoredCommitment);
+
+    // Settled: nothing left to wake up about.
+    await this.unschedule('grace', commitment.id);
+    await this.unschedule('end_of_day', commitment.id);
+    await this.rearm();
+
     await this.appendTraces([
       {
         kind: stake === 'released' ? 'stake_released' : 'stake_slashed',
@@ -605,6 +880,22 @@ export class UserAgent extends DurableObject<Env> {
         .map(toWireCommitment),
       recentMessages: recentMessages([...events.values()]),
     };
+  }
+
+  /** An open commitment that a stored workout now covers, if any. */
+  private async coveredCommitment(profile: Profile): Promise<StoredCommitment | null> {
+    const [commitments, workouts] = await Promise.all([this.loadCommitments(), this.loadWorkouts()]);
+    for (const commitment of commitments) {
+      if (commitment.status !== 'pending' && commitment.status !== 'renegotiated') continue;
+      if (commitment.stake.status !== 'held') continue;
+      const covering = findCoveringWorkout(
+        workouts,
+        parseIso(commitment.createdAt) ?? 0,
+        this.endOfDayFor(commitment, profile),
+      );
+      if (covering) return commitment;
+    }
+    return null;
   }
 
   private async loadWorkouts(): Promise<StoredWorkout[]> {
@@ -690,6 +981,21 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
 /** "traditionalStrengthTraining" → "traditional strength training" */
 function humanizeType(type: string): string {
   return type.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+}
+
+/** "19:24" in the user's zone. */
+function clockOnly(instant: number, tz: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(instant));
+}
+
+/** Local YYYY-MM-DD, for "is there a commitment for today". */
+function localDay(instant: number, tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(instant));
 }
 
 /** "Sat 19 Sep, 19:24" in the user's zone. */

@@ -58,6 +58,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'GET');
       return getTrace(request, url, env);
 
+    case '/debug/timewarp':
+      requireMethod(request, 'POST');
+      return timewarp(request, env);
+
     case '/webhooks/linq':
       requireMethod(request, 'POST');
       return linqWebhook(request, env, ctx);
@@ -182,6 +186,44 @@ async function deliver(
     );
   }
   return json({ ok: true, received: true });
+}
+
+/**
+ * Demo only. Needs the bearer token (whose user's clock this is) and the
+ * X-Debug-Key header. With no DEBUG_KEY configured the route does not exist,
+ * rather than advertising itself with a 401.
+ */
+async function timewarp(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/timewarp');
+  }
+  const supplied = request.headers.get('x-debug-key') ?? '';
+  if (!timingSafeEqual(supplied, env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+
+  const { token, stub } = authenticate(request, env);
+  const body = await readJsonBody(request);
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+  }
+
+  const now = (body as Record<string, unknown>).now;
+  if (now !== null && typeof now !== 'string') {
+    throw new HttpError(400, 'bad_request', 'now must be an ISO 8601 string or null');
+  }
+
+  return toResponse(await stub.timewarp(token, now));
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  const encoder = new TextEncoder();
+  const left = encoder.encode(a);
+  const right = encoder.encode(b);
+  if (left.length !== right.length) return false;
+  let diff = 0;
+  for (let i = 0; i < left.length; i++) diff |= left[i]! ^ right[i]!;
+  return diff === 0;
 }
 
 // --- plumbing --------------------------------------------------------------

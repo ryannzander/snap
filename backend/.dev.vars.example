@@ -11,3 +11,6 @@ LINQ_SIGNING_SECRET=""
 # OpenAI API key. Leave empty and the agent falls back to Workers AI, which
 # needs no key but is weaker — see the guards in src/agent/guards.ts.
 OPENAI_API_KEY=""
+
+# Guards POST /debug/*. Any long random string; the iOS debug panel needs it too.
+DEBUG_KEY=""
