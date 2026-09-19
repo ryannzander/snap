@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "backboard-docs": {
+      "type": "streamable-http",
+      "url": "https://backboard-docs.docsalot.dev/api/mcp"
+    }
+  }
+}

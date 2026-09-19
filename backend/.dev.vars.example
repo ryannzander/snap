@@ -1,0 +1,28 @@
+# Copy to .dev.vars (gitignored) and fill in. Never commit the real file.
+# In production these are set with `wrangler secret put <NAME>`.
+
+# Linq Partner API bearer token, from the sandbox signup.
+LINQ_API_KEY=""
+
+# Signing secret from the Linq webhook subscription (starts with whsec_).
+# Leave empty locally to skip signature checks; required in production.
+LINQ_SIGNING_SECRET=""
+
+# OpenAI API key. Leave empty and the agent falls back to Workers AI, which
+# needs no key but is weaker — see the guards in src/agent/guards.ts.
+OPENAI_API_KEY=""
+
+# Guards POST /debug/*. Any long random string; the iOS debug panel needs it too.
+DEBUG_KEY=""
+
+# Devnet wallet seeds, 32 bytes base64. Set in production with
+# `wrangler secret put`. The treasury funds each user wallet at onboard; the
+# escrow holds staked SOL between stake and release/slash.
+SNAP_TREASURY_SEED=""
+SNAP_ESCROW_SEED=""
+
+# Devnet RPC with an API key, e.g. https://devnet.helius-rpc.com/?api-key=...
+# A secret, never a [vars] entry: the key rides in the query string and
+# wrangler.toml is committed to a public repo. Unset falls back to the public
+# endpoint, which returns 403 to Cloudflare Workers.
+SOLANA_RPC_URL=""
