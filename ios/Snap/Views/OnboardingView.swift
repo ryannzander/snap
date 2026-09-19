@@ -283,7 +283,7 @@ private struct HealthPage: View {
                 .font(.system(size: 62))
                 .foregroundStyle(Theme.ink)
             Statement("i need to see\nyour workouts.")
-            Caption("that's the whole trick — snap reads HealthKit, so he never has to ask if you went.\n\nnothing leaves your phone except the workout itself.")
+            Caption("that's the whole trick — snap reads HealthKit, so he never has to ask if you went.\n\napple watch, strava, hevy, nike run club, whoop — anything that logs a workout counts. you just need one of them.\n\nnothing leaves your phone except the workout itself.")
             Spacer()
             Spacer()
         }
