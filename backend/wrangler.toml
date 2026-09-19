@@ -1,0 +1,30 @@
+name = "snap"
+main = "src/index.ts"
+compatibility_date = "2026-09-15"
+
+# Logs in the Cloudflare dashboard. Worth having when something goes wrong
+# on stage and there is no terminal attached.
+[observability]
+enabled = true
+
+# One Durable Object per user: profile, workouts, commitments, trace feed,
+# and (from step 4) the alarms that make Snap proactive.
+[[durable_objects.bindings]]
+name = "USER_AGENT"
+class_name = "UserAgent"
+
+# Single global object holding the `yo <code>` link-code index.
+[[durable_objects.bindings]]
+name = "DIRECTORY"
+class_name = "Directory"
+
+[[migrations]]
+tag = "v1"
+# SQLite-backed Durable Objects — required on the free plan.
+new_sqlite_classes = ["UserAgent", "Directory"]
+
+# Where /onboard tells the app to text Snap. Placeholders until the Telegram
+# bot and the Linq sandbox number exist; not secrets, so they live here.
+[vars]
+SNAP_TELEGRAM = "@snap_bro_bot"
+SNAP_IMESSAGE = "+10000000000"
