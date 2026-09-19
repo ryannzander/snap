@@ -9,6 +9,11 @@ import Foundation
 actor MockAPI: SnapAPI {
     static let shared = MockAPI()
 
+    /// A syntactically valid devnet signature. It points at no real transaction —
+    /// there is no chain behind the mock — but it renders and truncates like one.
+    static let mockSignature =
+        "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCFFzVRtQJC5Zt8F2nWYdKEtmSTfCFnLcqLp1hZmCQtGmZ9tZ8Ab"
+
     private struct Step {
         let kind: TraceEvent.Kind
         let summary: String
@@ -79,7 +84,14 @@ actor MockAPI: SnapAPI {
                     dueAt: dueAt,
                     graceMin: 20,
                     status: commitmentStatus(reached),
-                    stake: Stake(lamports: 50_000_000, status: stakeStatus(reached), txSig: "4xK…9fQ")
+                    // Shaped like a real signature — 88 base58 characters — because the
+                    // commitment card builds an explorer URL out of it. The old
+                    // placeholder had an ellipsis in it and made a nonsense link.
+                    stake: Stake(
+                        lamports: 50_000_000,
+                        status: stakeStatus(reached),
+                        txSig: Self.mockSignature
+                    )
                 )
             ]
         )
