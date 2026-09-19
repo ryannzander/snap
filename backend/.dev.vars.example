@@ -20,3 +20,9 @@ DEBUG_KEY=""
 # escrow holds staked SOL between stake and release/slash.
 SNAP_TREASURY_SEED=""
 SNAP_ESCROW_SEED=""
+
+# Devnet RPC with an API key, e.g. https://devnet.helius-rpc.com/?api-key=...
+# A secret, never a [vars] entry: the key rides in the query string and
+# wrangler.toml is committed to a public repo. Unset falls back to the public
+# endpoint, which returns 403 to Cloudflare Workers.
+SOLANA_RPC_URL=""

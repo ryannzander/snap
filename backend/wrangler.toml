@@ -40,9 +40,14 @@ SNAP_CHANNEL = "linq"
 OPENAI_MODEL = "gpt-4o"
 WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
-# Devnet. The treasury funds each user wallet at onboard, so nothing in the
-# demo path depends on the public faucet — which rate-limits hard.
-SOLANA_RPC_URL = "https://devnet.helius-rpc.com"
+# SOLANA_RPC_URL is deliberately NOT here. The working devnet URL carries its
+# API key in the query string, this file is committed, and the repo is public.
+# It is a secret: `wrangler secret put SOLANA_RPC_URL`.
+#
+# A [vars] entry and a secret of the same name collide — the plaintext var
+# wins and the secret is silently ignored, which would look exactly like the
+# 403 we already have. So the name must appear in exactly one place.
+# user-agent.ts falls back to the public endpoint when it is unset.
 
 # Workers AI — fallback brain while there is no OpenAI key.
 [ai]

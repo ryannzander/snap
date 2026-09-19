@@ -26,6 +26,7 @@ import { LinqChannel } from './channels/linq';
 import { TraceChannel } from './channels/trace';
 import { fail, ok, type DoResult } from './http';
 import { isOptOut } from './optout';
+import { redact } from './redact';
 import {
   explorerUrl,
   getBalanceLamports,
@@ -465,7 +466,7 @@ export class UserAgent extends DurableObject<Env> {
     } catch (error) {
       // A send failure must not lose the trace or fail the caller's request;
       // the brain screen still shows what Snap decided to say.
-      console.error('channel send failed', error);
+      console.error('channel send failed', redact(String(error)));
     }
   }
 
@@ -602,9 +603,12 @@ export class UserAgent extends DurableObject<Env> {
     try {
       return await run();
     } catch (error) {
-      console.error(`solana ${what} failed`, error);
+      // Redacted: RPC errors embed the request URL, and the working devnet
+      // URL carries its API key in the query string.
+      const safe = redact(String(error));
+      console.error(`solana ${what} failed`, safe);
       await this.appendTraces([
-        { kind: 'decision', summary: `chain ${what} failed — the loop continues without it`, data: { error: String(error) } },
+        { kind: 'decision', summary: `chain ${what} failed — the loop continues without it`, data: { error: safe } },
       ]);
       return null;
     }
@@ -899,7 +903,7 @@ export class UserAgent extends DurableObject<Env> {
     } catch (error) {
       // A dead model must not take the loop down. The trace says so plainly.
       await this.appendTraces([
-        { kind: 'decision', summary: `brain unavailable (${brain.name})`, data: { error: String(error) } },
+        { kind: 'decision', summary: `brain unavailable (${brain.name})`, data: { error: redact(String(error)) } },
       ]);
       return ok({ ran: false });
     }
@@ -981,7 +985,7 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
       }
     } catch (error) {
       await this.appendTraces([
-        { kind: 'decision', summary: 'could not re-check for a commitment', data: { error: String(error) } },
+        { kind: 'decision', summary: 'could not re-check for a commitment', data: { error: redact(String(error)) } },
       ]);
     }
     return false;
@@ -1010,7 +1014,7 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
       for (const call of decision.toolCalls) await this.dispatch(call, profile);
     } catch (error) {
       await this.appendTraces([
-        { kind: 'decision', summary: 'could not reach the brain for a reply', data: { error: String(error) } },
+        { kind: 'decision', summary: 'could not reach the brain for a reply', data: { error: redact(String(error)) } },
       ]);
     }
   }
