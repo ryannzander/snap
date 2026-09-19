@@ -268,6 +268,11 @@ private struct PlanCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 verdict(for: commitment)
+                // No Watch? Snap times the session itself. Only while the plan is open —
+                // a settled commitment has nothing left to record against.
+                if commitment.status == .pending || commitment.status == .renegotiated {
+                    SessionControls()
+                }
             } else {
                 VStack(spacing: 8) {
                     Text("no plan yet")
@@ -436,6 +441,50 @@ extension BrainView {
 /// Counts down to the moment Snap wakes up, then counts *up* in red once it's passed.
 /// Its own view so the `TimelineView` (and its `.now` anchor) is only rebuilt when the
 /// deadline itself changes, not every time the rest of the card moves.
+/// "start session" / a running clock and "done". Snap records the session as a real
+/// HealthKit workout, the same evidence tier as Hevy or Strava, so a phone without a
+/// Watch can still close the loop. The backend's 30-minute floor still applies, and
+/// the caption says so before anyone finds out the hard way.
+private struct SessionControls: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let startedAt = model.sessionStartedAt {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let elapsed = max(0, context.date.timeIntervalSince(startedAt))
+                    VStack(spacing: 2) {
+                        Text(CountdownView.clock(elapsed))
+                            .font(Theme.numerals(34))
+                            .foregroundStyle(Theme.surface)
+                        Text(elapsed < 30 * 60 ? "training · counts at 30 min" : "training · this one counts")
+                            .font(Theme.body(14))
+                            .foregroundStyle(Theme.surface.opacity(0.6))
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("session running, \(CountdownView.clock(elapsed))")
+                }
+
+                HStack(spacing: Theme.Space.s) {
+                    Button("done") { Task { await model.endSession() } }
+                        .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
+                    Button("cancel") { model.cancelSession() }
+                        .font(Theme.body(15))
+                        .foregroundStyle(Theme.surface.opacity(0.6))
+                }
+            } else {
+                Button("start session") { model.startSession() }
+                    .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
+                Text("no watch? snap times it. 30 min or more counts.")
+                    .font(Theme.body(14))
+                    .foregroundStyle(Theme.surface.opacity(0.6))
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .animation(.snappy, value: model.sessionStartedAt)
+    }
+}
+
 private struct CountdownView: View {
     let checkAt: Date
 

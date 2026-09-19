@@ -113,6 +113,7 @@ final class AppModel {
 
         observeLifecycle()
         refreshHealthAccess()
+        sessionStartedAt = WorkoutSync.sessionStartedAt
 
         #if DEBUG
         // `SNAP_PHASE=linking|live` drops straight onto a screen against MockAPI, and
@@ -241,6 +242,8 @@ final class AppModel {
         sync.stop()
         Keychain.token = nil
         WorkoutSync.clearAnchor()
+        WorkoutSync.sessionStartedAt = nil
+        sessionStartedAt = nil
         Key.all.forEach { defaults.removeObject(forKey: $0) }
 
         // The mock is a process-wide singleton; without this a second run-through
@@ -292,6 +295,33 @@ final class AppModel {
         } catch {
             lastError = describe(error)
         }
+    }
+
+    // MARK: - Sessions (no Watch)
+
+    /// When the in-app session started; nil when none is running. Mirrors the value
+    /// `WorkoutSync` persists so the plan card can show a live clock.
+    private(set) var sessionStartedAt: Date?
+
+    func startSession() {
+        sync.startSession()
+        sessionStartedAt = WorkoutSync.sessionStartedAt
+    }
+
+    /// Writes the session to HealthKit and syncs it. On failure the session is kept so
+    /// the reason can be read in the debug panel and the same session ended again.
+    func endSession() async {
+        do {
+            try await sync.endSession()
+            sessionStartedAt = nil
+        } catch {
+            lastError = describe(error)
+        }
+    }
+
+    func cancelSession() {
+        sync.cancelSession()
+        sessionStartedAt = nil
     }
 
     // MARK: - Polling

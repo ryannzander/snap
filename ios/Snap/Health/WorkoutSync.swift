@@ -179,20 +179,65 @@ final class WorkoutSync {
         }
     }
 
+    // MARK: - Sessions (no Watch)
+
+    private static let sessionKey = "sessionStartedAt"
+
+    /// When the in-app session started, or nil. Only the start instant is kept, and it
+    /// lives in UserDefaults, so a relaunch mid-session loses nothing — HealthKit is
+    /// not touched until the session ends.
+    static var sessionStartedAt: Date? {
+        get { UserDefaults.standard.object(forKey: sessionKey) as? Date }
+        set {
+            if let newValue {
+                UserDefaults.standard.set(newValue, forKey: sessionKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: sessionKey)
+            }
+        }
+    }
+
+    /// Snap times the session itself, for people without a Watch. Same evidence tier as
+    /// Hevy or Strava: a real start and end, written through the workout builder, so
+    /// it arrives recorded rather than hand-entered. The backend's 30-minute floor
+    /// still applies — a two-minute session does not release anything.
+    func startSession() {
+        Self.sessionStartedAt = Date()
+    }
+
+    /// Writes the session as a strength-training workout from the recorded start to
+    /// now, then syncs it. The start is only cleared once the write succeeds, so a
+    /// denied HealthKit permission can be fixed and the same session ended again.
+    @discardableResult
+    func endSession() async throws -> HKWorkout? {
+        guard let start = Self.sessionStartedAt else { return nil }
+        let workout = try await saveStrengthTraining(from: start, to: Date())
+        Self.sessionStartedAt = nil
+        await drain()
+        return workout
+    }
+
+    func cancelSession() {
+        Self.sessionStartedAt = nil
+    }
+
+    private func saveStrengthTraining(from start: Date, to end: Date) async throws -> HKWorkout? {
+        let configuration = HKWorkoutConfiguration()
+        configuration.activityType = .traditionalStrengthTraining
+
+        let builder = HKWorkoutBuilder(healthStore: store, configuration: configuration, device: .local())
+        try await builder.beginCollection(at: start)
+        try await builder.endCollection(at: end)
+        return try await builder.finishWorkout()
+    }
+
     // MARK: - Debug
 
     /// A 45-minute strength workout ending now, for demoing without an Apple Watch.
     @discardableResult
     func saveSimulatedWorkout() async throws -> HKWorkout? {
-        let configuration = HKWorkoutConfiguration()
-        configuration.activityType = .traditionalStrengthTraining
-
-        let builder = HKWorkoutBuilder(healthStore: store, configuration: configuration, device: .local())
         let end = Date()
-        try await builder.beginCollection(at: end.addingTimeInterval(-45 * 60))
-        try await builder.endCollection(at: end)
-        let workout = try await builder.finishWorkout()
-
+        let workout = try await saveStrengthTraining(from: end.addingTimeInterval(-45 * 60), to: end)
         await drain()
         return workout
     }
