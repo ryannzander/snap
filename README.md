@@ -12,7 +12,7 @@ commitment → missed workout detected → agent evaluates context → proactive
 
 1. [`docs/DESIGN.md`](docs/DESIGN.md) — what we're building and every decision made so far
 2. [`docs/API.md`](docs/API.md) — the contract between the app and the backend
-3. Your task list: [`docs/BACKEND_TASKS.md`](docs/BACKEND_TASKS.md) or [`docs/IOS_TASKS.md`](docs/IOS_TASKS.md)
+3. Your task list: [`docs/BACKEND_TASKS.md`](docs/BACKEND_TASKS.md) or [`docs/IOS_TASKS.md`](docs/IOS_TASKS.md) + [`docs/IOS_SPEC.md`](docs/IOS_SPEC.md)
 
 **Sat 2:00 PM EDT — initial Devpost submission due, with every sponsor prize listed.**
 

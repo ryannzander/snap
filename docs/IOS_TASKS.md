@@ -1,6 +1,6 @@
 # iOS — start here
 
-Read `DESIGN.md` and `API.md` first. The Xcode project lives in `ios/`.
+Read `DESIGN.md` and `API.md` first. The Xcode project lives in `ios/`. **The full build spec — what exists, every file left to write, and the done checklist — is `IOS_SPEC.md`.**
 
 The app has three jobs. It has no chat UI — Snap lives in Messages.
 
