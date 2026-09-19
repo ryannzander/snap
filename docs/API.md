@@ -64,7 +64,9 @@ Everything the app needs to draw its one screen.
 `stake.status`: `none | held | released | slashed`
 `stake.txSig` is null until the chain transaction lands, and stays null while `stake.status` is `none`.
 
-`workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC. A workout still in progress (`end: null`) counts.
+`workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts only workouts that *qualify* — not every workout posted. A workout qualifies when it runs 30 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
+
+This is deliberately the same bar that releases a stake: if a 30-minute walk cannot release your money, it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`).
 
 ## GET /trace?since=<eventId>
 
