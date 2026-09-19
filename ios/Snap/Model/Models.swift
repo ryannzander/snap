@@ -102,8 +102,7 @@ struct TraceEvent: Decodable, Identifiable, Equatable {
         case stakeHeld = "stake_held"
         case stakeReleased = "stake_released"
         case stakeSlashed = "stake_slashed"
-        /// The agent looked and chose not to text. DESIGN.md promises this shows too.
-        case stayQuiet = "stay_quiet"
+        // "Stayed quiet" arrives as a `decision` whose summary says so; it is not a kind.
         case unknown
 
         init(from decoder: Decoder) throws {

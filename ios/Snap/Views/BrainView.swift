@@ -628,7 +628,6 @@ private struct TraceRow: View {
         case .stakeHeld:         "lock.fill"
         case .stakeReleased:     "lock.open.fill"
         case .stakeSlashed:      "flame.fill"
-        case .stayQuiet:         "zzz"
         default:                 "circle.fill"
         }
     }

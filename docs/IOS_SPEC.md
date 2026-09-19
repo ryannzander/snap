@@ -23,7 +23,7 @@ In Xcode, set the signing team on the Snap target once. HealthKit needs a real d
 
 ## What exists
 
-Everything below is written, builds, and has been run on a simulator and a device. The per-file sections that follow are the spec each file was built to; where the code deliberately differs (the countdown is ink rather than lime so lime stays a fill; settled commitments show a verdict instead of a clock; a slashed stake shows its half/half split) the code is right and this document says so inline.
+Everything below is written, builds, and has been run on a simulator and a device. The per-file sections that follow are the spec each file was built to; where the code deliberately differs (the countdown is ink rather than lime so lime stays a fill; settled commitments show a verdict instead of a clock) the code is right and this document says so inline.
 
 Unit tests live in `ios/SnapTests` and run with the `Snap` scheme. `ios/SnapUITests` proves on a real HealthKit store that a simulated workout is not flagged hand-entered; it drives a system permission sheet, so it is skipped by default — run it with `-only-testing:SnapUITests`.
 
