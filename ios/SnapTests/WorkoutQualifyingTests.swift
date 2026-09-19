@@ -116,8 +116,10 @@ final class ExplorerLinkTests: XCTestCase {
     }
 }
 
-/// The half-back split. `slashed` no longer means the whole stake is gone, so anything
-/// that reads `lamports` and assumes total loss is now wrong.
+/// Decoding a stake. The half-back split was reverted — a miss forfeits the whole stake
+/// and the backend sends neither field — so the case that matters live is the last one:
+/// a payload without them must decode cleanly and leave the card drawing no split line.
+/// The first two are kept against the split ever returning.
 final class StakeSplitTests: XCTestCase {
 
     private func decode(_ json: String) throws -> Stake {

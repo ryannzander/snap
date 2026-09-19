@@ -137,8 +137,9 @@ struct BrainView: View {
         }
     }
 
-    /// What a miss actually cost. `slashed` no longer means the whole stake is gone, so
-    /// the card has to say where it went rather than letting the pill imply a total loss.
+    /// What a miss cost, when a miss is ever split again. The backend forfeits the whole
+    /// stake today and sends neither field, so this never draws — the `if let` above is
+    /// what keeps it from rendering zeros.
     private func splitLine(refunded: Double, forfeited: Double) -> some View {
         let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...3))
         return Text(

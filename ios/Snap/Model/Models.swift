@@ -66,9 +66,10 @@ struct Stake: Decodable {
     let status: Status
     let txSig: String?
 
-    /// Present only on `slashed`, and they always sum to `lamports`. A miss returns half
-    /// and forfeits half, so `slashed` no longer means the whole stake is gone — read
-    /// these rather than assuming.
+    /// Unused as of the revert: a miss forfeits the whole stake again, so the backend
+    /// never sends these and `slashed` means exactly what it says. Kept optional and
+    /// decoded anyway so a future split needs no model change — and so a backend that
+    /// does not send them decodes cleanly today.
     let refundedLamports: Int?
     let forfeitedLamports: Int?
 

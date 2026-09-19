@@ -240,7 +240,7 @@ private struct DealPage: View {
                 Divider().overlay(Theme.hairline)
                 DealRow(n: "2", text: "he watches your workouts.\nno photos. no honor system.")
                 Divider().overlay(Theme.hairline)
-                DealRow(n: "3", text: "you go, you get it back.\nyou skip, half goes to charity.")
+                DealRow(n: "3", text: "you go, you get it back.\nyou skip, he keeps it.")
             }
             .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.surface))
 
