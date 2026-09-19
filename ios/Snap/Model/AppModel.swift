@@ -70,13 +70,27 @@ final class AppModel {
         observeLifecycle()
 
         #if DEBUG
-        // `SNAP_PHASE=linking` drops straight onto the link screen with demo contacts.
-        if ProcessInfo.processInfo.environment["SNAP_PHASE"] == "linking" {
+        // `SNAP_PHASE=linking|live` drops straight onto a screen against MockAPI, and
+        // `SNAP_TIMEWARP=1` pushes the clock past the deadline the way the debug panel does.
+        let env = ProcessInfo.processInfo.environment
+        switch env["SNAP_PHASE"] {
+        case "linking":
             name = "Ryan"
             linkCode = "4821"
             contact = .init(telegram: "@snap_bro_bot", imessage: "+15555550123")
             phase = .linking
             return
+        case "live":
+            name = "Ryan"
+            token = "debug"
+            phase = .live
+            startPolling()
+            if env["SNAP_TIMEWARP"] == "1" {
+                Task { await timewarpToCheck() }
+            }
+            return
+        default:
+            break
         }
         #endif
 
