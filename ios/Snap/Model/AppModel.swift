@@ -31,6 +31,10 @@ final class AppModel {
     /// New events are shown one at a time so the feed reads like thinking, not like a refresh.
     private static let eventStagger = Duration.milliseconds(350)
 
+    /// `/trace` returns at most this many events per call. A full page means there is
+    /// more waiting, so poll again immediately instead of sitting out the interval.
+    private static let traceBatchLimit = 200
+
     @ObservationIgnored private let defaults = UserDefaults.standard
     @ObservationIgnored private var api: any SnapAPI
     @ObservationIgnored private let sync: WorkoutSync
@@ -213,8 +217,10 @@ final class AppModel {
         }
         traceTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.refreshTrace()
-                try? await Task.sleep(for: .seconds(1))
+                let moreWaiting = await self?.refreshTrace() ?? false
+                if !moreWaiting {
+                    try? await Task.sleep(for: .seconds(1))
+                }
             }
         }
     }
@@ -235,15 +241,32 @@ final class AppModel {
                 phase = state.linked ? .live : .linking
             }
         } catch {
-            lastError = describe(error)
+            handle(error)
         }
     }
 
-    private func refreshTrace() async {
+    /// Returns true when a full page came back, meaning more is already waiting.
+    private func refreshTrace() async -> Bool {
         do {
-            ingest(try await api.trace(since: lastEventId))
+            let events = try await api.trace(since: lastEventId)
+            let cursor = lastEventId
+            ingest(events)
+            // Only chase the next page if the cursor actually moved, so a server that
+            // keeps returning the same page can't spin this loop.
+            return events.count >= Self.traceBatchLimit && lastEventId != cursor
         } catch {
-            lastError = describe(error)
+            handle(error)
+            return false
+        }
+    }
+
+    /// A dead token fails every call identically, so stop rather than spraying the same
+    /// error once a second. Recovery is "reset app" in the debug panel — deliberately not
+    /// automatic, because silently wiping the session mid-demo is worse than a frozen screen.
+    private func handle(_ error: Error) {
+        lastError = describe(error)
+        if let apiError = error as? APIError, apiError.isUnauthorized {
+            stopPolling()
         }
     }
 

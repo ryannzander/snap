@@ -3,8 +3,8 @@ import Foundation
 /// Server settings live in UserDefaults so they can be changed from the debug panel
 /// without a rebuild. An empty base URL means the app runs against `MockAPI`.
 enum Config {
-    /// Set this once the Worker is deployed. The URL is not a secret.
-    static let defaultBaseURL = ""
+    /// The deployed Worker. Not a secret. Clear it in the debug panel to fall back to `MockAPI`.
+    static let defaultBaseURL = "https://snap.snap-backend.workers.dev"
 
     private static let defaults = UserDefaults.standard
 

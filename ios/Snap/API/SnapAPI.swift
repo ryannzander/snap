@@ -11,13 +11,41 @@ protocol SnapAPI: Sendable {
     func seed() async throws
 }
 
-/// Carries the status code and body text so the debug panel can show what the server said.
+/// Carries what the server said so the debug panel can show it.
+/// Every non-2xx from the Worker is `{ "error": { "code", "message" } }`; anything that
+/// isn't (a proxy, a cold start, a crash) falls back to the raw body.
 struct APIError: LocalizedError {
     let status: Int
-    let body: String
+    let code: String?
+    let message: String
+
+    init(status: Int, body: String) {
+        self.status = status
+        if let data = body.data(using: .utf8),
+           let envelope = try? JSONDecoder().decode(Envelope.self, from: data) {
+            code = envelope.error.code
+            message = envelope.error.message
+        } else {
+            code = nil
+            message = body
+        }
+    }
+
+    private struct Envelope: Decodable {
+        struct Inner: Decodable {
+            let code: String
+            let message: String
+        }
+        let error: Inner
+    }
+
+    /// The token is dead — every subsequent call will fail the same way.
+    var isUnauthorized: Bool { status == 401 }
 
     var errorDescription: String? {
-        body.isEmpty ? "HTTP \(status)" : "HTTP \(status) — \(body)"
+        guard !message.isEmpty else { return "HTTP \(status)" }
+        let tag = code.map { " (\($0))" } ?? ""
+        return "HTTP \(status)\(tag) — \(message)"
     }
 }
 
