@@ -431,6 +431,119 @@ export class UserAgent extends DurableObject<Env> {
     return new TraceChannel();
   }
 
+  /**
+   * Plants the week of history the demo needs: 2 of 4 done, skipped
+   * yesterday, one earlier excuse in the thread (API.md → POST /debug/seed).
+   *
+   * Clears prior workouts, commitments and trace first, so the demo can be
+   * rehearsed from the same starting point as many times as needed. The chat
+   * link and the token survive — re-linking between rehearsals would mean
+   * re-texting the code every time.
+   *
+   * Seeded data, real reasoning. DESIGN.md says to admit that if asked.
+   */
+  async seed(token: string): Promise<DoResult<{ workouts: number; commitments: number }>> {
+    await this.loadClock();
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+    const profile = auth.value;
+
+    for (const prefix of ['workout:', 'commitment:', 'trace:', ALARM_RANGE_START]) {
+      const keys = await this.ctx.storage.list({ prefix });
+      for (const key of keys.keys()) await this.ctx.storage.delete(key);
+    }
+    await this.ctx.storage.delete(KEY.traceSeq);
+    await this.rearm();
+
+    const now = this.now();
+    const tz = profile.timezone;
+    const weekStart = startOfWeek(now, tz);
+
+    // Two sessions earlier in the week, skipping yesterday — that is the day
+    // the story needs empty. Walk back until two days land inside this week.
+    const workoutDays: number[] = [];
+    for (let back = 2; back <= 6 && workoutDays.length < 2; back++) {
+      const at = localTimeToInstant(now, tz, 18, 0, -back);
+      if (at >= weekStart && at < now) workoutDays.push(at);
+    }
+    // Early in the week there are not two earlier days, so use this morning.
+    while (workoutDays.length < 2) {
+      const at = localTimeToInstant(now, tz, 7 + workoutDays.length, 0, 0);
+      workoutDays.push(at < now ? at : now - 3600_000);
+    }
+
+    const seeded: Record<string, StoredWorkout> = {};
+    const shapes = [
+      { type: 'traditionalStrengthTraining', durationSec: 2700, activeKcal: 310 },
+      { type: 'running', durationSec: 1800, activeKcal: 260 },
+    ];
+    workoutDays.forEach((at, index) => {
+      const shape = shapes[index % shapes.length]!;
+      const hkUuid = `SEED-${index}-${new Date(at).toISOString().slice(0, 10)}`;
+      seeded[KEY.workout(hkUuid)] = {
+        hkUuid,
+        type: shape.type,
+        start: new Date(at).toISOString(),
+        end: new Date(at + shape.durationSec * 1000).toISOString(),
+        durationSec: shape.durationSec,
+        activeKcal: shape.activeKcal,
+        firstSeenAt: new Date(at).toISOString(),
+        updatedAt: new Date(at).toISOString(),
+      };
+    });
+    await this.ctx.storage.put(seeded);
+
+    // Yesterday: committed, skipped, money gone. This is what makes the agent
+    // able to say "you said that yesterday".
+    const yesterdayDue = localTimeToInstant(now, tz, 19, 0, -1);
+    const missed: StoredCommitment = {
+      id: 'c_seed_yesterday',
+      text: 'gym at 7',
+      dueAt: new Date(yesterdayDue).toISOString(),
+      graceMin: DEFAULT_GRACE_MIN,
+      status: 'missed',
+      stake: { lamports: 50_000_000, status: 'slashed', txSig: null },
+      createdAt: new Date(yesterdayDue - 6 * 3600_000).toISOString(),
+      renegotiations: 0,
+    };
+    await this.ctx.storage.put(KEY.commitment(missed.id), missed);
+
+    // The excuse the agent gets to remember.
+    await this.appendTracesAt([
+      { at: workoutDays[0]!, kind: 'workout_detected', summary: 'traditional strength training · 45 min · 310 kcal' },
+      { at: workoutDays[1]!, kind: 'workout_detected', summary: 'running · 30 min · 260 kcal' },
+      { at: yesterdayDue - 6 * 3600_000, kind: 'commitment_created', summary: 'gym at 7 · 0.05 SOL on it' },
+      { at: yesterdayDue - 6 * 3600_000, kind: 'stake_held', summary: '0.05 SOL locked' },
+      { at: yesterdayDue + 24 * 60_000, kind: 'alarm_fired', summary: '19:24 — checking on gym at 7' },
+      { at: yesterdayDue + 24 * 60_000, kind: 'message_sent', summary: 'bro' },
+      { at: yesterdayDue + 25 * 60_000, kind: 'message_sent', summary: '7:24 and no workout 😭' },
+      { at: yesterdayDue + 40 * 60_000, kind: 'message_received', summary: 'cant today bro, too much work' },
+      { at: yesterdayDue + 41 * 60_000, kind: 'message_sent', summary: 'thats the excuse every time' },
+      { at: endOfLocalDay(yesterdayDue, tz), kind: 'stake_slashed', summary: '0.05 SOL gone' },
+    ]);
+
+    return ok({ workouts: workoutDays.length, commitments: 1 });
+  }
+
+  /** Like appendTraces, but for history that did not happen just now. */
+  private async appendTracesAt(
+    entries: Array<{ at: number; kind: TraceKind; summary: string }>,
+  ): Promise<void> {
+    let seq = (await this.ctx.storage.get<number>(KEY.traceSeq)) ?? 0;
+    const writes: Record<string, unknown> = {};
+    for (const entry of [...entries].sort((a, b) => a.at - b.at)) {
+      seq++;
+      writes[KEY.trace(seq)] = {
+        id: seq,
+        ts: new Date(entry.at).toISOString(),
+        kind: entry.kind,
+        summary: entry.summary,
+      } satisfies TraceEvent;
+    }
+    writes[KEY.traceSeq] = seq;
+    await this.ctx.storage.put(writes);
+  }
+
   // --- alarms -------------------------------------------------------------
 
   /**

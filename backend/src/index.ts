@@ -62,6 +62,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'POST');
       return timewarp(request, env);
 
+    case '/debug/seed':
+      requireMethod(request, 'POST');
+      return seed(request, env);
+
     case '/webhooks/linq':
       requireMethod(request, 'POST');
       return linqWebhook(request, env, ctx);
@@ -214,6 +218,18 @@ async function timewarp(request: Request, env: Env): Promise<Response> {
   }
 
   return toResponse(await stub.timewarp(token, now));
+}
+
+/** Demo only. Same guard as timewarp: bearer token plus X-Debug-Key. */
+async function seed(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/seed');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+  const { token, stub } = authenticate(request, env);
+  return toResponse(await stub.seed(token));
 }
 
 function timingSafeEqual(a: string, b: string): boolean {
