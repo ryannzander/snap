@@ -27,13 +27,13 @@ new_sqlite_classes = ["UserAgent", "Directory"]
 # bot and the Linq sandbox number exist; not secrets, so they live here.
 [vars]
 SNAP_TELEGRAM = "@snap_bro_bot"
-SNAP_IMESSAGE = "+10000000000"
+SNAP_IMESSAGE = "+13102796028"
 
 # Which adapter actually delivers. "trace" writes what Snap would have texted
 # into the brain screen and sends nothing, which keeps the Linq sandbox's
 # 100-messages-a-day budget for real end-to-end tests and the demo.
 # Set to "linq" to deliver for real.
-SNAP_CHANNEL = "trace"
+SNAP_CHANNEL = "linq"
 
 # Which brain reasons. OpenAI is the demo brain (DESIGN.md); with no
 # OPENAI_API_KEY set, the agent falls back to the Workers AI binding below.
