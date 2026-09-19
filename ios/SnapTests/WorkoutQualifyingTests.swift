@@ -115,3 +115,45 @@ final class ExplorerLinkTests: XCTestCase {
         XCTAssertEqual(BrainView.shorten(""), "")
     }
 }
+
+/// The half-back split. `slashed` no longer means the whole stake is gone, so anything
+/// that reads `lamports` and assumes total loss is now wrong.
+final class StakeSplitTests: XCTestCase {
+
+    private func decode(_ json: String) throws -> Stake {
+        try JSONDecoder().decode(Stake.self, from: Data(json.utf8))
+    }
+
+    func testDecodesTheSplitOnASlashedStake() throws {
+        let stake = try decode("""
+        {"lamports":50000000,"status":"slashed","refundedLamports":25000000,
+         "forfeitedLamports":25000000,"txSig":"abc"}
+        """)
+        XCTAssertEqual(stake.refundedLamports, 25_000_000)
+        XCTAssertEqual(stake.forfeitedLamports, 25_000_000)
+        XCTAssertEqual(try XCTUnwrap(stake.refundedSol), 0.025, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(stake.forfeitedSol), 0.025, accuracy: 0.0001)
+    }
+
+    /// The two halves always sum to the stake — an odd lamport goes back to the user.
+    /// If they ever don't, the card would report money that never moved.
+    func testHalvesSumToTheStake() throws {
+        let stake = try decode("""
+        {"lamports":50000001,"status":"slashed","refundedLamports":25000001,
+         "forfeitedLamports":25000000,"txSig":"abc"}
+        """)
+        XCTAssertEqual(
+            try XCTUnwrap(stake.refundedLamports) + XCTUnwrap(stake.forfeitedLamports),
+            stake.lamports
+        )
+    }
+
+    /// Absent on every other status. The card must draw no split line rather than zeros.
+    func testHeldStakeHasNoSplit() throws {
+        let stake = try decode("""
+        {"lamports":50000000,"status":"held","txSig":"abc"}
+        """)
+        XCTAssertNil(stake.refundedLamports)
+        XCTAssertNil(stake.forfeitedSol)
+    }
+}

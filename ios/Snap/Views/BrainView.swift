@@ -70,6 +70,10 @@ struct BrainView: View {
                     }
                 }
                 timeline(for: commitment)
+                if let stake = commitment.stake, let refunded = stake.refundedSol,
+                   let forfeited = stake.forfeitedSol {
+                    splitLine(refunded: refunded, forfeited: forfeited)
+                }
                 if let signature = commitment.stake?.txSig {
                     explorerLink(signature)
                 }
@@ -131,6 +135,17 @@ struct BrainView: View {
             }
             .animation(.snappy, value: late)
         }
+    }
+
+    /// What a miss actually cost. `slashed` no longer means the whole stake is gone, so
+    /// the card has to say where it went rather than letting the pill imply a total loss.
+    private func splitLine(refunded: Double, forfeited: Double) -> some View {
+        let format = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...3))
+        return Text(
+            "\(refunded.formatted(format)) back · \(forfeited.formatted(format)) to charity"
+        )
+        .font(Theme.mono(11))
+        .foregroundStyle(Theme.inkDim)
     }
 
     /// The on-chain receipt. Only drawn when the backend actually got a signature —
