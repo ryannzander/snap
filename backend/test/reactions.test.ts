@@ -139,12 +139,19 @@ section('the first thing anyone reads');
   isTrue('it says his name', all.includes('ryan'));
   isTrue('what to text him', all.includes('gym at 7'));
   isTrue('that the money is theirs', all.includes('your money'));
-  isTrue('that they get it back', all.includes('all of it back'));
-  isTrue('and that skipping costs', all.includes('gone'));
+  // The pic is the verifier, so this is the sentence the whole product hangs
+  // on. Someone who never reads it will lose money and not know why.
+  isTrue('that a pic is how you get paid', all.includes('pic') && all.includes('all back'));
+  isTrue('what a pic has to show', all.includes('you in it'));
+  isTrue('that a screenshot will not pass', all.includes('screenshot'));
+  isTrue('and that the same pic twice will not either', all.includes('same pic twice'));
   // The one mechanic that moves money without a word typed. Never shipping
   // this unexplained is the condition on having it at all.
   isTrue('that 👍 is how you agree', all.includes('👍'));
-  isTrue('that the watch is the referee', all.includes('watch'));
+  // Deliberately absent: telling people up front that the watch will cover
+  // them reads as "the pic is optional", which is the one thing it must not
+  // sound like. They find out the first time it saves them.
+  isFalse('the watch is not advertised as a way out', all.includes('watch'));
   isTrue('and where the wallet is', all.includes('app'));
   isTrue('every text is a text, not a paragraph', texts.every((t) => t.length <= 120));
   isTrue('it ends by asking for a plan', texts.at(-1)!.includes('what are we doing today'));
@@ -152,7 +159,7 @@ section('the first thing anyone reads');
   const again = onboardingTexts('Ryan', 4, true);
   isFalse('asked for on purpose, it does not greet you again', again.join(' ').includes('yo ryan'));
   isFalse('and does not re-ask the opening question', again.join(' ').includes('what are we doing today'));
-  isTrue('but still explains the money', again.join(' ').includes('all of it back'));
+  isTrue('but still explains the money', again.join(' ').includes('all back'));
 
   const noName = onboardingTexts(null, null).join(' ');
   isTrue('a missing name does not leave a hole', !noName.includes('undefined') && !noName.includes('null'));

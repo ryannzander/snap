@@ -58,15 +58,44 @@ struct Commitment: Decodable, Identifiable, Equatable {
         }
     }
 
+    /// How a settled commitment was verified. The photo is what Snap asks for;
+    /// the watch is the quiet fallback for a session they trained and forgot to
+    /// send a picture of. Which one paid is worth saying out loud — "your watch
+    /// covered you" is the line that teaches someone to send the pic next time.
+    enum VerifiedBy: String, Decodable {
+        case photo, watch, unknown
+
+        init(from decoder: Decoder) throws {
+            self = VerifiedBy(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+
     let id: String
     let text: String
     let dueAt: Date
     let graceMin: Int
     let status: Status
     let stake: Stake?
+    /// The photo that verified this session, once one has landed. Null before
+    /// then — which is the app's cue to ask for one.
+    let proof: Proof?
+    let verifiedBy: VerifiedBy?
 
     /// When Snap wakes up to check on this.
     var checkAt: Date { dueAt.addingTimeInterval(Double(graceMin) * 60) }
+
+    /// Still waiting on a picture: open, money locked, nothing verified yet.
+    var awaitingProof: Bool {
+        (status == .pending || status == .renegotiated) && proof == nil && stake?.status == .held
+    }
+}
+
+/// The photo that released a stake. `description` is what the vision model saw,
+/// one sentence, and it is shown to the user — being told what Snap thought he
+/// was looking at is the difference between a verdict and a black box.
+struct Proof: Decodable, Equatable {
+    let at: Date
+    let description: String
 }
 
 struct Stake: Decodable, Equatable {
@@ -167,6 +196,8 @@ struct TraceEvent: Decodable, Identifiable, Equatable {
         case stakeSlashed = "stake_slashed"
         case reactionSent = "reaction_sent"
         case reactionReceived = "reaction_received"
+        case photoAccepted = "photo_accepted"
+        case photoRejected = "photo_rejected"
         case walletFunded = "wallet_funded"
         // "Stayed quiet" arrives as a `decision` whose summary says so; it is not a kind.
         case unknown

@@ -15,7 +15,7 @@ text "gym at 7, $5 on it"
   → decides whether/how to intervene
   → texts you first
   → you reply with an excuse → it negotiates ("30 mins then. push day. go.")
-  → workout shows up in HealthKit → stake released, Snap hypes you up
+  → you send a pic from the floor → it checks out → stake released, Snap hypes you up
   → or you skip → stake slashed to Snap's treasury
 ```
 
@@ -38,6 +38,7 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 | Agent trace | Every agent step is logged as a trace event and shown live on the "Snap's brain" screen. The agent can decide *not* to text, and that shows too. |
 | Demo | Real HealthKit, real agent, unscripted messages. A debug time-warp endpoint moves the agent's clock past the deadline. |
 | Voice | One persona: your gym bro. Lowercase, short, multiple texts in a row, never a paragraph. "bro", "nah", "😭", "lock in". Funny, not mean. Never sounds like an assistant. |
+| Proof | A photo, sent in the thread. There is no upload button in the app: the verifier lives in the conversation, which is also where the roast for a bad one lands. |
 | Tapbacks | Both directions. Snap reacts to your texts the way a person does, and a 👍 or ❤️ on a stake he offered **is** the yes that locks it — decided in the backend, not by the model, and explained in the thread's onboarding before it can ever cost anyone anything. |
 | Codex | One self-contained piece is built with Codex (the Anchor program + tests). Keep the prompt and the diff — the OpenAI prize asks for a concrete Codex story. |
 
@@ -51,6 +52,7 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 
 ## Stake rules
 
+- **Verification:** the **photo is the verifier**. A picture with them in it, in a training setting, releases the stake — checked by the vision model, fingerprinted so the same one cannot pay twice, and settled in code before the agent speaks. A screenshot, an empty room, a photo with nobody in it, or anything the model is under 0.6 confident about does not pass. **HealthKit is the silent fallback**: someone who trained and forgot to send a picture still gets paid, and the app tells them that is what happened. The fallback is never advertised in onboarding — a user who knows about it hears "the pic is optional".
 - **Wallet:** at onboarding the backend creates a devnet wallet per user and funds it from the treasury. The app has a wallet screen — balance, what is locked, where it went, and an "add money" button (`POST /wallet/topup`) — because a stake nobody can see the source of is a stake nobody trusts. Staking itself still happens by text: the wallet screen hands you the thread with the words typed, it does not have a stake button. Custodial for the demo; say so to Solana judges, Phantom is the production path.
 - **Covering the stake:** a stake larger than the wallet is refused before anything is offered or locked, and Snap says so and points at the app. Never a stake that "locked" against money that is not there.
 - **Size:** 0.05 SOL unless the user names an amount.

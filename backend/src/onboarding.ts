@@ -35,7 +35,7 @@ export function asksHowItWorks(text: string): boolean {
  * `again` is the same explainer asked for on purpose ("help"), so it does not
  * open by greeting someone who has been here for a week.
  *
- * Nine texts, which is nine of the Linq sandbox's hundred a day. That is the
+ * Ten texts, which is ten of the Linq sandbox's hundred a day. That is the
  * price of nobody being surprised by a stake, and it is paid once per user.
  */
 export function onboardingTexts(name: string | null, weeklyGoal: number | null, again = false): string[] {
@@ -48,9 +48,10 @@ export function onboardingTexts(name: string | null, weeklyGoal: number | null, 
       : [who ? `yo ${who}` : 'yo', 'im snap. im in your texts now. heres the deal 👇']),
     'you tell me when youre training. "gym at 7" is enough',
     'then i put money on it. YOUR money',
-    'you go, you get all of it back. you skip and its gone 💀',
     'tap 👍 on my text to agree to a stake. thats how you say yes',
-    'i never ask if you went. your watch tells me',
+    'send me a pic from the gym — you in it, on the floor. thats how you get it all back 📸',
+    'no pic, no money back. dont send me a screenshot either, i can tell 💀',
+    'and dont try the same pic twice, i remember them',
     'your wallet is in the app — add sol there, and you can see whats locked',
     ...(again ? [] : [`${goal}. what are we doing today`]),
   ];

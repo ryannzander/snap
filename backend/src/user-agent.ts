@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 
 import {
   buildDays,
-  countThisWeek,
+  countVerifiedThisWeek,
   recentMessages,
   renderContext,
   summarizeContext,
@@ -39,7 +39,14 @@ import {
   solText,
 } from './money';
 import { redact } from './redact';
-import { describePhoto, photoInstruction, photoSummary, type VisionEnv } from './vision';
+import {
+  describePhoto,
+  photoInstruction,
+  photoSummary,
+  type PhotoLook,
+  type PhotoOutcome,
+  type VisionEnv,
+} from './vision';
 import {
   explorerUrl,
   getBalanceLamports,
@@ -93,6 +100,8 @@ const KEY = {
   /** Like `traceSeq`: no colon, so it sits outside the `wallet:` scan range. */
   walletSeq: 'walletSeq',
   walletEntry: (id: number) => `wallet:entry:${String(id).padStart(12, '0')}`,
+  /** One photo, one payout: the fingerprint of every picture already spent. */
+  proof: (fingerprint: string) => `proof:${fingerprint}`,
   competition: (id: string) => `competition:${id}`,
   /** The stake Snap has proposed and the user has not answered yet. */
   offer: 'offer',
@@ -208,6 +217,11 @@ interface ScheduledAlarm {
   at: number;
   kind: AlarmKind;
   commitmentId?: string;
+}
+
+/** A photo fingerprint that has already been counted. See `judgePhoto`. */
+interface UsedProof {
+  at: string;
 }
 
 interface PendingTrace {
@@ -424,10 +438,10 @@ export class UserAgent extends DurableObject<Env> {
             // something HealthKit answered, not something to ask a model — and
             // a turn where it simply forgets to call release_stake leaves the
             // stake held forever with the loop looking finished.
-            await this.settle(closing, 'met', 'released');
+            await this.settle(closing, 'met', 'released', 'watch');
             await this.announce(
               profile,
-              `a workout just showed up on their watch and it covers "${closing.text}". you already gave them their ${solText(closing.stake.lamports)} back. tell them, and hype them up.`,
+              `a workout just showed up on their watch and it covers "${closing.text}". they never sent a pic, but you could see it anyway, so you gave them their ${solText(closing.stake.lamports)} back. tell them — and tell them the pic is still the quicker way to get paid.`,
             );
           })() as unknown as Promise<unknown>,
         );
@@ -451,12 +465,14 @@ export class UserAgent extends DurableObject<Env> {
       this.ctx.storage.list<StoredCommitment>({ prefix: 'commitment:' }),
     ]);
 
-    // Same bar as releasing a stake, so the dots on the screen and the
-    // agent's "2/4 this week" never disagree.
-    const workoutsThisWeek = countThisWeek(
+    // Same bar as releasing a stake — a verified photo or a qualifying
+    // workout — so the dots on the screen and the agent's "2/4 this week"
+    // never disagree.
+    const workoutsThisWeek = countVerifiedThisWeek(
       this.now(),
       profile.timezone,
       [...workouts.values()],
+      [...commitments.values()],
     );
 
     return ok({
@@ -772,17 +788,16 @@ export class UserAgent extends DurableObject<Env> {
 
     await this.loadClock();
     const url = imageUrls[0]!;
-    let description: string | null = null;
+    let look: PhotoLook | null = null;
     try {
       // The generated `Ai` binding type is model-specific; the vision module
       // only needs `run`, the same loosening `brain()` does.
-      const look = await describePhoto(this.env as unknown as VisionEnv, url);
-      description = look.description;
+      look = await describePhoto(this.env as unknown as VisionEnv, url);
       await this.appendTraces([
         {
           kind: 'context',
           summary: `looked at the photo · ${look.description}`,
-          data: { via: look.via, imageUrl: url },
+          data: { via: look.via, imageUrl: url, verdict: look.verdict },
         },
       ]);
     } catch (error) {
@@ -794,7 +809,90 @@ export class UserAgent extends DurableObject<Env> {
         },
       ]);
     }
-    return this.runAgent(photoInstruction(text, description), true);
+
+    // The money moves here, in code, before the model says a word. A turn
+    // that decides for itself whether a picture counts is a turn that can be
+    // talked into paying out, and this is the verifier now.
+    const outcome = look ? await this.judgePhoto(look) : { kind: 'unseen' as const };
+
+    return this.runAgent(photoInstruction(text, look?.description ?? null, outcome), true);
+  }
+
+  /**
+   * Is this photo proof, and does it close anything?
+   *
+   * Three ways to fail, in the order someone would actually try them: it is
+   * not a training photo, it is a photo we have already been paid for, or it
+   * is a fine photo with nothing on the line. Only the fourth case moves
+   * money, and it moves it before the model is asked to speak.
+   */
+  private async judgePhoto(look: PhotoLook): Promise<PhotoOutcome> {
+    if (look.verdict !== 'training') {
+      const reason = look.rejection ?? 'that is not a workout';
+      await this.appendTraces([
+        {
+          kind: 'photo_rejected',
+          summary: `not proof · ${reason}`,
+          data: { verdict: look.verdict, description: look.description },
+        },
+      ]);
+      return { kind: look.verdict === 'unsure' ? 'unsure' : 'rejected', reason };
+    }
+
+    // Sending Monday's gym selfie again on Tuesday is the first thing anyone
+    // would try. The bytes are the same, so the fingerprint is.
+    const seen = await this.ctx.storage.get<UsedProof>(KEY.proof(look.fingerprint));
+    if (seen) {
+      await this.appendTraces([
+        {
+          kind: 'photo_rejected',
+          summary: 'not proof · you already sent me that exact photo',
+          data: { fingerprint: look.fingerprint, firstSeenAt: seen.at },
+        },
+      ]);
+      return { kind: 'replay', reason: 'you already sent me that exact photo' };
+    }
+    await this.ctx.storage.put(KEY.proof(look.fingerprint), {
+      at: this.nowIso(),
+    } satisfies UsedProof);
+
+    // Whatever stake is open right now. No window check beyond that: the photo
+    // arrived now, so it is necessarily after the commitment was made, and a
+    // deadline that has already passed has been settled by the end-of-day
+    // alarm and is no longer open. Someone who trains early and sends the pic
+    // before the hour they named gets paid early, which is the right answer —
+    // the stake is on training, not on punctuality.
+    const open = (await this.loadCommitments()).find(
+      (c) =>
+        (c.status === 'pending' || c.status === 'renegotiated') && c.stake.status === 'held',
+    );
+
+    if (!open) {
+      await this.appendTraces([
+        {
+          kind: 'photo_accepted',
+          summary: 'proof · nothing on the line for it',
+          data: { description: look.description },
+        },
+      ]);
+      return { kind: 'no_stake' };
+    }
+
+    const verified: StoredCommitment = {
+      ...open,
+      proof: { at: this.nowIso(), description: look.description },
+    };
+    await this.ctx.storage.put(KEY.commitment(open.id), verified);
+    await this.appendTraces([
+      {
+        kind: 'photo_accepted',
+        summary: `proof · ${solText(open.stake.lamports)} back on "${open.text}"`,
+        data: { commitmentId: open.id, description: look.description },
+      },
+    ]);
+    await this.settle(verified, 'met', 'released', 'photo');
+
+    return { kind: 'released', text: open.text, lamports: open.stake.lamports };
   }
 
   /**
@@ -1102,6 +1200,11 @@ export class UserAgent extends DurableObject<Env> {
       graceMin: DEFAULT_GRACE_MIN,
       status: 'missed',
       stake: { lamports: 50_000_000, status: 'slashed', txSig: null },
+      // No pic yesterday and nothing on the watch either — which is exactly
+      // why the money went. The agent reads this back as "you said that
+      // yesterday".
+      proof: null,
+      verifiedBy: null,
       createdAt: new Date(yesterdayDue - 6 * 3600_000).toISOString(),
       renegotiations: 0,
     };
@@ -1497,6 +1600,10 @@ export class UserAgent extends DurableObject<Env> {
         // Already settled, or talked forward — nothing to check on.
         if (!commitment || commitment.status !== 'pending') return;
 
+        // A verified photo settles the commitment the moment it lands, so
+        // this is belt and braces — but nagging someone who has already sent
+        // the picture is the one mistake this alarm must never make.
+        if (commitment.proof) return;
         const covering = findCoveringWorkout(
           await this.loadWorkouts(),
           parseIso(commitment.createdAt) ?? 0,
@@ -1512,7 +1619,7 @@ export class UserAgent extends DurableObject<Env> {
           },
         ]);
         await this.runAgent(
-          `you woke yourself up. "${commitment.text}" was due at ${clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone)} and the ${commitment.graceMin} minute grace has passed with no workout. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. decide whether to text them.`,
+          `you woke yourself up. "${commitment.text}" was due at ${clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone)} and the ${commitment.graceMin} minute grace has passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`,
         );
         return;
       }
@@ -1521,35 +1628,41 @@ export class UserAgent extends DurableObject<Env> {
         const commitment = await this.commitment(scheduled.commitmentId);
         if (!commitment || (commitment.status !== 'pending' && commitment.status !== 'renegotiated')) return;
 
-        const covering = findCoveringWorkout(
-          await this.loadWorkouts(),
-          parseIso(commitment.createdAt) ?? 0,
-          this.endOfDayFor(commitment, profile),
-        );
+        const covering = commitment.proof
+          ? null
+          : findCoveringWorkout(
+              await this.loadWorkouts(),
+              parseIso(commitment.createdAt) ?? 0,
+              this.endOfDayFor(commitment, profile),
+            );
+        const met = commitment.proof ? 'photo' : covering ? 'watch' : null;
 
         await this.appendTraces([
           {
             kind: 'alarm_fired',
-            summary: covering
+            summary: met
               ? `end of day — ${commitment.text} was met`
               : `end of day — ${commitment.text} is unmet`,
-            data: { commitmentId: commitment.id, kind: 'end_of_day' },
+            data: { commitmentId: commitment.id, kind: 'end_of_day', verifiedBy: met },
           },
         ]);
-        // The clock and HealthKit decide this, not the model. It used to be
-        // asked to "decide", which meant a turn that chose the wrong tool left
-        // a missed commitment sitting held and the demo's last beat missing.
-        if (covering) {
-          await this.settle(commitment, 'met', 'released');
+        // The clock and the two verifiers decide this, not the model. It used
+        // to be asked to "decide", which meant a turn that chose the wrong
+        // tool left a missed commitment sitting held and the demo's last beat
+        // missing.
+        if (met) {
+          await this.settle(commitment, 'met', 'released', met);
           await this.announce(
             profile,
-            `end of day. "${commitment.text}" got done and you already gave them their ${solText(commitment.stake.lamports)} back. tell them.`,
+            met === 'photo'
+              ? `end of day. "${commitment.text}" got done — they sent the pic — and you already gave them their ${solText(commitment.stake.lamports)} back. tell them.`
+              : `end of day. they never sent a pic for "${commitment.text}", but their watch shows they trained anyway, so you gave them their ${solText(commitment.stake.lamports)} back. tell them, and tell them the pic is the quicker way.`,
           );
         } else {
           await this.settle(commitment, 'missed', 'slashed');
           await this.announce(
             profile,
-            `end of day. "${commitment.text}" never happened, so you just took their ${solText(commitment.stake.lamports)}. tell them straight — no lecture.`,
+            `end of day. no pic, nothing on their watch either, so "${commitment.text}" never happened and you just took their ${solText(commitment.stake.lamports)}. tell them straight — no lecture.`,
           );
         }
         return;
@@ -2003,6 +2116,8 @@ not a system rejecting them.`,
       graceMin: DEFAULT_GRACE_MIN,
       status: 'pending',
       stake: { lamports: proposal.lamports, status: 'held', txSig: null },
+      proof: null,
+      verifiedBy: null,
       createdAt: this.nowIso(),
       renegotiations: 0,
     };
@@ -2232,10 +2347,18 @@ not a system rejecting them.`,
     commitment: StoredCommitment,
     status: 'met' | 'missed',
     stake: 'released' | 'slashed',
+    /**
+     * Which verifier closed it. The photo is the one Snap asks for and talks
+     * about; the watch is the fallback that pays people who trained and
+     * forgot, and the app says which so nobody has to guess why their money
+     * came back.
+     */
+    verifiedBy: 'photo' | 'watch' | null = null,
   ): Promise<void> {
     await this.ctx.storage.put(KEY.commitment(commitment.id), {
       ...commitment,
       status,
+      verifiedBy,
       stake: { ...commitment.stake, status: stake },
     } satisfies StoredCommitment);
 
@@ -2293,7 +2416,7 @@ not a system rejecting them.`,
       timezone: profile.timezone,
       name: profile.name,
       weeklyGoal: profile.weeklyGoal,
-      workoutsThisWeek: countThisWeek(now, profile.timezone, workouts),
+      workoutsThisWeek: countVerifiedThisWeek(now, profile.timezone, workouts, commitments),
       lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
@@ -2420,6 +2543,10 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
     status: stored.status,
     // Projected field by field too: step 6 hangs Solana vault bookkeeping off
     // the stake record, and none of that belongs on the wire.
+    proof: stored.proof
+      ? { at: stored.proof.at, description: stored.proof.description }
+      : null,
+    verifiedBy: stored.verifiedBy ?? null,
     stake: {
       lamports: stored.stake.lamports,
       status: stored.stake.status,

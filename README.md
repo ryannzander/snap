@@ -1,14 +1,16 @@
 # Snap
 
-Your gym bro in your texts. Snap knows when you said you'd work out, sees that you didn't, and forces you too.
+Your gym bro in your texts. Snap knows when you said you'd work out, holds your money until you send a pic from the gym, and can tell when the pic is a screenshot.
 
 Built at Hack the North 2026.
 
 ## The loop
 
-commitment → missed workout detected → agent evaluates context → proactive text → reply (or a 👍) → personalized response → workout detected → stake returned
+commitment → deadline passes with no pic → agent evaluates context → proactive text → reply (or a 👍) → personalized response → pic arrives and checks out → stake returned
 
-The first text you ever get explains all of it: what Snap does, that the watch is the referee, and that tapping 👍 on an offer is how you agree to a stake. The money it comes out of lives in the app's wallet screen — balance, what's locked, where it went, and a button to add more.
+The photo is the verifier: a picture with you in it, on the gym floor. The vision model judges it, a screenshot doesn't pass, and every image is fingerprinted so the same one can't be spent twice. HealthKit sits underneath as a silent fallback for the day you train and forget to send anything.
+
+The first text you ever get explains all of it: what Snap does, that the pic is how you get paid, and that tapping 👍 on an offer is how you agree to a stake. The money it comes out of lives in the app's wallet screen — balance, what's locked, where it went, and a button to add more.
 
 ## Layout
 

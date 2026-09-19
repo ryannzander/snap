@@ -278,6 +278,11 @@ private struct PlanCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 verdict(for: commitment)
+                // The pic is what returns the money, so the open plan's job is to
+                // ask for it. Everything else on this card is context for that.
+                if commitment.awaitingProof {
+                    proofAsk(for: commitment)
+                }
                 // No Watch? Snap times the session itself. Only while the plan is open —
                 // a settled commitment has nothing left to record against.
                 if commitment.status == .pending || commitment.status == .renegotiated {
@@ -316,17 +321,51 @@ private struct PlanCard: View {
         }
     }
 
+    /// The one instruction on the screen while money is on the line: send the
+    /// picture. It opens the thread, because that is where the photo has to
+    /// land — there is no upload button in this app on purpose, the verifier
+    /// lives in the conversation.
+    private func proofAsk(for commitment: Commitment) -> some View {
+        VStack(spacing: 10) {
+            Button("send the pic") { ThreadLink.open(contact: model.contact) }
+                .buttonStyle(PillButtonStyle(kind: .onDark, enabled: ThreadLink.url(contact: model.contact) != nil, wide: false))
+                .disabled(ThreadLink.url(contact: model.contact) == nil)
+
+            Text(commitment.stake.map { "you in it, on the gym floor. that's how the \($0.sol.formatted(Self.sol)) SOL comes home." }
+                 ?? "you in it, on the gym floor.")
+                .font(Theme.body(14))
+                .foregroundStyle(Theme.surface.opacity(0.6))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private static let sol = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...3))
+
     @ViewBuilder
     private func verdict(for commitment: Commitment) -> some View {
         switch commitment.status {
         case .met:
-            HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 30, weight: .bold))
-                Text("done.")
-                    .font(Theme.display(44))
+            VStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 30, weight: .bold))
+                    Text("done.")
+                        .font(Theme.display(44))
+                }
+                .foregroundStyle(Theme.surface)
+
+                // Which verifier paid. "your watch covered you" is the line that
+                // teaches someone to send the pic next time, so it is worth the
+                // row — and a photo that counted deserves to be seen counting.
+                if let line = BrainView.verifiedLine(for: commitment) {
+                    Text(line)
+                        .font(Theme.body(14))
+                        .foregroundStyle(Theme.surface.opacity(0.6))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
-            .foregroundStyle(Theme.surface)
         case .missed:
             Text("missed.")
                 .font(Theme.display(44))
@@ -392,9 +431,9 @@ private struct StakeCard: View {
 
     private var body_: String {
         switch stake.status {
-        case .held:     "you go, it comes home.\nyou skip, it's gone."
-        case .released: "workout landed. snap let go of the stake."
-        case .slashed:  "no workout by the deadline. the stake is gone."
+        case .held:     "send the pic, it comes home.\ndon't, and it's gone."
+        case .released: "proof landed. snap let go of the stake."
+        case .slashed:  "no proof by the deadline. the stake is gone."
         case .none, .unknown: ""
         }
     }
@@ -457,6 +496,23 @@ extension BrainView {
             String(summary[..<range.lowerBound]).trimmingCharacters(in: .whitespaces),
             target.isEmpty ? nil : target
         )
+    }
+
+    /// What closed a commitment, in one line under "done.". Nil when the backend
+    /// did not say — a commitment settled before this field existed.
+    ///
+    /// The watch line is doing work: it is the only place a user learns that
+    /// something other than their photo can pay them, and it says so while
+    /// pointing back at the photo.
+    nonisolated static func verifiedLine(for commitment: Commitment) -> String? {
+        switch commitment.verifiedBy {
+        case .photo:
+            return commitment.proof.map { "pic checked out · \($0.description)" } ?? "pic checked out"
+        case .watch:
+            return "no pic, but your watch covered you. it's quicker with the pic."
+        case .unknown, nil:
+            return commitment.proof.map { "pic checked out · \($0.description)" }
+        }
     }
 
     nonisolated static func spokenReaction(emoji: String, target: String?, fromSnap: Bool) -> String {
@@ -822,6 +878,8 @@ private struct TraceRow: View {
         case .stakeHeld:         "lock.fill"
         case .stakeReleased:     "lock.open.fill"
         case .stakeSlashed:      "flame.fill"
+        case .photoAccepted:     "checkmark.seal.fill"
+        case .photoRejected:     "xmark.seal.fill"
         case .walletFunded:      "plus.circle.fill"
         default:                 "circle.fill"
         }

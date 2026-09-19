@@ -8,13 +8,13 @@ The market already has every piece of Snap on its own. The combination is the pr
 
 | Category | Who | How they verify | Voice |
 |---|---|---|---|
-| Money-stake apps | StickK, Beeminder, Forfeit, Pledgd, FineStreak | Referee, photo, GPS, honor system | None |
+| Money-stake apps | StickK, Beeminder, Forfeit, Pledgd, FineStreak | Human referee, unchecked photo, GPS, honor system | None |
 | AI coaches that text | Ryke AI, Tomo, BodyBuddy, Accountablo | You tell it in chat | Coach |
 | AI in iMessage | Poke, Sidekicks | Nothing | Assistant |
 
 What nobody does together:
 
-1. **It never asks if you did it. It knows.** HealthKit is the referee. No photo, no honor system, no "did you go?"
+1. **The photo is the referee, and it is judged, not trusted.** Everyone else who takes a photo takes it on trust or pays a human to look. Snap's vision model checks that a person is actually in a training setting, refuses screenshots, and fingerprints every image so the same picture cannot be spent twice — and HealthKit sits underneath as a fallback that pays you when you trained and forgot. No honor system, and no "did you go?"
 2. **Ghosting doesn't work.** Stop replying and the money still moves. Every AI coach loses the user the moment the user goes quiet.
 3. **Judgment, not rules.** Forfeit and Beeminder are deterministic. Snap negotiates, remembers yesterday's excuse, and decides.
 4. **Anti-coach.** No plans, no macros, no encouragement. A friend who roasts you and holds your money. This ban is permanent.
@@ -22,7 +22,7 @@ What nobody does together:
 
 Not differentiators: being in iMessage (table stakes), and "it's on Solana" (a prize, not a pitch — sell what the chain enables below, not the chain).
 
-One-liner to test: *"Every accountability app asks if you worked out. Snap already knows, and it wants its five bucks."*
+One-liner to test: *"Every accountability app takes your word for it. Snap wants the picture, and it can tell when you're lying — and it's holding five bucks."*
 
 ## Money
 
@@ -64,8 +64,8 @@ A brand funds the pot; users enter free or with a stake; Snap settles it.
 
 ### What stays true across all of them
 
-- Verification is always HealthKit. No photos, no self-report, no "trust me." A comp that can be gamed is worth nothing to a sponsor.
-- Same duration floor and workout-type filter as the core loop, so "it knows" stays credible.
+- Verification is the same as the core loop: a checked photo, with HealthKit underneath. No self-report, no "trust me." A comp that can be gamed is worth nothing to a sponsor — and a pot is exactly where someone would try a recycled photo, which is what the fingerprint is for.
+- Same bar as the core loop, so the claim stays credible.
 - Snap's voice doesn't change. It instigates, it roasts, it never becomes a scoreboard bot.
 - No new screens. Standing is one line on the brain screen; everything else is in the thread.
 

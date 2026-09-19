@@ -28,17 +28,24 @@ actor MockAPI: SnapAPI {
         Step(.commitmentCreated, "gym at 7 · 0.05 SOL on it"),
         Step(.stakeHeld,         "0.05 SOL locked · 4xK…9fQ"),
         Step(.alarmFired,        "7:24 — checking on gym at 7"),
-        Step(.context,           "no workout today · skipped yesterday · 2/4 this week · 0.05 SOL staked"),
+        Step(.context,           "no pic today · skipped yesterday · 2/4 this week · 0.05 SOL staked"),
         Step(.decision,          "intervene — firm"),
         Step(.messageSent,       "bro"),
-        Step(.messageSent,       "7:24 and no workout 😭"),
+        Step(.messageSent,       "7:24 and no pic 😭"),
         Step(.messageSent,       "you said no excuses today"),
         Step(.messageReceived,   "homework bro"),
         Step(.reactionSent,      "😂 on: homework bro"),
         Step(.decision,          "one reschedule left · allow 30 min"),
         Step(.messageSent,       "30 mins then. push day. go."),
         Step(.reactionReceived,  "👍 on: 30 mins then. push day. go."),
-        Step(.workoutDetected,   "strength training started"),
+        // The first pic is the one everybody tries. It does not pass.
+        Step(.messageReceived,   "📷 sent a photo"),
+        Step(.context,           "looked at the photo · a screenshot of a workout app"),
+        Step(.photoRejected,     "not proof · that's a screenshot"),
+        Step(.messageSent,       "nice try 💀 you in the shot, on the floor"),
+        Step(.messageReceived,   "📷 sent a photo"),
+        Step(.context,           "looked at the photo · a sweaty guy at a squat rack, mid-set"),
+        Step(.photoAccepted,     "proof · 0.05 SOL back on \"gym at 7\""),
         Step(.stakeReleased,     "0.05 SOL back in your wallet"),
         Step(.messageSent,       "that's my guy"),
     ]
@@ -49,8 +56,10 @@ actor MockAPI: SnapAPI {
     // said it happened.
     private static let alarmStep = 2
     private static let rescheduleStep = 10
-    private static let workoutStep = 13
-    private static let releaseStep = 14
+    /// The pic that passes — the mock's stand-in for the workout beat, and what
+    /// `postWorkouts` jumps to when a real HealthKit sample arrives early.
+    private static let proofStep = 19
+    private static let releaseStep = 20
 
     /// The link screen "receives the text" this long after onboarding. Anchored to the
     /// onboard call, not process launch: the mock is a singleton built at launch, and
@@ -68,6 +77,10 @@ actor MockAPI: SnapAPI {
                      at: Date().addingTimeInterval(-86_400), txSig: MockAPI.mockSignature),
     ]
 
+    /// Set when a HealthKit workout, rather than the scripted photo, closed the
+    /// loop. See `postWorkouts`.
+    private var releasedByWatch = false
+
     private var dueAt: Date
     private var onboardedAt: Date?
     private var scriptStartedAt: Date?
@@ -84,6 +97,7 @@ actor MockAPI: SnapAPI {
         scriptStartedAt = nil
         onboardedAt = nil
         dueAt = Date().addingTimeInterval(120)
+        releasedByWatch = false
         balanceLamports = 150_000_000
         walletEntries = [
             Wallet.Entry(id: 2, kind: .held, lamports: 50_000_000, label: "gym at 7",
@@ -107,16 +121,20 @@ actor MockAPI: SnapAPI {
     }
 
     func postWorkouts(_ workouts: [WorkoutDTO]) async throws {
-        // A workout arriving early pulls the script forward to the moment Snap sees it.
+        // A real workout is the watch covering them, not the pic. It pulls the
+        // script forward to the same closing beat, but the commitment then says
+        // it was the watch that paid — which is the only way to see that copy
+        // offline, since the mock has no way to receive an actual photo.
         guard !workouts.isEmpty else { return }
-        advance(to: Self.workoutStep)
+        releasedByWatch = true
+        advance(to: Self.proofStep)
     }
 
     func state() async throws -> SnapState {
         let reached = emitted.count
         return SnapState(
             weeklyGoal: 4,
-            workoutsThisWeek: reached > Self.workoutStep ? 3 : 2,
+            workoutsThisWeek: reached > Self.proofStep ? 3 : 2,
             // Never onboarded through the mock (SNAP_PHASE=live, a reconnect) → already
             // linked, so the brain screen is reachable. Onboarded → the text "arrives"
             // a few seconds after the link screen appears.
@@ -135,7 +153,11 @@ actor MockAPI: SnapAPI {
                         lamports: 50_000_000,
                         status: stakeStatus(reached),
                         txSig: Self.mockSignature
-                    )
+                    ),
+                    proof: reached > Self.proofStep && !releasedByWatch
+                        ? Proof(at: Date(), description: "a sweaty guy at a squat rack, mid-set")
+                        : nil,
+                    verifiedBy: reached > Self.proofStep ? (releasedByWatch ? .watch : .photo) : nil
                 )
             ]
         )
@@ -220,7 +242,7 @@ actor MockAPI: SnapAPI {
     }
 
     private func commitmentStatus(_ reached: Int) -> Commitment.Status {
-        if reached > Self.workoutStep { return .met }
+        if reached > Self.proofStep { return .met }
         if reached > Self.rescheduleStep { return .renegotiated }
         return .pending
     }

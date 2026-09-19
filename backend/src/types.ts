@@ -20,6 +20,8 @@ export type TraceKind =
   | 'stake_slashed'
   | 'reaction_sent'
   | 'reaction_received'
+  | 'photo_accepted'
+  | 'photo_rejected'
   | 'wallet_funded';
 
 /** POST /onboard */
@@ -66,6 +68,19 @@ export interface Stake {
   txSig: string | null;
 }
 
+/**
+ * The photo that verified a session.
+ *
+ * Null until one lands. The app draws the difference — a plan with no proof
+ * is asking for a picture, a plan with proof is done — so this is the one
+ * field on a commitment that changes what the user is being told to do.
+ */
+export interface Proof {
+  at: string;
+  /** What the vision model saw, one sentence. Shown to the user.  */
+  description: string;
+}
+
 export interface Commitment {
   id: string;
   text: string;
@@ -73,6 +88,13 @@ export interface Commitment {
   graceMin: number;
   status: CommitmentStatus;
   stake: Stake;
+  proof: Proof | null;
+  /**
+   * How the session was verified once it is settled: the photo they sent, or
+   * the watch quietly covering them when they forgot. Null while open, and
+   * on a commitment that was missed.
+   */
+  verifiedBy: 'photo' | 'watch' | null;
 }
 
 export interface StateResponse {

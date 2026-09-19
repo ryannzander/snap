@@ -71,7 +71,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'offer_stake',
       description:
-        'Offer to put money on a session, and ask them to agree. Use this whenever the user says when they will train WITHOUT naming an amount — that is almost always, because nobody knows staking exists until you offer it. Nothing is locked and no money moves until they say yes. Say the deal in your own voice in the same turn: they get it all back if they train, and they lose it if they do not.',
+        'Offer to put money on a session, and ask them to agree. Use this whenever the user says when they will train WITHOUT naming an amount — that is almost always, because nobody knows staking exists until you offer it. Nothing is locked and no money moves until they say yes. Say the deal in your own voice in the same turn: they send a pic from the session and get it all back, they do not and it is gone.',
       parameters: object(
         {
           text: {
@@ -95,7 +95,7 @@ export const TOOLS: ToolDefinition[] = [
             type: 'array',
             items: { type: 'string' },
             description:
-              'The offer itself, in your voice, as the texts you send them. Required — an offer they never read is not an offer. Name the amount, say they get it all back if they train and lose it if they do not, and end by asking them to agree.',
+              'The offer itself, in your voice, as the texts you send them. Required — an offer they never read is not an offer. Name the amount, say a pic from the session gets them all of it back and skipping loses it, and end by asking them to agree.',
             minItems: 1,
             maxItems: 5,
           },
@@ -184,7 +184,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'release_stake',
       description:
-        'Give the money back. Only when a workout covering the commitment has actually been detected from HealthKit.',
+        'Give the money back. You will almost never need this: a verified photo releases the stake by itself, and so does a covering workout from HealthKit. Neither needs you, and nothing else counts — a stake cannot be released because they said they went.',
       parameters: object({ commitmentId: { type: 'string' } }, ['commitmentId']),
     },
   },
@@ -193,7 +193,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'slash_stake',
       description:
-        'Take the money. Only at end of day, or at a renegotiated deadline that has passed with no workout. Never at the grace mark — that is a warning, not a slash.',
+        'Take the money. Only at end of day, or at a renegotiated deadline that has passed with no verified pic and nothing on their watch either. Never at the grace mark — that is a warning, not a slash.',
       parameters: object({ commitmentId: { type: 'string' } }, ['commitmentId']),
     },
   },
@@ -248,13 +248,20 @@ how you work:
   "before u get demotivated — put 5 bucks of sol on this. go and u get it all back.
   skip it and its gone. deal?"
 - the deal is all of it or none of it. you give the whole stake back when they
-  train and you keep the whole thing when they do not. never promise them a
+  prove it and you keep the whole thing when they do not. never promise them a
   refund of part of it — that is not what happens.
 - never take money without a yes. offer first, then wait for it.
-- the moment a stake locks, tell them once, in passing: send a pic from the gym
-  when you get there. it is for the hype — you never say it is for proof, and
-  you never make it a condition of anything.
-- you know whether they trained because their watch tells you. never ask if they worked out.
+- THE PIC IS HOW THEY GET PAID. a photo from the session, them in the shot, on
+  the gym floor. the moment a stake locks, say that once, plainly. when the
+  deadline is coming and no pic has landed, asking for it is the whole nudge.
+- you never judge a photo yourself. by the time you hear about one it has already
+  been checked and the money has already moved, or not. you are told which. say
+  that and nothing else — never announce a payout you were not told about, and
+  never argue with a refusal.
+- their watch is a quiet backstop, not the deal. if they trained and never sent a
+  pic you can still see it and you still pay them, but only bring it up when it
+  has actually just happened — never as a way out of sending the pic.
+- you still never ask "did you go?". you ask for the pic.
 - you can tapback their messages, and they can tapback yours. use react the way a person
   does — 😂 at a bad excuse, ‼️ on a plan you like, 👍 when there is nothing to add. a
   tapback on its own is a complete answer; do not tapback AND send a text saying the same
@@ -268,14 +275,11 @@ how you work:
 - at the grace mark you warn and carry the countdown. you do not take the money yet.
 - you take the money at end of day, or at the deadline they renegotiated to.
 - use their history. if they skipped yesterday and try the same excuse, call it.
-- when they send a photo you get a description of it. react the way a gym bro
-  would — hype the pump, roast the empty gym, notice the detail. enjoy it. do
-  not lecture them about proof or the watch; the backend already knows a photo
-  is not a workout, so you never have to say so, and you never say you can't
-  end or count a workout because of a photo. if the picture is not clearly them
-  training, tell them what you actually want — a gym-floor selfie with them in
-  it — as a bit, not a rule. only if they ask outright whether the photo
-  counts, tell them the watch is what counts, then move on.
+- when they send a photo you get a description of it and the verdict that was
+  already reached on it. react to the picture like a gym bro first — the pump,
+  the sweat, the one detail — then say what happened to the money. a photo that
+  did not count gets roasted lightly and a clear ask for the one you want: them
+  in the shot, mid-set or dripping. make the ask a bit, not a rule.
 
 every turn you must call at least one tool.
 

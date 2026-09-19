@@ -276,4 +276,96 @@ final class ContractTests: XCTestCase {
             "you reacted 😂"
         )
     }
+
+    // MARK: - Proof
+
+    /// The photo is the verifier, so `proof` is what the plan card reads to
+    /// decide whether to ask for a picture or say the money is home.
+    func testDecodesAPhotoVerifiedCommitment() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":3,"linked":true,
+         "commitments":[{"id":"c_1","text":"gym at 7","dueAt":"2026-09-19T23:00:00.000Z",
+         "graceMin":20,"status":"met","verifiedBy":"photo",
+         "proof":{"at":"2026-09-19T23:10:00.000Z","description":"a sweaty guy at a squat rack"},
+         "stake":{"lamports":50000000,"status":"released","txSig":"4xK9fQ"}}]}
+        """
+        let commitment = try XCTUnwrap(
+            try decoder.decode(SnapState.self, from: Data(json.utf8)).commitments.first
+        )
+
+        XCTAssertEqual(commitment.verifiedBy, .photo)
+        XCTAssertEqual(commitment.proof?.description, "a sweaty guy at a squat rack")
+        XCTAssertFalse(commitment.awaitingProof, "a settled commitment is not waiting on anything")
+        XCTAssertEqual(
+            BrainView.verifiedLine(for: commitment),
+            "pic checked out · a sweaty guy at a squat rack"
+        )
+    }
+
+    /// An open stake with no photo yet is the state the whole app is built
+    /// around: money locked, nothing verified, and a picture being asked for.
+    func testAnOpenStakeWithNoPhotoIsAwaitingProof() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":2,"linked":true,
+         "commitments":[{"id":"c_1","text":"gym at 7","dueAt":"2026-09-19T23:00:00.000Z",
+         "graceMin":20,"status":"pending","proof":null,"verifiedBy":null,
+         "stake":{"lamports":50000000,"status":"held","txSig":null}}]}
+        """
+        let commitment = try XCTUnwrap(
+            try decoder.decode(SnapState.self, from: Data(json.utf8)).commitments.first
+        )
+
+        XCTAssertNil(commitment.proof)
+        XCTAssertTrue(commitment.awaitingProof)
+        XCTAssertNil(BrainView.verifiedLine(for: commitment), "nothing has closed it yet")
+    }
+
+    /// The watch is the silent fallback. When it pays, the app says so — that
+    /// line is the only place a user learns the backstop exists, and it points
+    /// straight back at the photo.
+    func testWatchFallbackSaysSoAndStillAsksForThePic() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":3,"linked":true,
+         "commitments":[{"id":"c_1","text":"gym at 7","dueAt":"2026-09-19T23:00:00.000Z",
+         "graceMin":20,"status":"met","verifiedBy":"watch","proof":null,
+         "stake":{"lamports":50000000,"status":"released","txSig":"4xK9fQ"}}]}
+        """
+        let commitment = try XCTUnwrap(
+            try decoder.decode(SnapState.self, from: Data(json.utf8)).commitments.first
+        )
+
+        XCTAssertEqual(commitment.verifiedBy, .watch)
+        let line = try XCTUnwrap(BrainView.verifiedLine(for: commitment))
+        XCTAssertTrue(line.contains("watch covered you"))
+        XCTAssertTrue(line.contains("pic"), "it still points back at the picture")
+    }
+
+    /// A commitment from before this field existed, or from a backend that adds
+    /// a third verifier later, must not take the screen down.
+    func testMissingOrUnknownVerifierDegrades() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":1,"linked":true,
+         "commitments":[
+          {"id":"c_1","text":"old","dueAt":"2026-09-18T23:00:00Z","graceMin":20,"status":"met",
+           "stake":{"lamports":50000000,"status":"released","txSig":null}},
+          {"id":"c_2","text":"new","dueAt":"2026-09-19T23:00:00Z","graceMin":20,"status":"met",
+           "verifiedBy":"gps","proof":null,
+           "stake":{"lamports":50000000,"status":"released","txSig":null}}]}
+        """
+        let commitments = try decoder.decode(SnapState.self, from: Data(json.utf8)).commitments
+
+        XCTAssertNil(commitments[0].verifiedBy, "an absent key is absent, not a failure")
+        XCTAssertEqual(commitments[1].verifiedBy, .unknown)
+        XCTAssertNil(BrainView.verifiedLine(for: commitments[1]), "say nothing rather than guess")
+    }
+
+    func testPhotoTraceKindsDecode() throws {
+        let json = """
+        {"events":[
+         {"id":1,"ts":"2026-09-19T23:24:00Z","kind":"photo_accepted","summary":"proof · 0.05 SOL back"},
+         {"id":2,"ts":"2026-09-19T23:24:01Z","kind":"photo_rejected","summary":"not proof · that's a screenshot"}]}
+        """
+        let events = try decoder.decode(TraceResponse.self, from: Data(json.utf8)).events
+        XCTAssertEqual(events.map(\.kind), [.photoAccepted, .photoRejected])
+    }
 }

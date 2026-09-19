@@ -329,11 +329,11 @@ private struct DealPage: View {
                 DealRow(icon: "message.fill", title: "text a plan",
                         text: "\u{201C}gym at 7, $5 on it\u{201D} is enough. snap turns it into a commitment.")
                 Divider().overlay(Theme.hairline)
-                DealRow(icon: "heart.fill", title: "he checks, not asks",
-                        text: "your watch tells him whether you went. no photos, no honor system.")
+                DealRow(icon: "camera.fill", title: "send a pic, get paid",
+                        text: "you on the gym floor. snap looks at it and sends the stake straight back.")
                 Divider().overlay(Theme.hairline)
-                DealRow(icon: "lock.fill", title: "show up, get it back",
-                        text: "go and the stake comes home. skip and it's gone.",
+                DealRow(icon: "lock.fill", title: "no pic, no money",
+                        text: "a screenshot won't pass, and the same pic twice won't either.",
                         pill: "SOL")
                 Divider().overlay(Theme.hairline)
                 DealRow(icon: "wallet.bifold.fill", title: "it comes from your wallet",
@@ -341,7 +341,7 @@ private struct DealPage: View {
             }
             .snapCard()
 
-            Text("held on solana devnet · returned the moment your workout lands")
+            Text("held on solana devnet · returned the moment your pic checks out")
                 .font(Theme.body(14))
                 .foregroundStyle(Theme.inkDim)
                 .frame(maxWidth: .infinity)
@@ -393,6 +393,10 @@ private struct DealRow: View {
     }
 }
 
+/// HealthKit is no longer the verifier, so this page no longer sells it as one.
+/// It is the safety net under the photo: it pays you on the day you train and
+/// forget to send anything. Pitched honestly as that, and still asked for before
+/// the system sheet goes up.
 private struct HealthPage: View {
     var body: some View {
         VStack(spacing: Theme.Space.m) {
@@ -400,8 +404,8 @@ private struct HealthPage: View {
             Image(systemName: "heart.text.square.fill")
                 .font(.system(size: 88))
                 .foregroundStyle(Theme.ink)
-            Question("i need to see\nyour workouts.")
-            Explanation("that's the whole trick. snap reads HealthKit, so he never has to ask if you went.\n\napple watch, strava, hevy, nike run club, whoop — anything that logs a workout counts. you only need one of them.\n\nnothing leaves your phone except the workout itself.")
+            Question("one backup,\nin case you forget.")
+            Explanation("the pic is what gets your money back. but if you train and never send one, snap can still see the session on your watch and pay you anyway.\n\napple watch, strava, hevy, nike run club, whoop — any one of them is enough.\n\nnothing leaves your phone except the workout itself.")
             Spacer()
             Spacer()
         }

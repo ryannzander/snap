@@ -111,6 +111,46 @@ export function countThisWeek(now: number, tz: string, workouts: WorkoutLike[]):
 }
 
 /**
+ * Sessions this week, by either verifier.
+ *
+ * The photo is what releases a stake now, so it has to fill a goal dot too —
+ * the repo's rule is that the bar which returns your money and the bar which
+ * moves "2/4" are the same bar, or the two numbers start disagreeing in front
+ * of the user.
+ *
+ * A photo-verified session only adds a dot on a local day that has no
+ * qualifying workout of its own. Someone who trains with a watch on AND sends
+ * a picture did one session, and counting it twice would make the goal a lie
+ * in the flattering direction.
+ */
+export function countVerifiedThisWeek(
+  now: number,
+  tz: string,
+  workouts: WorkoutLike[],
+  commitments: Array<{ status: string; dueAt: string; proof?: { at: string } | null }>,
+): number {
+  const weekStart = startOfWeek(now, tz);
+
+  const daysWithWorkouts = new Set<string>();
+  for (const workout of workouts) {
+    if (!counts(workout)) continue;
+    const startedAt = parseIso(workout.start);
+    if (startedAt !== null && startedAt >= weekStart) daysWithWorkouts.add(localDate(startedAt, tz));
+  }
+
+  const photoDays = new Set<string>();
+  for (const commitment of commitments) {
+    if (commitment.status !== 'met' || !commitment.proof) continue;
+    const at = parseIso(commitment.proof.at);
+    if (at === null || at < weekStart) continue;
+    const day = localDate(at, tz);
+    if (!daysWithWorkouts.has(day)) photoDays.add(day);
+  }
+
+  return countThisWeek(now, tz, workouts) + photoDays.size;
+}
+
+/**
  * Pulls the conversation back out of the trace feed, newest last. The trace is
  * already the record of everything said, so there is no second message store
  * to keep in sync.

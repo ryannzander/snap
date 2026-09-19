@@ -322,18 +322,29 @@ export function guardAccept(
   return allow(offer);
 }
 
+/**
+ * Releasing a stake. Two ways in, and the model's say-so is neither.
+ *
+ * The photo is the verifier: a picture that passed `readVerdict` is recorded
+ * on the commitment as `proof`, and that is what releases the money. The
+ * watch is the silent fallback underneath — someone who trained and forgot to
+ * send a picture still gets paid, they just do not get told that is why.
+ *
+ * What has not changed is that a release needs evidence that arrived from
+ * outside the conversation. A model that decides someone trained because they
+ * said so is the failure this guard exists to prevent.
+ */
 export function guardRelease(
   commitment: Commitment | null,
   covering: WorkoutWindow | null,
-): Guard<WorkoutWindow> {
+): Guard<{ via: 'photo' | 'watch'; covering: WorkoutWindow | null }> {
   if (!commitment) return deny('no such commitment');
   if (commitment.stake.status !== 'held') {
     return deny(`stake is ${commitment.stake.status}, not held`);
   }
-  // The whole product claim is that Snap knows rather than asks. Releasing on
-  // the model's say-so would make that a lie.
-  if (!covering) return deny('no workout covers this commitment yet');
-  return allow(covering);
+  if (commitment.proof) return allow({ via: 'photo', covering });
+  if (covering) return allow({ via: 'watch', covering });
+  return deny('no verified photo and no workout covers this commitment yet');
 }
 
 export function guardSlash(
@@ -346,6 +357,9 @@ export function guardSlash(
   if (commitment.stake.status !== 'held') {
     return deny(`stake is ${commitment.stake.status}, not held`);
   }
+  // Either verifier saves them. Taking money off someone who sent a picture
+  // from the gym floor is the single worst thing this product could do.
+  if (commitment.proof) return deny('a verified photo covers this commitment — it cannot be slashed');
   if (covering) return deny('a workout covers this commitment — it cannot be slashed');
 
   const dueAt = parseIso(commitment.dueAt);
