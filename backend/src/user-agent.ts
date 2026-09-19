@@ -479,7 +479,7 @@ export class UserAgent extends DurableObject<Env> {
     if (!received.ok) return received;
     if (received.value.optedOut) return ok({ optedOut: true, ran: false });
 
-    const agent = await this.runAgent(`the user just texted you: "${text}". decide what to do.`);
+    const agent = await this.runAgent(`the user just texted you: "${text}". decide what to do.`, true);
     if (!agent.ok) return agent;
     return ok({ optedOut: false, ran: agent.value.ran });
   }
@@ -937,7 +937,17 @@ export class UserAgent extends DurableObject<Env> {
    * Every stage writes a trace event, including a refusal — the brain screen
    * is supposed to show the agent deciding *not* to act too.
    */
-  async runAgent(instruction: string): Promise<DoResult<{ ran: boolean }>> {
+  async runAgent(
+    instruction: string,
+    /**
+     * Whether a person just said something. The narrow offer and acceptance
+     * passes only make sense as readings of a message — run on a turn a
+     * workout or an alarm started, they read the instruction as if the user
+     * had spoken, and Snap congratulates someone on a session and then offers
+     * to stake the session they have just finished.
+     */
+    fromUser = false,
+  ): Promise<DoResult<{ ran: boolean }>> {
     await this.loadClock();
     const profile = await this.ctx.storage.get<Profile>(KEY.profile);
     if (!profile) return fail(404, 'not_found', 'no such user');
@@ -989,7 +999,7 @@ export class UserAgent extends DurableObject<Env> {
     // or no — and "did they agree?" against two options is a far easier call
     // than picking one of eight tools. This is the whole reason Snap offers
     // rather than waiting to be told an amount.
-    if (standingOffer && !executed.includes('accept_offer') && !executed.includes('create_commitment')) {
+    if (fromUser && standingOffer && !executed.includes('accept_offer') && !executed.includes('create_commitment')) {
       if (await this.confirmAcceptance(brain, profile, instruction)) {
         executed.push('accept_offer');
       }
@@ -1001,6 +1011,7 @@ export class UserAgent extends DurableObject<Env> {
     // this second look exists. It can only ever OFFER — the backup path must
     // not be able to take money, only to ask.
     if (
+      fromUser &&
       !standingOffer &&
       !executed.includes('offer_stake') &&
       !executed.includes('create_commitment') &&
@@ -1057,6 +1068,17 @@ call stay_quiet — a vague intention is not a session and is not worth offering
         tools: narrow,
       });
 
+      const chose = decision.toolCalls.map((call) => call.name);
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: chose.includes('offer_stake')
+            ? 'they named a time — offering'
+            : `no time named — ${chose.join(' + ') || 'no answer'}`,
+          data: { pass: 'offer', tools: chose, reasoning: decision.reasoning },
+        },
+      ]);
+
       for (const call of decision.toolCalls) {
         if (call.name !== 'offer_stake') continue;
         if (await this.dispatch(call, profile)) return true;
@@ -1100,6 +1122,17 @@ question — that is not a yes. call stay_quiet. their money only moves on a
 clear yes.`,
         tools: [ACCEPT_OFFER_TOOL, ...quiet],
       });
+
+      const chose = decision.toolCalls.map((call) => call.name);
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: chose.includes('accept_offer')
+            ? 'they said yes'
+            : `not a yes — ${chose.join(' + ') || 'no answer'}`,
+          data: { pass: 'accept', tools: chose, reasoning: decision.reasoning },
+        },
+      ]);
 
       for (const call of decision.toolCalls) {
         if (call.name !== 'accept_offer') continue;

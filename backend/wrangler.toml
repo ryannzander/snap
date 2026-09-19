@@ -37,7 +37,7 @@ SNAP_CHANNEL = "linq"
 
 # Which brain reasons. OpenAI is the demo brain (DESIGN.md); with no
 # OPENAI_API_KEY set, the agent falls back to the Workers AI binding below.
-OPENAI_MODEL = "gpt-4o"
+OPENAI_MODEL = "gpt-5.5"
 WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
 # Where the forfeited half of a missed stake goes. A public key, so it belongs

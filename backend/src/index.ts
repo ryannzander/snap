@@ -193,7 +193,7 @@ async function deliver(
   // let the turn finish in the background.
   if (received.ok && !received.value.optedOut) {
     ctx.waitUntil(
-      stub.runAgent(`the user just texted you: "${text}". decide what to do.`) as unknown as Promise<unknown>,
+      stub.runAgent(`the user just texted you: "${text}". decide what to do.`, true) as unknown as Promise<unknown>,
     );
   }
   return json({ ok: true, received: true });

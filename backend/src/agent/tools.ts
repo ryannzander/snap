@@ -191,7 +191,15 @@ export const ACCEPT_OFFER_TOOL: ToolDefinition = {
     name: 'accept_offer',
     description:
       'The user just agreed to the stake you offered. Locks their money and starts the commitment. Only call this if they actually said yes — "deal", "bet", "ok", "lets do it". Anything hesitant is not a yes.',
-    parameters: object({}, []),
+    parameters: object(
+      {
+        said: {
+          type: 'string',
+          description: 'The words they agreed with, copied exactly. Shown in the trace, not to the user.',
+        },
+      },
+      ['said'],
+    ),
   },
 };
 
