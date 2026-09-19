@@ -16,7 +16,7 @@ text "gym at 7, $5 on it"
   → texts you first
   → you reply with an excuse → it negotiates ("30 mins then. push day. go.")
   → workout shows up in HealthKit → stake released, Snap hypes you up
-  → or you skip → half the stake comes back, half is forfeited
+  → or you skip → stake slashed to Snap's treasury
 ```
 
 Nothing outside this loop gets built. No leaderboards, calories, feeds, or settings screens.
@@ -30,7 +30,7 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 | Messaging | One `Channel` interface, two adapters. **Telegram** for development (no caps). **Linq** (real iMessage) for the demo. Linq sandbox: 100 msgs/day, and the user must text Snap first — so onboarding ends with "text Snap `yo <code>`". |
 | Commitments | Made by texting in plain language. The agent turns them into structured commitments via tool calls. App only displays them. |
 | Solana | **Commitment staking.** Money is locked when you commit, returned when HealthKit confirms the workout, slashed when you skip. Devnet. |
-| Slash destination | **Half back to the user, half forfeited** (the stake carries `refundedLamports` / `forfeitedLamports` on `slashed`). The app's copy says the forfeited half goes to charity; this table used to say Snap's treasury. Whichever wallet the backend actually pays, make the app copy, this row and the pitch say the same thing before the demo. |
+| Slash destination | Snap's treasury wallet (ours). The whole stake. (A half-back-to-the-user split was built, deployed and then withdrawn on Saturday evening; the app copy, the wire and this row all say the whole stake again.) |
 | Escrow | Small Anchor program (`stake` / `release` / `slash`), backend key is the oracle. **Cutoff: if not working on devnet by Sat 6 PM, fall back to a backend-held wallet doing plain transfers.** |
 | Agent brain | OpenAI API with function calling. |
 | Backend | TypeScript on Cloudflare Workers. One Durable Object per user (Agents SDK) holds memory + state. Durable Object **alarms** are what make Snap proactive — no cron. |

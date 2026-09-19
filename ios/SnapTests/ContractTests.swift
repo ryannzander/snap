@@ -126,7 +126,8 @@ final class ContractTests: XCTestCase {
           "data":{"reasoning":"skipped yesterday, money on the line","model":"gpt"}},
          {"id":2,"ts":"2026-09-19T23:24:01Z","kind":"decision","summary":"quiet","data":"nope"},
          {"id":3,"ts":"2026-09-19T23:24:02Z","kind":"decision","summary":"blank","data":{"reasoning":"  "}},
-         {"id":4,"ts":"2026-09-19T23:24:03Z","kind":"stay_quiet","summary":"already at the gym"}]}
+         {"id":4,"ts":"2026-09-19T23:24:03Z","kind":"decision","summary":"stayed quiet — already at the gym",
+          "data":{"brain":"openai","tools":["stay_quiet"],"reasoning":"they trained an hour ago"}}]}
         """
         let events = try decoder.decode(TraceResponse.self, from: Data(json.utf8)).events
 
@@ -134,7 +135,9 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(events[0].reasoning, "skipped yesterday, money on the line")
         XCTAssertNil(events[1].reasoning)
         XCTAssertNil(events[2].reasoning, "whitespace-only reasoning is not worth a line")
-        XCTAssertEqual(events[3].kind, .stayQuiet)
+        // The backend reports silence as a decision, not a separate kind.
+        XCTAssertEqual(events[3].kind, .decision)
+        XCTAssertEqual(events[3].reasoning, "they trained an hour ago")
     }
 
     /// A status the backend adds later must degrade, not take the whole `/state` down —

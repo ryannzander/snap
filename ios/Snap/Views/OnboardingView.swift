@@ -333,7 +333,7 @@ private struct DealPage: View {
                         text: "your watch tells him whether you went. no photos, no honor system.")
                 Divider().overlay(Theme.hairline)
                 DealRow(icon: "lock.fill", title: "show up, get it back",
-                        text: "go and the stake comes home. skip and half of it goes to charity.",
+                        text: "go and the stake comes home. skip and it's gone.",
                         pill: "SOL")
             }
             .snapCard()

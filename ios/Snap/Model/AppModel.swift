@@ -274,8 +274,16 @@ final class AppModel {
         await attempt { try await $0.timewarp(to: nil) }
     }
 
+    /// Seeding wipes the server's trace and restarts its ids at 1, so the cursor this
+    /// app holds would point past everything new and the feed would go silent for the
+    /// rest of the session. Drop the cursor with it.
     func seedDemo() async {
-        await attempt { try await $0.seed() }
+        do {
+            try await api.seed()
+            clearFeed()
+        } catch {
+            lastError = describe(error)
+        }
     }
 
     func saveSimulatedWorkout() async {

@@ -80,17 +80,14 @@ struct Stake: Decodable, Equatable {
 
     let lamports: Int
     let status: Status
+    /// Null until the chain transaction lands (and while the RPC is unreachable —
+    /// the backend keeps the loop going and traces the failure).
     let txSig: String?
 
-    /// Present only on `slashed`, and they always sum to `lamports`. A miss returns half
-    /// and forfeits half, so `slashed` no longer means the whole stake is gone — read
-    /// these rather than assuming.
-    let refundedLamports: Int?
-    let forfeitedLamports: Int?
-
+    /// `slashed` means the whole stake is forfeited. A half-back split was built,
+    /// deployed, and then withdrawn (backend commit 3f77f7d); nothing on the wire
+    /// describes a partial refund any more.
     var sol: Double { Double(lamports) / 1_000_000_000 }
-    var refundedSol: Double? { refundedLamports.map { Double($0) / 1_000_000_000 } }
-    var forfeitedSol: Double? { forfeitedLamports.map { Double($0) / 1_000_000_000 } }
 }
 
 struct TraceEvent: Decodable, Identifiable, Equatable {
@@ -105,8 +102,7 @@ struct TraceEvent: Decodable, Identifiable, Equatable {
         case stakeHeld = "stake_held"
         case stakeReleased = "stake_released"
         case stakeSlashed = "stake_slashed"
-        /// The agent looked and chose not to text. DESIGN.md promises this shows too.
-        case stayQuiet = "stay_quiet"
+        // "Stayed quiet" arrives as a `decision` whose summary says so; it is not a kind.
         case unknown
 
         init(from decoder: Decoder) throws {

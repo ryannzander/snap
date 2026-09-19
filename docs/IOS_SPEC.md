@@ -23,7 +23,7 @@ In Xcode, set the signing team on the Snap target once. HealthKit needs a real d
 
 ## What exists
 
-Everything below is written, builds, and has been run on a simulator and a device. The per-file sections that follow are the spec each file was built to; where the code deliberately differs (the countdown is ink rather than lime so lime stays a fill; settled commitments show a verdict instead of a clock; a slashed stake shows its half/half split) the code is right and this document says so inline.
+Everything below is written, builds, and has been run on a simulator and a device. The per-file sections that follow are the spec each file was built to; where the code deliberately differs (the countdown is ink rather than lime so lime stays a fill; settled commitments show a verdict instead of a clock) the code is right and this document says so inline.
 
 Unit tests live in `ios/SnapTests` and run with the `Snap` scheme. `ios/SnapUITests` proves on a real HealthKit store that a simulated workout is not flagged hand-entered; it drives a system permission sheet, so it is skipped by default — run it with `-only-testing:SnapUITests`.
 
@@ -130,7 +130,7 @@ The live app: two screens and a bottom bar — **today · + · brain**. The `+` 
 1. **Header.** Streak pill (`flame 2/4`, workouts this week over the goal), the greeting (`good evening.`, by hour), and an ink circle with the first letter of your name. Long-press anywhere in the header for the debug panel; nothing on screen advertises it.
 2. **Week strip.** Sunday to Saturday with today in a hairline box. It's a calendar, not a scoreboard.
 3. **Plan card.** The dark gradient card. Kicker (`today's plan`), the commitment text in white, then a live countdown to `checkAt` using `TimelineView(.periodic(from: .now, by: 1))` — white, then counting **up** in red with "late" once passed. `met` shows `done.`, `missed` shows `missed.` in red. A white "text snap" pill at the bottom. With no open commitment: "no plan yet / what's the move today?".
-4. **Stake card.** White, only when a stake exists: `0.05 SOL on the line.`, where it is (`held · solana devnet`, `released · back in your wallet`, or the refunded/forfeited split), a status pill (the gradient for `held`, ink for `released`, red for `slashed`), one line of what happens next, and the explorer receipt as an outline pill when the backend sent a signature (labelled `mock` on the mock).
+4. **Stake card.** White, only when a stake exists: `0.05 SOL on the line.`, where it is (`held · solana devnet`, `released · back in your wallet`, or `slashed · gone`), a status pill (the gradient for `held`, ink for `released`, red for `slashed`), one line of what happens next, and the explorer receipt as an outline pill when the backend sent a signature (labelled `mock` on the mock).
 5. **`SNAP'S BRAIN`** section label, the last three trace rows, and a "see everything" pill that switches to the brain tab.
 
 **brain** is the full trace and nothing else. Each row: time (`HH:mm:ss`, monospaced, dim), a glyph per `kind`, the `summary`. Rows enter from the bottom with opacity + slight offset and the feed auto-scrolls to the newest. `message_sent` rows are ink bubbles on the right, `message_received` grey bubbles on the left, so the conversation is readable inside the trace. `decision` rows are white cards with a lavender bolt — the only cards in the feed.
