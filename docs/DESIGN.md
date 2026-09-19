@@ -48,8 +48,15 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 - **Linq** — the whole product happens in iMessage.
 - **Rox** — acts on messy real-world data: HealthKit samples plus free-text excuses.
 
-## Still open
+## Stake rules
 
-- Who signs the stake transaction (backend-managed devnet wallet per user vs. Phantom on the phone).
-- Grace period length and default stake size.
-- What a renegotiation does to the stake ("30 mins then" — same stake, new deadline?).
+- **Wallet:** at onboarding the backend creates a devnet wallet per user and airdrops into it. Staking happens by text — no wallet app. Custodial for the demo; say so to Solana judges, Phantom is the production path.
+- **Size:** 0.05 SOL unless the user names an amount.
+- **Timeline:** commitment time + 20 min grace → Snap texts a warning (not a slash). Slash happens at end of day, or at the renegotiated deadline. Texts in between carry the countdown ("36 mins left on your $5").
+- **Renegotiation:** at most one per commitment. Same stake, new deadline. The agent decides whether the excuse earns it, using history — skipped yesterday → "nah. you said that yesterday 😭".
+- **Morning check-in:** if there's no commitment for today, Snap texts first to ask the plan. Same alarm mechanism. No other unprompted texts.
+
+## Demo
+
+- Apple Watch starts a real workout on stage to close the loop. **The Watch's workouts only land in HealthKit on the iPhone it's paired with — that iPhone has to be the demo phone**, with the app installed and onboarded.
+- iPhone mirrored to a laptop (QuickTime) so judges see the trace and the incoming text together.
