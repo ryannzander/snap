@@ -327,9 +327,9 @@ private struct PlanCard: View {
 
 // MARK: - Stake card
 
-/// The white card: the money, where it is, and the receipt. `slashed` no longer means
-/// the whole stake is gone, so the card says where it went rather than implying a
-/// total loss.
+/// The white card: the money, where it is, and the receipt. `slashed` means the whole
+/// stake is forfeited — a half-back split was built, deployed and withdrawn on the
+/// backend (commit 3f77f7d), so nothing on the wire describes a partial refund.
 private struct StakeCard: View {
     @Environment(AppModel.self) private var model
     let stake: Stake
@@ -370,21 +370,16 @@ private struct StakeCard: View {
         switch stake.status {
         case .held:     model.isMock ? "held · mock, no chain" : "held · solana devnet"
         case .released: "released · back in your wallet"
-        case .slashed:
-            if let refunded = stake.refundedSol, let forfeited = stake.forfeitedSol {
-                "\(refunded.formatted(Self.sol)) back · \(forfeited.formatted(Self.sol)) to charity"
-            } else {
-                "slashed"
-            }
+        case .slashed:  "slashed · gone"
         case .none, .unknown: "stake"
         }
     }
 
     private var body_: String {
         switch stake.status {
-        case .held:     "you go, it comes home.\nyou skip, half goes to charity."
+        case .held:     "you go, it comes home.\nyou skip, it's gone."
         case .released: "workout landed. snap let go of the stake."
-        case .slashed:  "no workout by the deadline. half came back, half didn't."
+        case .slashed:  "no workout by the deadline. the stake is gone."
         case .none, .unknown: ""
         }
     }

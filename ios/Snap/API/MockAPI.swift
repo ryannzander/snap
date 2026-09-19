@@ -109,12 +109,7 @@ actor MockAPI: SnapAPI {
                     stake: Stake(
                         lamports: 50_000_000,
                         status: stakeStatus(reached),
-                        txSig: Self.mockSignature,
-                        // Always nil here: the mock script ends in a release, never a
-                        // slash, so there is no half to split. The backend sends these
-                        // on `slashed` only.
-                        refundedLamports: nil,
-                        forfeitedLamports: nil
+                        txSig: Self.mockSignature
                     )
                 )
             ]
