@@ -1,12 +1,32 @@
 import { DurableObject } from 'cloudflare:workers';
 
+import {
+  buildDays,
+  countThisWeek,
+  recentMessages,
+  renderContext,
+  summarizeContext,
+  type AgentContext,
+} from './agent/context';
+import {
+  findCoveringWorkout,
+  guardCreate,
+  guardMessages,
+  guardRelease,
+  guardReschedule,
+  guardSlash,
+} from './agent/guards';
+import { DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
+import type { Brain, ToolCall } from './brain';
+import { OpenAIBrain } from './brains/openai';
+import { WorkersAIBrain, type AiBinding } from './brains/workers-ai';
 import type { Channel, ChannelName } from './channel';
 import { LinqChannel } from './channels/linq';
 import { TraceChannel } from './channels/trace';
 import { fail, ok, type DoResult } from './http';
 import { isOptOut } from './optout';
 import { issueToken, secureEquals } from './ids';
-import { parseIso, startOfWeek } from './time';
+import { endOfLocalDay, parseIso, startOfWeek } from './time';
 import type {
   Commitment,
   StateResponse,
@@ -319,6 +339,296 @@ export class UserAgent extends DurableObject<Env> {
     return new TraceChannel();
   }
 
+  // --- the agent ----------------------------------------------------------
+
+  /**
+   * One turn of the loop. Assembles context, asks the brain what to do, and
+   * runs each proposed tool call through its guard before anything happens.
+   * Every stage writes a trace event, including a refusal — the brain screen
+   * is supposed to show the agent deciding *not* to act too.
+   */
+  async runAgent(instruction: string): Promise<DoResult<{ ran: boolean }>> {
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return fail(404, 'not_found', 'no such user');
+
+    const brain = this.brain();
+    if (!brain) {
+      await this.appendTraces([
+        { kind: 'decision', summary: 'no brain configured — set OPENAI_API_KEY or the AI binding' },
+      ]);
+      return ok({ ran: false });
+    }
+
+    const context = await this.buildContext(profile);
+    await this.appendTraces([{ kind: 'context', summary: summarizeContext(context) }]);
+
+    let decision;
+    try {
+      decision = await brain.decide({
+        system: SYSTEM_PROMPT,
+        context: renderContext(context),
+        instruction,
+        tools: TOOLS,
+      });
+    } catch (error) {
+      // A dead model must not take the loop down. The trace says so plainly.
+      await this.appendTraces([
+        { kind: 'decision', summary: `brain unavailable (${brain.name})`, data: { error: String(error) } },
+      ]);
+      return ok({ ran: false });
+    }
+
+    const names = decision.toolCalls.map((call) => call.name);
+    await this.appendTraces([
+      {
+        kind: 'decision',
+        summary: decision.reasoning?.trim() || (names.length ? names.join(' + ') : 'no action'),
+        data: { brain: brain.name, tools: names, reasoning: decision.reasoning },
+      },
+    ]);
+
+    const executed: string[] = [];
+    for (const call of decision.toolCalls) {
+      if (await this.dispatch(call, profile)) executed.push(call.name);
+    }
+
+    // Some models emit one tool call per turn, so a commitment gets recorded
+    // and the user hears nothing — which is the product failing silently.
+    // Ask once more, with only the two talking tools available.
+    if (!executed.includes('send_messages') && !executed.includes('stay_quiet')) {
+      await this.followUp(brain, profile, instruction, executed);
+    }
+
+    return ok({ ran: true });
+  }
+
+  /** Second pass: you acted, now say something — or justify not saying it. */
+  private async followUp(
+    brain: Brain,
+    profile: Profile,
+    instruction: string,
+    executed: string[],
+  ): Promise<void> {
+    const did = executed.length ? `you just called: ${executed.join(', ')}.` : 'you did nothing yet.';
+    const talking = TOOLS.filter(
+      (tool) => tool.function.name === 'send_messages' || tool.function.name === 'stay_quiet',
+    );
+
+    try {
+      const context = await this.buildContext(profile);
+      const decision = await brain.decide({
+        system: SYSTEM_PROMPT,
+        context: renderContext(context),
+        instruction: `${instruction}\n\n${did} now text them about it, in your voice. if silence is genuinely right, call stay_quiet instead.`,
+        tools: talking,
+      });
+      for (const call of decision.toolCalls) await this.dispatch(call, profile);
+    } catch (error) {
+      await this.appendTraces([
+        { kind: 'decision', summary: 'could not reach the brain for a reply', data: { error: String(error) } },
+      ]);
+    }
+  }
+
+  /** Runs one proposed tool call, or records why it was refused. */
+  private async dispatch(call: ToolCall, profile: Profile): Promise<boolean> {
+    const now = this.now();
+    const commitments = await this.loadCommitments();
+    const open = commitments.filter((c) => c.status === 'pending' || c.status === 'renegotiated');
+
+    // The arguments go in the trace too: a refusal you cannot see the input
+    // for is a dead end when the model starts doing something new.
+    const refuse = async (reason: string): Promise<boolean> => {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `refused ${call.name} — ${reason}`,
+          data: { tool: call.name, reason, arguments: call.arguments },
+        },
+      ]);
+      return false;
+    };
+
+    switch (call.name) {
+      case 'create_commitment': {
+        const guard = guardCreate(call.arguments, now, profile.timezone, open.map(toWireCommitment));
+        if (!guard.ok) return refuse(guard.reason);
+
+        const commitment: StoredCommitment = {
+          id: `c_${crypto.randomUUID().slice(0, 8)}`,
+          text: guard.value.text,
+          dueAt: guard.value.dueAt,
+          graceMin: DEFAULT_GRACE_MIN,
+          status: 'pending',
+          stake: { lamports: guard.value.lamports, status: 'held', txSig: null },
+          createdAt: this.nowIso(),
+          renegotiations: 0,
+        };
+        await this.ctx.storage.put(KEY.commitment(commitment.id), commitment);
+        await this.appendTraces([
+          {
+            kind: 'commitment_created',
+            summary: `${commitment.text} · ${solText(commitment.stake.lamports)} on it`,
+            data: { id: commitment.id, dueAt: commitment.dueAt },
+          },
+          // No chain transaction until step 6, so txSig stays null.
+          { kind: 'stake_held', summary: `${solText(commitment.stake.lamports)} locked`, data: { id: commitment.id } },
+        ]);
+        return true;
+      }
+
+      case 'reschedule_commitment': {
+        const id = String(call.arguments.commitmentId ?? '');
+        const existing = commitments.find((c) => c.id === id) ?? null;
+        const guard = guardReschedule(
+          call.arguments,
+          existing,
+          now,
+          profile.timezone,
+          this.endOfDayFor(existing, profile),
+        );
+        if (!guard.ok || !existing) return refuse(guard.ok ? 'no such commitment' : guard.reason);
+
+        await this.ctx.storage.put(KEY.commitment(existing.id), {
+          ...existing,
+          dueAt: guard.value.dueAt,
+          status: 'renegotiated',
+          renegotiations: existing.renegotiations + 1,
+        } satisfies StoredCommitment);
+        await this.appendTraces([
+          {
+            kind: 'decision',
+            summary: `rescheduled to ${guard.value.dueAt} — ${guard.value.reason}`,
+            data: { id: existing.id },
+          },
+        ]);
+        return true;
+      }
+
+      case 'send_messages': {
+        const link = await this.ctx.storage.get<Link>(KEY.link);
+        const guard = guardMessages(call.arguments, link?.linked ?? false, link?.optedOut ?? false);
+        if (!guard.ok) return refuse(guard.reason);
+        await this.sendTexts(guard.value);
+        return true;
+      }
+
+      case 'stay_quiet': {
+        const reason = typeof call.arguments.reason === 'string' ? call.arguments.reason : 'nothing to say';
+        await this.appendTraces([{ kind: 'decision', summary: `stayed quiet — ${reason}` }]);
+        return true;
+      }
+
+      case 'release_stake':
+      case 'slash_stake': {
+        const id = String(call.arguments.commitmentId ?? '');
+        const existing = commitments.find((c) => c.id === id) ?? null;
+        if (!existing) return refuse('no such commitment');
+
+        const covering = findCoveringWorkout(
+          await this.loadWorkouts(),
+          parseIso(existing.createdAt) ?? 0,
+          this.endOfDayFor(existing, profile),
+        );
+
+        if (call.name === 'release_stake') {
+          const guard = guardRelease(toWireCommitment(existing), covering);
+          if (!guard.ok) return refuse(guard.reason);
+          await this.settle(existing, 'met', 'released');
+          return true;
+        }
+
+        const guard = guardSlash(existing, now, this.endOfDayFor(existing, profile), covering);
+        if (!guard.ok) return refuse(guard.reason);
+        await this.settle(existing, 'missed', 'slashed');
+        return true;
+      }
+
+      default:
+        return refuse('unknown tool');
+    }
+  }
+
+  private async settle(
+    commitment: StoredCommitment,
+    status: 'met' | 'missed',
+    stake: 'released' | 'slashed',
+  ): Promise<void> {
+    await this.ctx.storage.put(KEY.commitment(commitment.id), {
+      ...commitment,
+      status,
+      stake: { ...commitment.stake, status: stake },
+    } satisfies StoredCommitment);
+    await this.appendTraces([
+      {
+        kind: stake === 'released' ? 'stake_released' : 'stake_slashed',
+        summary:
+          stake === 'released'
+            ? `${solText(commitment.stake.lamports)} back in your wallet`
+            : `${solText(commitment.stake.lamports)} gone`,
+        data: { id: commitment.id },
+      },
+    ]);
+  }
+
+  /**
+   * When the money moves for this commitment: the renegotiated deadline if
+   * there is one, otherwise end of the local day the commitment was for.
+   */
+  private endOfDayFor(commitment: StoredCommitment | null, profile: Profile): number {
+    if (commitment?.status === 'renegotiated') {
+      const dueAt = parseIso(commitment.dueAt);
+      if (dueAt !== null) return dueAt;
+    }
+    const anchor = commitment ? (parseIso(commitment.dueAt) ?? this.now()) : this.now();
+    return endOfLocalDay(anchor, profile.timezone);
+  }
+
+  private async buildContext(profile: Profile): Promise<AgentContext> {
+    const [workouts, commitments, events] = await Promise.all([
+      this.loadWorkouts(),
+      this.loadCommitments(),
+      this.ctx.storage.list<TraceEvent>({ start: KEY.trace(1), end: TRACE_RANGE_END }),
+    ]);
+    const now = this.now();
+
+    return {
+      now: this.nowIso(),
+      localTime: localClock(now, profile.timezone),
+      timezone: profile.timezone,
+      name: profile.name,
+      weeklyGoal: profile.weeklyGoal,
+      workoutsThisWeek: countThisWeek(now, profile.timezone, workouts),
+      lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
+      openCommitments: commitments
+        .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
+        .map(toWireCommitment),
+      recentMessages: recentMessages([...events.values()]),
+    };
+  }
+
+  private async loadWorkouts(): Promise<StoredWorkout[]> {
+    return [...(await this.ctx.storage.list<StoredWorkout>({ prefix: 'workout:' })).values()];
+  }
+
+  private async loadCommitments(): Promise<StoredCommitment[]> {
+    return [...(await this.ctx.storage.list<StoredCommitment>({ prefix: 'commitment:' })).values()];
+  }
+
+  /**
+   * OpenAI is the brain for the demo (DESIGN.md). Workers AI runs on the same
+   * account with no third-party key, so it covers development and stands in if
+   * OpenAI is unreachable mid-demo.
+   */
+  private brain(): Brain | null {
+    if (this.env.OPENAI_API_KEY) {
+      return new OpenAIBrain(this.env.OPENAI_API_KEY, this.env.OPENAI_MODEL || 'gpt-4o');
+    }
+    const ai = (this.env as unknown as { AI?: AiBinding }).AI;
+    if (ai) return new WorkersAIBrain(ai, this.env.WORKERS_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast');
+    return null;
+  }
+
   // --- internals -----------------------------------------------------------
 
   private async authenticate(token: string): Promise<DoResult<Profile>> {
@@ -380,6 +690,23 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
 /** "traditionalStrengthTraining" → "traditional strength training" */
 function humanizeType(type: string): string {
   return type.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+}
+
+/** "Sat 19 Sep, 19:24" in the user's zone. */
+function localClock(instant: number, tz: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(instant));
+}
+
+function solText(lamports: number): string {
+  return `${(lamports / 1_000_000_000).toFixed(2)} SOL`;
 }
 
 function minutes(durationSec: number): number {

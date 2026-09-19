@@ -26,9 +26,9 @@ export { Directory } from './directory';
 export { UserAgent } from './user-agent';
 
 export default {
-  async fetch(request, env): Promise<Response> {
+  async fetch(request, env, ctx): Promise<Response> {
     try {
-      return await route(request, env);
+      return await route(request, env, ctx);
     } catch (error) {
       if (error instanceof HttpError) return error.toResponse();
       console.error('unhandled error', error);
@@ -37,7 +37,7 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-async function route(request: Request, env: Env): Promise<Response> {
+async function route(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
 
@@ -60,7 +60,7 @@ async function route(request: Request, env: Env): Promise<Response> {
 
     case '/webhooks/linq':
       requireMethod(request, 'POST');
-      return linqWebhook(request, env);
+      return linqWebhook(request, env, ctx);
 
     default:
       return errorResponse(404, 'not_found', `no route for ${request.method} ${path}`);
@@ -115,7 +115,7 @@ async function getTrace(request: Request, url: URL, env: Env): Promise<Response>
  * no more routable the second time, so unknown events and unlinked chats are
  * acknowledged rather than rejected.
  */
-async function linqWebhook(request: Request, env: Env): Promise<Response> {
+async function linqWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const rawBody = await request.text();
 
   if (env.LINQ_SIGNING_SECRET) {
@@ -143,12 +143,13 @@ async function linqWebhook(request: Request, env: Env): Promise<Response> {
     return json({ ok: true, ignored: 'duplicate delivery' });
   }
 
-  return deliver(env, inbound.channel, inbound.chatId, inbound.text);
+  return deliver(env, ctx, inbound.channel, inbound.chatId, inbound.text);
 }
 
 /** `yo <code>` links a chat to a user; anything else goes to the linked user. */
 async function deliver(
   env: Env,
+  ctx: ExecutionContext,
   channel: ChannelName,
   chatId: string,
   text: string,
@@ -169,7 +170,17 @@ async function deliver(
   const userId = await directoryStub(env).lookupChat(channel, chatId);
   if (!userId) return json({ ok: true, ignored: 'chat not linked' });
 
-  await userStub(env, userId).receiveMessage(text);
+  const stub = userStub(env, userId);
+  const received = await stub.receiveMessage(text);
+
+  // The model, then a paced burst of texts, is far longer than a webhook
+  // should be held open — and Linq retries anything slow. Acknowledge now and
+  // let the turn finish in the background.
+  if (received.ok && !received.value.optedOut) {
+    ctx.waitUntil(
+      stub.runAgent(`the user just texted you: "${text}". decide what to do.`) as unknown as Promise<unknown>,
+    );
+  }
   return json({ ok: true, received: true });
 }
 

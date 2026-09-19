@@ -35,6 +35,11 @@ SNAP_IMESSAGE = "+10000000000"
 # Set to "linq" to deliver for real.
 SNAP_CHANNEL = "trace"
 
+# Which brain reasons. OpenAI is the demo brain (DESIGN.md); with no
+# OPENAI_API_KEY set, the agent falls back to the Workers AI binding below.
+OPENAI_MODEL = "gpt-4o"
+WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
 # Workers AI — fallback brain while there is no OpenAI key.
 [ai]
 binding = "AI"

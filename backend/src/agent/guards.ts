@@ -11,13 +11,31 @@
  */
 
 import type { Commitment } from '../types';
-import { parseIso } from '../time';
+import { localTimeToInstant, parseIso } from '../time';
 import { DEFAULT_STAKE_LAMPORTS, MAX_RENEGOTIATIONS } from './tools';
 
 export type Guard<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 const deny = (reason: string): Guard<never> => ({ ok: false, reason });
 const allow = <T>(value: T): Guard<T> => ({ ok: true, value });
+
+/**
+ * Models emit numbers as strings often enough that rejecting "19" would be
+ * rejecting a correct answer over its JSON type.
+ */
+function coerceNumber(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function coerceInt(value: unknown): number | null {
+  const parsed = coerceNumber(value);
+  return parsed !== null && Number.isInteger(parsed) ? parsed : null;
+}
 
 /** A stake below this is not worth a transaction; above it is a fat finger. */
 const MIN_STAKE_LAMPORTS = 1_000_000; // 0.001 SOL
@@ -56,18 +74,48 @@ export interface CreatedCommitment {
   lamports: number;
 }
 
+/**
+ * Reads the local wall-clock time the model named and converts it here.
+ * The model is never asked to do timezone maths: given "gym at 7" in Toronto
+ * it produced 3am the next day once and 3pm another time.
+ *
+ * A time that has already passed today means the next one — someone saying
+ * "gym at 7" at 9pm means tomorrow morning.
+ */
+export function resolveLocalTime(
+  args: Record<string, unknown>,
+  now: number,
+  tz: string,
+): Guard<number> {
+  const hour = coerceInt(args.hour);
+  if (hour === null || hour < 0 || hour > 23) {
+    return deny('hour must be a whole number 0-23 in the user\'s local time');
+  }
+  let minute = 0;
+  if (args.minute !== undefined && args.minute !== null) {
+    const parsed = coerceInt(args.minute);
+    if (parsed === null || parsed < 0 || parsed > 59) return deny('minute must be a whole number 0-59');
+    minute = parsed;
+  }
+
+  let instant = localTimeToInstant(now, tz, hour, minute);
+  if (instant <= now) instant = localTimeToInstant(now, tz, hour, minute, 1);
+  return allow(instant);
+}
+
 export function guardCreate(
   args: Record<string, unknown>,
   now: number,
+  tz: string,
   openCommitments: Commitment[],
 ): Guard<CreatedCommitment> {
   const text = typeof args.text === 'string' ? args.text.trim() : '';
   if (!text) return deny('create_commitment needs the commitment in the user\'s words');
   if (text.length > 200) return deny('commitment text is too long');
 
-  const dueAt = typeof args.dueAt === 'string' ? parseIso(args.dueAt) : null;
-  if (dueAt === null) return deny('dueAt is not an ISO 8601 timestamp');
-  if (dueAt <= now) return deny('dueAt is in the past — a commitment must be ahead of now');
+  const resolved = resolveLocalTime(args, now, tz);
+  if (!resolved.ok) return resolved;
+  const dueAt = resolved.value;
 
   // The iOS screen shows a single open commitment, and two live stakes at once
   // is not a loop anyone asked for.
@@ -75,12 +123,13 @@ export function guardCreate(
     return deny(`there is already an open commitment (${openCommitments[0]!.id})`);
   }
 
+  // The stake arrives in SOL, not lamports: asked for lamports the model
+  // invented an exchange rate and turned "$5" into 0.15 SOL.
   let lamports = DEFAULT_STAKE_LAMPORTS;
-  if (args.lamports !== undefined && args.lamports !== null) {
-    if (typeof args.lamports !== 'number' || !Number.isFinite(args.lamports)) {
-      return deny('lamports must be a number');
-    }
-    lamports = Math.round(args.lamports);
+  if (args.sol !== undefined && args.sol !== null) {
+    const sol = coerceNumber(args.sol);
+    if (sol === null) return deny('sol must be a number');
+    lamports = Math.round(sol * 1_000_000_000);
     if (lamports < MIN_STAKE_LAMPORTS) return deny('stake is too small to be worth locking');
     if (lamports > MAX_STAKE_LAMPORTS) return deny('stake is above the 1 SOL ceiling');
   }
@@ -92,6 +141,7 @@ export function guardReschedule(
   args: Record<string, unknown>,
   commitment: (Commitment & { renegotiations: number }) | null,
   now: number,
+  tz: string,
   endOfDay: number,
 ): Guard<{ dueAt: string; reason: string }> {
   if (!commitment) return deny('no such commitment');
@@ -104,9 +154,9 @@ export function guardReschedule(
     return deny('this commitment has already been rescheduled once — that is the limit');
   }
 
-  const dueAt = typeof args.dueAt === 'string' ? parseIso(args.dueAt) : null;
-  if (dueAt === null) return deny('dueAt is not an ISO 8601 timestamp');
-  if (dueAt <= now) return deny('the new deadline is already in the past');
+  const resolved = resolveLocalTime(args, now, tz);
+  if (!resolved.ok) return resolved;
+  const dueAt = resolved.value;
   // Same stake, new deadline — but the slash still lands at end of day, so a
   // reschedule past midnight would move the goalposts past the consequence.
   if (dueAt > endOfDay) return deny('the new deadline is after end of day');

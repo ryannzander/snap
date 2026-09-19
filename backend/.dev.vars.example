@@ -7,3 +7,7 @@ LINQ_API_KEY=""
 # Signing secret from the Linq webhook subscription (starts with whsec_).
 # Leave empty locally to skip signature checks; required in production.
 LINQ_SIGNING_SECRET=""
+
+# OpenAI API key. Leave empty and the agent falls back to Workers AI, which
+# needs no key but is weaker — see the guards in src/agent/guards.ts.
+OPENAI_API_KEY=""

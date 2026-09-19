@@ -19,6 +19,8 @@ export interface DayRecord {
 
 export interface AgentContext {
   now: string;
+  /** The user's wall clock, so the model never has to work it out. */
+  localTime: string;
   timezone: string;
   name: string;
   weeklyGoal: number;
@@ -120,7 +122,7 @@ export function renderContext(context: AgentContext): string {
     : '(nothing yet)';
 
   return [
-    `now: ${context.now} (${context.timezone})`,
+    `their local time right now: ${context.localTime} (${context.timezone})`,
     `user: ${context.name}`,
     `weekly goal: ${context.weeklyGoal}, done this week: ${context.workoutsThisWeek}`,
     '',

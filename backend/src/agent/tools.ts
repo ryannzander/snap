@@ -43,16 +43,26 @@ export const TOOLS: ToolDefinition[] = [
             type: 'string',
             description: 'The commitment in the user\'s own words, e.g. "gym at 7".',
           },
-          dueAt: {
-            type: 'string',
-            description: 'ISO 8601 UTC time the workout should have happened by.',
-          },
-          lamports: {
+          hour: {
             type: 'integer',
-            description: `Stake in lamports. Omit for the default ${DEFAULT_STAKE_LAMPORTS} (0.05 SOL). Only set it if they named an amount.`,
+            description:
+              'Hour they said, 0-23, in THEIR local time. "gym at 7" in the evening is 19. Never convert to UTC — the backend does that.',
+            minimum: 0,
+            maximum: 23,
+          },
+          minute: {
+            type: 'integer',
+            description: 'Minutes past the hour, 0-59. Omit for 0.',
+            minimum: 0,
+            maximum: 59,
+          },
+          sol: {
+            type: 'number',
+            description:
+              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is used.',
           },
         },
-        ['text', 'dueAt'],
+        ['text', 'hour'],
       ),
     },
   },
@@ -65,13 +75,19 @@ export const TOOLS: ToolDefinition[] = [
       parameters: object(
         {
           commitmentId: { type: 'string' },
-          dueAt: { type: 'string', description: 'The new deadline, ISO 8601 UTC.' },
+          hour: {
+            type: 'integer',
+            description: 'New deadline hour, 0-23, in THEIR local time. Never convert to UTC.',
+            minimum: 0,
+            maximum: 23,
+          },
+          minute: { type: 'integer', description: 'Minutes past the hour, 0-59. Omit for 0.', minimum: 0, maximum: 59 },
           reason: {
             type: 'string',
             description: 'Why this excuse earned it. Shown in the trace, not to the user.',
           },
         },
-        ['commitmentId', 'dueAt', 'reason'],
+        ['commitmentId', 'hour', 'reason'],
       ),
     },
   },
@@ -147,4 +163,11 @@ how you work:
 - you take the money at end of day, or at the deadline they renegotiated to.
 - use their history. if they skipped yesterday and try the same excuse, call it.
 
-every turn you must call at least one tool. if the right move is silence, call stay_quiet.`;
+every turn you must call at least one tool.
+
+when the user has just texted you, you ALWAYS reply with send_messages — alongside
+any other tool. a commitment they made without you saying a word back is a bug.
+the only exception is stay_quiet, which you must call explicitly to justify silence.
+
+times: say the hour the user means in THEIR local clock. never do timezone maths —
+the backend converts. "gym at 7" in the evening is hour 19.`;
