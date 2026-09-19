@@ -69,7 +69,7 @@ export function photoInstruction(text: string, description: string | null): stri
   const seen = description
     ? `what you can see in it: "${description.trim()}"`
     : 'you could not make out what is in it (the photo did not load)';
-  return `the user just sent you a photo${caption}. ${seen}. react in your voice — hype or roast, keep it short. a photo is not proof of a workout: their watch decides that, and money only moves on the watch, so never say the photo counts. if they look like they are at the gym right now and they have a plan on the line, hype them to finish it.`;
+  return `the user just sent you a photo${caption}. ${seen}. react to the picture itself, in your voice — hype the pump, roast the empty rack, notice the one detail. two or three short texts. this is a moment, not a checkpoint: do NOT bring up proof, the watch, whether it counts, or their money, unless they ask you directly whether the photo counts. if they look like they are at the gym right now and they have a plan on the line, tell them to finish it and that you are watching.`;
 }
 
 // --- fetching --------------------------------------------------------------
