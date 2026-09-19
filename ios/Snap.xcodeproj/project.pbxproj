@@ -14,13 +14,19 @@
 		4205928D5296FBDA8681908B /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 809DCBFBB3BE67F8EF47E375 /* AppModel.swift */; };
 		46B1523343BF27D5B1451BBF /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F5B5A4EE4E1092A1D027DE /* Config.swift */; };
 		50CCB234BA4CC8FF663F2848 /* LiveAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E5E13833DFAF6D60011273 /* LiveAPI.swift */; };
+		524C2B35D387B2D256D58834 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFFE5D44E89766501A947B51 /* OnboardingView.swift */; };
+		52C0D46DE94C8DFA4A86771E /* LinkView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22972189FC4D4040CF999084 /* LinkView.swift */; };
 		589F47F7A9F0C59A7ED2C112 /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40A64A598EA3B760A72442D7 /* Keychain.swift */; };
 		6C7361BF93E984E3E061FADD /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49D0941FB8799FE9DD90B9BF /* Models.swift */; };
+		9BD516C95BE89341AF94868C /* BrainView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 800549F12472325BB0793722 /* BrainView.swift */; };
 		B9B1F09C5DA6838FD92C4BC4 /* WorkoutSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA043FCE89B3FA2426279335 /* WorkoutSync.swift */; };
+		E65D9BD7FD42A0AE1C610395 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5B40C7AE2FC8C0F98E74737 /* Theme.swift */; };
+		EC893BAFD1FAC53210061C17 /* DebugPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C065A2DFBB2D2FF21C2106EF /* DebugPanel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		07F5B5A4EE4E1092A1D027DE /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		22972189FC4D4040CF999084 /* LinkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkView.swift; sourceTree = "<group>"; };
 		2DC78CB4B4EBA3F5C39C54D3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		3BC5BC322A05E4F0343BA8C9 /* Snap.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Snap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		40A64A598EA3B760A72442D7 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
@@ -28,11 +34,15 @@
 		49D0941FB8799FE9DD90B9BF /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		5E2DE886329DA39B21FFF7B7 /* MockAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockAPI.swift; sourceTree = "<group>"; };
 		608EA0A92A38DB63F2312815 /* SnapApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapApp.swift; sourceTree = "<group>"; };
+		800549F12472325BB0793722 /* BrainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrainView.swift; sourceTree = "<group>"; };
 		809DCBFBB3BE67F8EF47E375 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		ACADC6371B434BA470CAF53E /* SnapAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapAPI.swift; sourceTree = "<group>"; };
+		C065A2DFBB2D2FF21C2106EF /* DebugPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPanel.swift; sourceTree = "<group>"; };
 		CB6B13FD4063EDE546687149 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		CFFE5D44E89766501A947B51 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		EA043FCE89B3FA2426279335 /* WorkoutSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutSync.swift; sourceTree = "<group>"; };
 		F4AB2EB975627D538D2ECED5 /* Snap.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Snap.entitlements; sourceTree = "<group>"; };
+		F5B40C7AE2FC8C0F98E74737 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -70,6 +80,18 @@
 			path = Model;
 			sourceTree = "<group>";
 		};
+		71DA65B660AB7B43E29C2603 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				800549F12472325BB0793722 /* BrainView.swift */,
+				C065A2DFBB2D2FF21C2106EF /* DebugPanel.swift */,
+				22972189FC4D4040CF999084 /* LinkView.swift */,
+				CFFE5D44E89766501A947B51 /* OnboardingView.swift */,
+				F5B40C7AE2FC8C0F98E74737 /* Theme.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
 		DA7C407DD337499A871FA5D2 /* API */ = {
 			isa = PBXGroup;
 			children = (
@@ -91,6 +113,7 @@
 				DA7C407DD337499A871FA5D2 /* API */,
 				41F5E562108750BA90A2AFBC /* Health */,
 				694C700DA2DE4954ECF0AF83 /* Model */,
+				71DA65B660AB7B43E29C2603 /* Views */,
 			);
 			path = Snap;
 			sourceTree = "<group>";
@@ -166,13 +189,18 @@
 			buildActionMask = 2147483647;
 			files = (
 				4205928D5296FBDA8681908B /* AppModel.swift in Sources */,
+				9BD516C95BE89341AF94868C /* BrainView.swift in Sources */,
 				46B1523343BF27D5B1451BBF /* Config.swift in Sources */,
+				EC893BAFD1FAC53210061C17 /* DebugPanel.swift in Sources */,
 				589F47F7A9F0C59A7ED2C112 /* Keychain.swift in Sources */,
+				52C0D46DE94C8DFA4A86771E /* LinkView.swift in Sources */,
 				50CCB234BA4CC8FF663F2848 /* LiveAPI.swift in Sources */,
 				321935F95017B9E31C92701E /* MockAPI.swift in Sources */,
 				6C7361BF93E984E3E061FADD /* Models.swift in Sources */,
+				524C2B35D387B2D256D58834 /* OnboardingView.swift in Sources */,
 				0998DF72EA298463CCA859D9 /* SnapAPI.swift in Sources */,
 				135B51962923B12A6742BF6E /* SnapApp.swift in Sources */,
+				E65D9BD7FD42A0AE1C610395 /* Theme.swift in Sources */,
 				B9B1F09C5DA6838FD92C4BC4 /* WorkoutSync.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

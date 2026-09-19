@@ -25,7 +25,7 @@ In Xcode, set the signing team on the Snap target once. HealthKit needs a real d
 
 | File | State |
 |------|-------|
-| `ios/project.yml` | Done. iOS 18 target, bundle id `com.ryanzander.snap`, portrait, dark, HealthKit usage strings, entitlements. |
+| `ios/project.yml` | Done. iOS 18 target, bundle id `com.ryanzander.snap`, portrait, light, HealthKit usage strings, entitlements. |
 | `ios/Snap/Snap.entitlements` | Done. HealthKit + background delivery. |
 | `ios/Snap/SnapApp.swift` | Done. `RootView` switches on `model.phase` (`.onboarding / .linking / .live`) and calls `model.start()`. |
 | `ios/Snap/Config.swift` | Done. `baseURL` and `debugKey` in UserDefaults, editable from the debug panel. Empty `baseURL` → `MockAPI`. Put the Worker URL in `defaultBaseURL` once Hugo deploys. |
@@ -104,7 +104,20 @@ Colors, fonts, spacing. See "Look" below.
 
 ### `Views/OnboardingView.swift`
 
-One screen: wordmark, name field, weekly-goal stepper (1–7, default 4), one button. The button requests HealthKit permission, then calls `onboard`. Denied permission still continues — the app just won't sync.
+Five pages, one idea each, with progress dashes and a back chevron across the top and a
+circular next button bottom-right. Structure borrowed from Stoic; layouts are Snap's.
+
+1. **`meet snap.`** — the mark, the line, one pill button.
+2. **`what do i call you?`** — name field.
+3. **`how many days a week?`** — 1–7 selector, default 4. These become the dots on the brain screen.
+4. **`here's the deal.`** — three numbered rows: you text a plan · he watches your workouts · you go you get it back, you skip he keeps it. The stake gets its own beat so nobody is surprised by it later.
+5. **`i need to see your workouts.`** — the reason on screen, then the HealthKit sheet over it. Denied permission still continues — the app just won't sync. A "skip for now" link does the same thing without asking.
+
+Page 5's button requests HealthKit permission, then calls `onboard`.
+
+`SNAP_PAGE=goal` as a launch environment variable opens straight onto a page (DEBUG only), so
+a screen can be iterated on without clicking through the flow. `SNAP_PHASE=linking` does the
+same for the link screen.
 
 ### `Views/LinkView.swift`
 
@@ -124,7 +137,7 @@ Sheet from the long-press. Server URL and debug key fields (save → `reloadAPI(
 
 ## Look
 
-Dark only. Near-black background, one acid-lime accent, one warning red. Rounded heavy numerals for the countdown, monospaced for the trace, system text for everything else. No cards with borders, no gradients, no tab bar, no navigation bar. The one visual idea is the trace: a live stream of an agent thinking, with the countdown above it as the only large element. Lowercase copy throughout, same voice as Snap's texts.
+Light only. Off-white paper (`#F3F3F1`), near-black ink (`#0B0C0A`), one acid-lime accent (`#C8FF1E`) used **as a fill, never as type** — lime on white is illegible, so it only ever sits behind ink. One warning red (`#D92E22`). Avenir Next Heavy for statements, rounded heavy numerals for the countdown, monospaced for the trace. Soft high-radius cards, no borders, no gradients, no tab bar, no navigation bar. The one visual idea is the trace: a live stream of an agent thinking, with the countdown above it as the only large element. Lowercase copy throughout, same voice as Snap's texts.
 
 ## Done means
 

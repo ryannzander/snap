@@ -69,6 +69,17 @@ final class AppModel {
 
         observeLifecycle()
 
+        #if DEBUG
+        // `SNAP_PHASE=linking` drops straight onto the link screen with demo contacts.
+        if ProcessInfo.processInfo.environment["SNAP_PHASE"] == "linking" {
+            name = "Ryan"
+            linkCode = "4821"
+            contact = .init(telegram: "@snap_bro_bot", imessage: "+15555550123")
+            phase = .linking
+            return
+        }
+        #endif
+
         guard token != nil else {
             phase = .onboarding
             return

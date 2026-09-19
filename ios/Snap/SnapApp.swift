@@ -8,8 +8,8 @@ struct SnapApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
-                .preferredColorScheme(.dark)
-                .tint(Theme.accent)
+                .preferredColorScheme(.light)
+                .tint(Theme.ink)
         }
     }
 }
