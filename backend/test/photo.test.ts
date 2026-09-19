@@ -66,12 +66,13 @@ eq('a captioned photo keeps the caption', photoSummary('pump check', 1), '📷 p
   const seen = photoInstruction('done', 'a person in gym clothes at a squat rack, sweaty');
   isTrue('the instruction carries the description', seen.includes('squat rack'));
   isTrue('the instruction carries the caption', seen.includes('"done"'));
-  isTrue('the instruction says a photo is not proof', seen.includes('not proof of a workout'));
-  isTrue('the instruction says the watch decides', seen.includes('watch'));
+  isTrue('the instruction asks for a reaction to the picture', seen.includes('react to the picture'));
+  isTrue('and tells him not to lecture about proof or the watch', seen.includes('do NOT bring up proof'));
+  isTrue('unless asked outright', seen.includes('unless they ask you directly'));
 
   const blind = photoInstruction('', null);
   isTrue('a failed look is said plainly', blind.includes('could not make out'));
-  isTrue('and still forbids counting it', blind.includes('never say the photo counts'));
+  isTrue('and still keeps the lecture out', blind.includes('do NOT bring up proof'));
 }
 
 done('photos');
