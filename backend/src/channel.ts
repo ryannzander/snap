@@ -16,7 +16,10 @@ export type ChannelName = 'linq' | 'trace';
 export interface InboundMessage {
   channel: ChannelName;
   chatId: string;
+  /** Empty when the message was a photo with no caption. */
   text: string;
+  /** Photos the user attached, as URLs the adapter can fetch. */
+  imageUrls: string[];
   /** Provider event id, used to drop duplicate webhook deliveries. */
   eventId: string;
 }

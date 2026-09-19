@@ -32,6 +32,7 @@ import { fail, ok, type DoResult } from './http';
 import { isOptOut } from './optout';
 import { solText } from './money';
 import { redact } from './redact';
+import { describePhoto, photoInstruction, photoSummary, type VisionEnv } from './vision';
 import {
   explorerUrl,
   getBalanceLamports,
@@ -436,13 +437,19 @@ export class UserAgent extends DurableObject<Env> {
     return ok({ greeted: true });
   }
 
-  /** Records an inbound text. The agent acts on it in step 3. */
-  async receiveMessage(text: string): Promise<DoResult<{ optedOut: boolean }>> {
+  /** Records an inbound text, or a photo. The agent acts on it in `runInboundTurn`. */
+  async receiveMessage(text: string, imageUrls: string[] = []): Promise<DoResult<{ optedOut: boolean }>> {
     await this.loadClock();
     const link = await this.ctx.storage.get<Link>(KEY.link);
     if (!link) return fail(404, 'not_found', 'no such user');
 
-    await this.appendTraces([{ kind: 'message_received', summary: text }]);
+    // A photo is recorded as a message so the conversation the model reads
+    // shows it happened; the URLs ride in `data` for anyone who needs them.
+    await this.appendTraces([
+      imageUrls.length > 0
+        ? { kind: 'message_received', summary: photoSummary(text, imageUrls.length), data: { imageUrls } }
+        : { kind: 'message_received', summary: text },
+    ]);
 
     const optedOut = isOptOut(text);
     // Linq clears an opt-out as soon as the recipient replies again with
@@ -456,8 +463,49 @@ export class UserAgent extends DurableObject<Env> {
   }
 
   /**
+   * The agent's turn on something the user sent. A plain text is handed over
+   * as is. A photo is looked at first, the look is traced, and the agent gets
+   * the description in its instruction — it never sees pixels itself, and the
+   * guards never hear about the photo at all: a photo is a hype beat, and the
+   * money still only moves on the watch.
+   */
+  async runInboundTurn(text: string, imageUrls: string[] = []): Promise<DoResult<{ ran: boolean }>> {
+    if (imageUrls.length === 0) {
+      return this.runAgent(`the user just texted you: "${text}". decide what to do.`, true);
+    }
+
+    await this.loadClock();
+    const url = imageUrls[0]!;
+    let description: string | null = null;
+    try {
+      // The generated `Ai` binding type is model-specific; the vision module
+      // only needs `run`, the same loosening `brain()` does.
+      const look = await describePhoto(this.env as unknown as VisionEnv, url);
+      description = look.description;
+      await this.appendTraces([
+        {
+          kind: 'context',
+          summary: `looked at the photo · ${look.description}`,
+          data: { via: look.via, imageUrl: url },
+        },
+      ]);
+    } catch (error) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: 'could not see the photo — reacting blind',
+          data: { error: redact(String(error)) },
+        },
+      ]);
+    }
+    return this.runAgent(photoInstruction(text, description), true);
+  }
+
+  /**
    * Demo only. Puts a message in front of the agent exactly as an inbound text
-   * does, without the channel vendor in the path.
+   * does, without the channel vendor in the path. An `imageUrl` makes it a
+   * photo turn, which is how the photo beat gets rehearsed without spending
+   * the sandbox budget.
    *
    * The webhook backgrounds the turn because Linq retries anything slow. Here
    * there is nothing retrying, so this awaits it: a caller that gets the
@@ -467,16 +515,17 @@ export class UserAgent extends DurableObject<Env> {
   async receiveDebugMessage(
     token: string,
     text: string,
+    imageUrls: string[] = [],
   ): Promise<DoResult<{ optedOut: boolean; ran: boolean }>> {
     await this.loadClock();
     const auth = await this.authenticate(token);
     if (!auth.ok) return auth;
 
-    const received = await this.receiveMessage(text);
+    const received = await this.receiveMessage(text, imageUrls);
     if (!received.ok) return received;
     if (received.value.optedOut) return ok({ optedOut: true, ran: false });
 
-    const agent = await this.runAgent(`the user just texted you: "${text}". decide what to do.`, true);
+    const agent = await this.runInboundTurn(text, imageUrls);
     if (!agent.ok) return agent;
     return ok({ optedOut: false, ran: agent.value.ran });
   }
