@@ -35,3 +35,25 @@ targets:
       properties:
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.background-delivery: true
+  SnapTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [SnapTests]
+    dependencies:
+      - target: Snap
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.ryanzander.snap.tests
+schemes:
+  Snap:
+    build:
+      targets:
+        Snap: all
+        SnapTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - SnapTests
