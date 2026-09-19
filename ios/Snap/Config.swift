@@ -18,8 +18,22 @@ enum Config {
         set { defaults.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "debugKey") }
     }
 
+    /// The server URL the app would actually talk to, or nil when it would run the mock.
+    /// Only an `http(s)` URL with a host counts: a pasted `snap.example.workers.dev`
+    /// without a scheme used to slip through as a live URL and silently run the mock.
+    static func serverURL(from string: String) -> URL? {
+        guard let url = URL(string: string.trimmingCharacters(in: .whitespacesAndNewlines)),
+              let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+              let host = url.host(), !host.isEmpty
+        else { return nil }
+        return url
+    }
+
+    /// True when the current settings run the scripted mock rather than a server.
+    static var isMock: Bool { serverURL(from: baseURL) == nil }
+
     static func makeAPI(token: String?) -> SnapAPI {
-        guard let url = URL(string: baseURL), url.scheme != nil else { return MockAPI.shared }
+        guard let url = serverURL(from: baseURL) else { return MockAPI.shared }
         return LiveAPI(baseURL: url, token: token, debugKey: debugKey)
     }
 }

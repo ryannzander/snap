@@ -102,6 +102,73 @@ final class ContractTests: XCTestCase {
         XCTAssertEqual(response.events.map(\.kind), [.alarmFired, .decision, .unknown])
     }
 
+    /// One malformed event (a string id, a missing summary) must not blank the whole
+    /// feed — the bad one is dropped and the rest still arrive.
+    func testOneMalformedTraceEventIsDroppedNotFatal() throws {
+        let json = """
+        {"events":[
+         {"id":41,"ts":"2026-09-19T23:24:00.000Z","kind":"alarm_fired","summary":"7:24"},
+         {"id":"e_42","ts":"2026-09-19T23:24:01.000Z","kind":"decision","summary":"broken id"},
+         {"id":43,"ts":"2026-09-19T23:24:02.000Z","kind":"context"},
+         {"id":44,"ts":"2026-09-19T23:24:03.000Z","kind":"message_sent","summary":"bro"}]}
+        """
+        let response = try decoder.decode(TraceResponse.self, from: Data(json.utf8))
+
+        XCTAssertEqual(response.events.map(\.id), [41, 44])
+    }
+
+    /// `data.reasoning` is what the decision row shows under its verdict. Anything else
+    /// in `data`, or a `data` that isn't an object, is ignored rather than fatal.
+    func testDecisionReasoningIsReadAndOddDataIsTolerated() throws {
+        let json = """
+        {"events":[
+         {"id":1,"ts":"2026-09-19T23:24:00Z","kind":"decision","summary":"intervene — firm",
+          "data":{"reasoning":"skipped yesterday, money on the line","model":"gpt"}},
+         {"id":2,"ts":"2026-09-19T23:24:01Z","kind":"decision","summary":"quiet","data":"nope"},
+         {"id":3,"ts":"2026-09-19T23:24:02Z","kind":"decision","summary":"blank","data":{"reasoning":"  "}},
+         {"id":4,"ts":"2026-09-19T23:24:03Z","kind":"stay_quiet","summary":"already at the gym"}]}
+        """
+        let events = try decoder.decode(TraceResponse.self, from: Data(json.utf8)).events
+
+        XCTAssertEqual(events.count, 4)
+        XCTAssertEqual(events[0].reasoning, "skipped yesterday, money on the line")
+        XCTAssertNil(events[1].reasoning)
+        XCTAssertNil(events[2].reasoning, "whitespace-only reasoning is not worth a line")
+        XCTAssertEqual(events[3].kind, .stayQuiet)
+    }
+
+    /// A status the backend adds later must degrade, not take the whole `/state` down —
+    /// the countdown, the stake pill and the goal dots all hang off that one call.
+    func testUnknownStatusesDegradeInsteadOfThrowing() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":1,"linked":true,
+         "commitments":[{"id":"c_9","text":"gym at 7","dueAt":"2026-09-19T23:00:00Z",
+         "graceMin":20,"status":"expired",
+         "stake":{"lamports":50000000,"status":"refunding","txSig":null}}]}
+        """
+        let state = try decoder.decode(SnapState.self, from: Data(json.utf8))
+
+        XCTAssertEqual(state.commitments[0].status, .unknown)
+        XCTAssertEqual(state.commitments[0].stake?.status, .unknown)
+        XCTAssertNil(state.openCommitment, "an unknown status is not an open commitment")
+    }
+
+    /// The state poll only republishes on change, which needs value equality that
+    /// actually compares the fields.
+    func testStateEqualityComparesFields() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":2,"linked":true,
+         "commitments":[{"id":"c_1","text":"gym at 7","dueAt":"2026-09-19T23:00:00Z",
+         "graceMin":20,"status":"pending","stake":{"lamports":50000000,"status":"held","txSig":"sig"}}]}
+        """
+        let a = try decoder.decode(SnapState.self, from: Data(json.utf8))
+        let b = try decoder.decode(SnapState.self, from: Data(json.utf8))
+        let c = try decoder.decode(SnapState.self, from: Data(json.replacingOccurrences(of: "\"held\"", with: "\"released\"").utf8))
+
+        XCTAssertEqual(a, b)
+        XCTAssertNotEqual(a, c)
+    }
+
     // MARK: - Derived values
 
     func testCheckAtIsDueDatePlusGrace() throws {

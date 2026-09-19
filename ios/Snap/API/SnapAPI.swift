@@ -42,6 +42,12 @@ struct APIError: LocalizedError {
     /// The token is dead — every subsequent call will fail the same way.
     var isUnauthorized: Bool { status == 401 }
 
+    /// The server answered 2xx but the body didn't decode. Reported with the real
+    /// status so a 204 with an empty body isn't mistaken for a malformed 200.
+    static func decodeFailure(status: Int, type: Any.Type, underlying: Error) -> APIError {
+        APIError(status: status, body: "decode \(type): \(underlying)")
+    }
+
     var errorDescription: String? {
         guard !message.isEmpty else { return "HTTP \(status)" }
         let tag = code.map { " (\($0))" } ?? ""

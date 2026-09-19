@@ -7,6 +7,7 @@ struct DebugPanel: View {
 
     @State private var baseURL = Config.baseURL
     @State private var debugKey = Config.debugKey
+    @State private var confirmReset = false
 
     var body: some View {
         NavigationStack {
@@ -22,7 +23,11 @@ struct DebugPanel: View {
                         Config.debugKey = debugKey
                         model.reloadAPI()
                     }
-                    Text(Config.baseURL.isEmpty ? "empty → running on MockAPI" : "live")
+                    // Reads the field, not the saved value, so it says what "save" will do —
+                    // and names the mock for any URL that won't parse, not just an empty one.
+                    Text(Config.serverURL(from: baseURL) == nil
+                         ? "mock — not talking to a server"
+                         : "live · \(Config.serverURL(from: baseURL)?.host() ?? "")")
                         .font(Theme.mono(12))
                         .foregroundStyle(Theme.inkDim)
                 }
@@ -35,10 +40,20 @@ struct DebugPanel: View {
                 }
 
                 Section("danger") {
-                    Button("reset app", role: .destructive) {
-                        model.reset()
-                        dismiss()
-                    }
+                    // Two rows below the on-stage fallback button, on a phone held up to a
+                    // camera: this one needs a second tap.
+                    Button("reset app", role: .destructive) { confirmReset = true }
+                        .confirmationDialog(
+                            "wipe the session? token, link code and health anchor all go.",
+                            isPresented: $confirmReset,
+                            titleVisibility: .visible
+                        ) {
+                            Button("reset app", role: .destructive) {
+                                model.reset()
+                                dismiss()
+                            }
+                            Button("cancel", role: .cancel) {}
+                        }
                 }
 
                 Section("last error") {

@@ -6,8 +6,18 @@ import SwiftUI
 struct LinkView: View {
     @Environment(AppModel.self) private var model
     @State private var pulse = false
-    @State private var copied = false
+    @State private var copiedAt: Date?
     @State private var showDebug = false
+
+    private var imessageNumber: String? {
+        guard let number = model.contact?.imessage, !number.isEmpty else { return nil }
+        return number
+    }
+
+    private var telegramBot: String? {
+        guard let bot = model.contact?.telegram, !bot.isEmpty else { return nil }
+        return bot
+    }
 
     var body: some View {
         ZStack {
@@ -40,13 +50,22 @@ struct LinkView: View {
                 Spacer()
 
                 VStack(spacing: Theme.Space.s) {
-                    if let number = model.contact?.imessage, !number.isEmpty {
+                    if let number = imessageNumber {
                         Button("open imessage") { open(imessage: number) }
                             .buttonStyle(PillButtonStyle())
                     }
-                    if let bot = model.contact?.telegram, !bot.isEmpty {
+                    if let bot = telegramBot {
+                        // Primary when it's the only channel; otherwise the pale secondary.
                         Button("open telegram") { open(telegram: bot) }
-                            .buttonStyle(PillButtonStyle(filled: model.contact?.imessage == nil))
+                            .buttonStyle(PillButtonStyle(filled: imessageNumber == nil))
+                    }
+                    if imessageNumber == nil && telegramBot == nil {
+                        // Onboard came back without a contact. Say so; a spinner with no
+                        // address to text is a dead end.
+                        Text("snap didn't send a number to text. hold the wordmark to check the server.")
+                            .font(Theme.body(14))
+                            .foregroundStyle(Theme.danger)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     HStack(spacing: Theme.Space.xs) {
@@ -67,11 +86,20 @@ struct LinkView: View {
     private var codeCard: some View {
         Button {
             UIPasteboard.general.string = "yo \(model.linkCode)"
-            withAnimation(.snappy) { copied = true }
+            let stamp = Date.now
+            withAnimation(.snappy) { copiedAt = stamp }
+            // The code comes back on its own: it is the one thing the user may still
+            // need to read and type, and there is nowhere else on screen that shows it.
+            Task {
+                try? await Task.sleep(for: .seconds(1.6))
+                if copiedAt == stamp {
+                    withAnimation(.snappy) { copiedAt = nil }
+                }
+            }
         } label: {
             HStack {
                 Spacer()
-                Text(copied ? "copied" : "yo \(model.linkCode)")
+                Text(copiedAt != nil ? "copied" : "yo \(model.linkCode)")
                     .font(Theme.numerals(44))
                     .foregroundStyle(Theme.ink)
                     .minimumScaleFactor(0.6)
@@ -83,6 +111,7 @@ struct LinkView: View {
             .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.accent))
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("your link code is yo \(model.linkCode). double-tap to copy.")
         .scaleEffect(pulse ? 1.015 : 1)
         .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: pulse)
         .onAppear { pulse = true }

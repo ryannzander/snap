@@ -4,11 +4,22 @@ import HealthKit
 /// Watches HealthKit for workouts and POSTs them as they appear.
 ///
 /// The backend dedupes on `hkUuid`, so resending is free — which is the whole error
-/// strategy here: if a POST fails the anchor stays put and the next fire sends it again.
+/// strategy here: if a POST fails the anchor stays put and the next drain sends it again.
+/// A drain runs on every observer fire, on launch, when the app comes to the foreground,
+/// and after the debug panel saves a simulated workout.
 @MainActor
 final class WorkoutSync {
     private static let anchorKey = "hkAnchor"
     private static let workoutType = HKObjectType.workoutType()
+
+    /// Only workouts from the last week are ever interesting to Snap, so every query is
+    /// bounded to it — the same predicate on every drain keeps the anchor lineage
+    /// consistent instead of mixing a bounded first fetch with unbounded later ones.
+    private static let lookback: TimeInterval = 7 * 86_400
+
+    /// A failed POST is retried a couple of times before the anchor is left for the
+    /// next drain. Short, because on a background wake iOS gives us seconds, not minutes.
+    private static let retryDelays: [Duration] = [.seconds(1.5), .seconds(3)]
 
     /// Surfaced in the debug panel only.
     var onError: ((String) -> Void)?
@@ -17,6 +28,7 @@ final class WorkoutSync {
     private var api: any SnapAPI
     private var observer: HKObserverQuery?
     private var draining = false
+    private var needsRedrain = false
 
     init(api: any SnapAPI) {
         self.api = api
@@ -42,6 +54,13 @@ final class WorkoutSync {
         } catch {
             onError?("healthkit auth: \(error.localizedDescription)")
         }
+    }
+
+    /// True until the HealthKit sheet has been answered. HealthKit hides *read* denial,
+    /// so this is the one state the app can name: "you were never asked".
+    var isAuthorizationUndetermined: Bool {
+        guard Self.isAvailable else { return false }
+        return store.authorizationStatus(for: Self.workoutType) == .notDetermined
     }
 
     // MARK: - Observing
@@ -73,32 +92,67 @@ final class WorkoutSync {
             store.stop(observer)
             self.observer = nil
         }
+        guard Self.isAvailable else { return }
+        // Otherwise iOS keeps launching the app in the background for every workout
+        // after a reset, with nobody there to acknowledge the delivery.
+        store.disableBackgroundDelivery(for: Self.workoutType) { _, _ in }
     }
 
     /// Fetch everything since the saved anchor, POST it, and only then move the anchor.
+    ///
+    /// A fire that lands while a drain is already running is not dropped: the running
+    /// drain goes round again, because the new sample was written after its query ran.
     func drain() async {
-        guard Self.isAvailable, !draining else { return }
+        guard Self.isAvailable else { return }
+        if draining {
+            needsRedrain = true
+            return
+        }
         draining = true
         defer { draining = false }
 
+        repeat {
+            needsRedrain = false
+            await drainOnce()
+        } while needsRedrain
+    }
+
+    private func drainOnce() async {
         let anchor = Self.loadAnchor()
         do {
             let (workouts, newAnchor) = try await fetch(from: anchor)
             if !workouts.isEmpty {
-                try await api.postWorkouts(workouts)
+                try await post(workouts)
             }
             Self.saveAnchor(newAnchor)
         } catch {
-            // Anchor untouched: the next observer fire resends.
+            // Anchor untouched: the next drain resends.
             onError?("workout sync: \(error.localizedDescription)")
         }
     }
 
+    private func post(_ workouts: [WorkoutDTO]) async throws {
+        var attempt = 0
+        while true {
+            do {
+                try await api.postWorkouts(workouts)
+                return
+            } catch {
+                // Don't hammer a dead token, and don't retry our own cancellation.
+                if let apiError = error as? APIError, apiError.isUnauthorized { throw error }
+                if error is CancellationError { throw error }
+                guard attempt < Self.retryDelays.count else { throw error }
+                try await Task.sleep(for: Self.retryDelays[attempt])
+                attempt += 1
+            }
+        }
+    }
+
     private func fetch(from anchor: HKQueryAnchor?) async throws -> ([WorkoutDTO], HKQueryAnchor?) {
-        // First run has no anchor, so bound it to the last week instead of all of history.
-        let predicate: NSPredicate? = anchor == nil
-            ? HKQuery.predicateForSamples(withStart: Date().addingTimeInterval(-7 * 86_400), end: nil)
-            : nil
+        let predicate = HKQuery.predicateForSamples(
+            withStart: Date().addingTimeInterval(-Self.lookback),
+            end: nil
+        )
 
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKAnchoredObjectQuery(
@@ -107,6 +161,8 @@ final class WorkoutSync {
                 anchor: anchor,
                 limit: HKObjectQueryNoLimit
             ) { _, samples, _, newAnchor, error in
+                // Deletions (the third argument) are deliberately ignored: a workout
+                // removed from Health after it released a stake must not un-release it.
                 if let error {
                     continuation.resume(throwing: error)
                     return
@@ -210,7 +266,8 @@ final class WorkoutSync {
     }
 }
 
-private extension WorkoutDTO {
+extension WorkoutDTO {
+    /// Internal (not private) so a unit test can check what a real `HKWorkout` turns into.
     init(workout: HKWorkout) {
         let kcal = workout.statistics(for: HKQuantityType(.activeEnergyBurned))?
             .sumQuantity()?

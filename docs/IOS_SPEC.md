@@ -17,23 +17,19 @@ Then generate the project (XcodeGen is installed at `/opt/homebrew/bin/xcodegen`
 cd ios && xcodegen
 ```
 
-`ios/project.yml` is the source of truth. Re-run `xcodegen` whenever files are added or removed. Commit the generated `Snap.xcodeproj` so the repo opens with a double-click.
+`ios/project.yml` is the source of truth. Re-run `xcodegen` whenever files are added or removed. Commit the generated `Snap.xcodeproj` so the repo opens with a double-click. The team id and the app-icon setting are in `project.yml` so regenerating keeps signing and the icon; if you change signing in Xcode, change it there too.
 
 In Xcode, set the signing team on the Snap target once. HealthKit needs a real device and a provisioning profile with the HealthKit capability; the simulator can run the UI and the mock, not background delivery.
 
-## What already exists (none of it has been compiled yet)
+## What exists
 
-| File | State |
-|------|-------|
-| `ios/project.yml` | Done. iOS 18 target, bundle id `com.ryanzander.snap`, portrait, light, HealthKit usage strings, entitlements. |
-| `ios/Snap/Snap.entitlements` | Done. HealthKit + background delivery. |
-| `ios/Snap/SnapApp.swift` | Done. `RootView` switches on `model.phase` (`.onboarding / .linking / .live`) and calls `model.start()`. |
-| `ios/Snap/Config.swift` | Done. `baseURL` and `debugKey` in UserDefaults, editable from the debug panel. Empty `baseURL` → `MockAPI`. Put the Worker URL in `defaultBaseURL` once Hugo deploys. |
-| `ios/Snap/Model/Models.swift` | Done. Codable types mirroring `API.md`, plus `Commitment.checkAt` and `Stake.sol`. |
+Everything below is written, builds, and has been run on a simulator and a device. The per-file sections that follow are the spec each file was built to; where the code deliberately differs (the countdown is ink rather than lime so lime stays a fill; settled commitments show a verdict instead of a clock; a slashed stake shows its half/half split) the code is right and this document says so inline.
 
-These reference types that are **not written yet**: `AppModel`, `SnapAPI`, `LiveAPI`, `MockAPI`, `Theme`, `OnboardingView`, `LinkView`, `BrainView`.
+Unit tests live in `ios/SnapTests` and run with the `Snap` scheme. `ios/SnapUITests` proves on a real HealthKit store that a simulated workout is not flagged hand-entered; it drives a system permission sheet, so it is skipped by default — run it with `-only-testing:SnapUITests`.
 
-## Files to write
+Launch hooks (DEBUG only): `SNAP_PAGE=<hello|name|goal|deal|health>`, `SNAP_PHASE=<linking|live>` (forces `MockAPI`), `SNAP_TIMEWARP=1`, `SNAP_HKDIAG=1`.
+
+## Files
 
 ### `API/SnapAPI.swift`
 
@@ -110,7 +106,7 @@ circular next button bottom-right. Structure borrowed from Stoic; layouts are Sn
 1. **`meet snap.`** — the mark, the line, one pill button.
 2. **`what do i call you?`** — name field.
 3. **`how many days a week?`** — 1–7 selector, default 4. These become the dots on the brain screen.
-4. **`here's the deal.`** — three numbered rows: you text a plan · he watches your workouts · you go you get it back, you skip he keeps it. The stake gets its own beat so nobody is surprised by it later.
+4. **`here's the deal.`** — three numbered rows: you text a plan · he watches your workouts · you go you get it back, you skip half is forfeited. The stake gets its own beat so nobody is surprised by it later.
 5. **`i need to see your workouts.`** — the reason on screen, then the HealthKit sheet over it. Denied permission still continues — the app just won't sync. A "skip for now" link does the same thing without asking.
 
 Page 5's button requests HealthKit permission, then calls `onboard`.

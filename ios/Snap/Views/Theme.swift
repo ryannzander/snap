@@ -7,13 +7,18 @@ enum Theme {
 
     // MARK: - Colour
 
-    static let bg       = Color(hex: 0xF3F3F1)  // paper
-    static let surface  = Color(hex: 0xFFFFFF)  // cards
-    static let ink      = Color(hex: 0x0B0C0A)  // primary type, primary buttons
-    static let inkDim   = Color(hex: 0x83888C)  // secondary type
-    static let hairline = Color(hex: 0xE3E3DF)  // dividers, unfilled states
-    static let accent   = Color(hex: 0xC8FF1E)  // acid lime — fills only
-    static let danger   = Color(hex: 0xD92E22)  // "late", slashed
+    // Contrast is measured against paper, because the brain screen is mirrored to a
+    // laptop and read from two metres: white cards on paper are 1.11:1 and vanish, so
+    // anything that has to read as a shape gets `surfaceAlt`, and secondary type sits
+    // at 4.6:1 (WCAG AA) rather than the 3.2:1 the first palette had.
+    static let bg         = Color(hex: 0xF3F3F1)  // paper
+    static let surface    = Color(hex: 0xFFFFFF)  // cards
+    static let surfaceAlt = Color(hex: 0xE8E8E4)  // received bubbles, unselected chips, secondary pill
+    static let ink        = Color(hex: 0x0B0C0A)  // primary type, primary buttons
+    static let inkDim     = Color(hex: 0x6A6F73)  // secondary type
+    static let hairline   = Color(hex: 0xCFCFCA)  // dividers, unfilled states
+    static let accent     = Color(hex: 0xC8FF1E)  // acid lime — fills only
+    static let danger     = Color(hex: 0xD92E22)  // "late", slashed
 
     // MARK: - Type
     //
@@ -54,10 +59,9 @@ struct PillButtonStyle: ButtonStyle {
             .foregroundStyle(filled ? Theme.bg : Theme.ink)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 20)
-            .background(
-                Capsule().fill(filled ? Theme.ink : .clear)
-                    .overlay(Capsule().strokeBorder(filled ? .clear : Theme.ink, lineWidth: 1.5))
-            )
+            // Secondary is a paler fill, not a stroke — the Look says no borders, and a
+            // pale fill stays on the same system as the primary pill.
+            .background(Capsule().fill(filled ? Theme.ink : Theme.surfaceAlt))
             .opacity(enabled ? (configuration.isPressed ? 0.75 : 1) : 0.25)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.snappy(duration: 0.18), value: configuration.isPressed)

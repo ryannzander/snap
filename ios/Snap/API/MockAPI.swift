@@ -45,19 +45,35 @@ actor MockAPI: SnapAPI {
     private static let alarmStep = 2
     private static let workoutStep = 11
 
-    private let launchedAt = Date()
+    /// The link screen "receives the text" this long after onboarding. Anchored to the
+    /// onboard call, not process launch: the mock is a singleton built at launch, and
+    /// clicking through onboarding takes longer than any delay measured from there.
+    private static let linkDelay: TimeInterval = 6
+
     private var dueAt: Date
+    private var onboardedAt: Date?
     private var scriptStartedAt: Date?
     private var emitted: [TraceEvent] = []
 
     init() {
-        dueAt = launchedAt.addingTimeInterval(120)
+        dueAt = Date().addingTimeInterval(120)
+    }
+
+    /// Back to the top of the script. `AppModel.reset()` calls this so a second
+    /// run-through of the demo doesn't open on a finished loop.
+    func reset() {
+        emitted.removeAll()
+        scriptStartedAt = nil
+        onboardedAt = nil
+        dueAt = Date().addingTimeInterval(120)
     }
 
     // MARK: - SnapAPI
 
     func onboard(_ body: OnboardRequest) async throws -> OnboardResponse {
-        OnboardResponse(
+        reset()
+        onboardedAt = Date()
+        return OnboardResponse(
             userId: "mock-user",
             token: "mock-token",
             linkCode: "4821",
@@ -76,7 +92,10 @@ actor MockAPI: SnapAPI {
         return SnapState(
             weeklyGoal: 4,
             workoutsThisWeek: reached > Self.workoutStep ? 3 : 2,
-            linked: Date().timeIntervalSince(launchedAt) >= 5,
+            // Never onboarded through the mock (SNAP_PHASE=live, a reconnect) → already
+            // linked, so the brain screen is reachable. Onboarded → the text "arrives"
+            // a few seconds after the link screen appears.
+            linked: onboardedAt.map { Date().timeIntervalSince($0) >= Self.linkDelay } ?? true,
             commitments: [
                 Commitment(
                     id: "c_mock",
