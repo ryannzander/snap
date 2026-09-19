@@ -7,6 +7,7 @@
  */
 
 import { startOfWeek, tzOffsetMs, parseIso } from '../time';
+import { disqualification } from './guards';
 import type { Commitment, TraceEvent } from '../types';
 
 export interface DayRecord {
@@ -35,6 +36,16 @@ export interface WorkoutLike {
   durationSec: number;
   type: string;
   end: string | null;
+  wasUserEntered?: boolean;
+}
+
+/**
+ * The same bar as releasing a stake. If a 30-minute walk cannot release your
+ * money it must not fill a goal dot either, or "2/4 this week" means one
+ * thing to the user and another to the agent.
+ */
+function counts(workout: WorkoutLike): boolean {
+  return disqualification(workout) === null;
 }
 
 /** Local YYYY-MM-DD for an instant, in the user's zone. */
@@ -49,12 +60,13 @@ export function buildDays(
   commitments: Commitment[],
   days = 7,
 ): DayRecord[] {
-  const counts = new Map<string, number>();
+  const perDay = new Map<string, number>();
   for (const workout of workouts) {
+    if (!counts(workout)) continue;
     const startedAt = parseIso(workout.start);
     if (startedAt === null) continue;
     const date = localDate(startedAt, tz);
-    counts.set(date, (counts.get(date) ?? 0) + 1);
+    perDay.set(date, (perDay.get(date) ?? 0) + 1);
   }
 
   const missedDays = new Set<string>();
@@ -67,7 +79,7 @@ export function buildDays(
   const out: DayRecord[] = [];
   for (let back = days - 1; back >= 0; back--) {
     const date = localDate(now - back * 86_400_000, tz);
-    out.push({ date, workouts: counts.get(date) ?? 0, skipped: missedDays.has(date) });
+    out.push({ date, workouts: perDay.get(date) ?? 0, skipped: missedDays.has(date) });
   }
   return out;
 }
@@ -76,6 +88,7 @@ export function countThisWeek(now: number, tz: string, workouts: WorkoutLike[]):
   const weekStart = startOfWeek(now, tz);
   let count = 0;
   for (const workout of workouts) {
+    if (!counts(workout)) continue;
     const startedAt = parseIso(workout.start);
     if (startedAt !== null && startedAt >= weekStart) count++;
   }

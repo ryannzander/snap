@@ -9,6 +9,7 @@ import {
   type AgentContext,
 } from './agent/context';
 import {
+  disqualification,
   findCoveringWorkout,
   guardCreate,
   guardMessages,
@@ -311,12 +312,18 @@ export class UserAgent extends DurableObject<Env> {
         if (!recent) continue;
 
         if (!prior) {
+          const why = disqualification(merged);
           traces.push({
             kind: 'workout_detected',
-            summary: merged.wasUserEntered
-              ? `${humanizeType(merged.type)} · typed in by hand · doesn't count`
+            summary: why
+              ? `${humanizeType(merged.type)} · ${minutes(merged.durationSec)} min · ${why}`
               : describeWorkout(merged),
-            data: { hkUuid: merged.hkUuid, wasUserEntered: merged.wasUserEntered, source: merged.source },
+            data: {
+              hkUuid: merged.hkUuid,
+              wasUserEntered: merged.wasUserEntered,
+              source: merged.source,
+              disqualified: why,
+            },
           });
         } else if (!prior.end && merged.end) {
           traces.push({
@@ -363,12 +370,13 @@ export class UserAgent extends DurableObject<Env> {
       this.ctx.storage.list<StoredCommitment>({ prefix: 'commitment:' }),
     ]);
 
-    const weekStart = startOfWeek(this.now(), profile.timezone);
-    let workoutsThisWeek = 0;
-    for (const workout of workouts.values()) {
-      const startedAt = parseIso(workout.start);
-      if (startedAt !== null && startedAt >= weekStart) workoutsThisWeek++;
-    }
+    // Same bar as releasing a stake, so the dots on the screen and the
+    // agent's "2/4 this week" never disagree.
+    const workoutsThisWeek = countThisWeek(
+      this.now(),
+      profile.timezone,
+      [...workouts.values()],
+    );
 
     return ok({
       weeklyGoal: profile.weeklyGoal,

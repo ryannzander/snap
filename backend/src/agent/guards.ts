@@ -55,7 +55,35 @@ const MAX_TEXT_LENGTH = 300;
  * HKWorkoutActivityType case names to narrow it.
  */
 export const MIN_WORKOUT_SEC = 30 * 60;
-export const ACCEPTED_WORKOUT_TYPES: readonly string[] | null = null; // null = any
+
+/**
+ * HKWorkoutActivityType case names that count, matching what WorkoutSync
+ * sends. Set to null to accept anything.
+ *
+ * The line is training, not activity. `walking` is the one that had to go —
+ * thirty minutes of walking is a Tuesday, not a workout, and it is the first
+ * thing anyone would try to release a stake with. `hiking`, `yoga` and
+ * `pilates` are real exercise but are not what "gym at 7" means, and
+ * `other` covers anything unmapped, which is exactly where a fake would hide.
+ *
+ * DEMO: whatever gets started on the Watch on stage has to be in this list.
+ * "Traditional Strength Training" and "Functional Strength Training" both
+ * are; anything exotic arrives as `other` and will not release the stake.
+ */
+export const ACCEPTED_WORKOUT_TYPES: readonly string[] | null = [
+  'traditionalStrengthTraining',
+  'functionalStrengthTraining',
+  'coreTraining',
+  'crossTraining',
+  'highIntensityIntervalTraining',
+  'running',
+  'cycling',
+  'rowing',
+  'elliptical',
+  'stairClimbing',
+  'swimming',
+  'mixedCardio',
+];
 
 export interface WorkoutWindow {
   start: string;
@@ -193,6 +221,22 @@ export function guardMessages(
   if (texts.length > MAX_TEXTS) return deny(`at most ${MAX_TEXTS} texts in one burst`);
 
   return allow(texts);
+}
+
+/**
+ * Why a workout cannot release a stake, or null if it can. Display-ready:
+ * the trace shows this so a workout that does not count says so on the brain
+ * screen instead of just being missing.
+ */
+export function disqualification(workout: WorkoutWindow): string | null {
+  if (workout.wasUserEntered) return 'typed in by hand';
+  if (ACCEPTED_WORKOUT_TYPES && !ACCEPTED_WORKOUT_TYPES.includes(workout.type)) {
+    return "doesn't count as training";
+  }
+  if (workout.durationSec < MIN_WORKOUT_SEC) {
+    return `under ${MIN_WORKOUT_SEC / 60} min`;
+  }
+  return null;
 }
 
 /** Does a workout actually cover this commitment? HealthKit decides, not the model. */
