@@ -353,10 +353,19 @@ export class UserAgent extends DurableObject<Env> {
     if (traces.length > 0) {
       const closing = await this.coveredCommitment(auth.value);
       if (closing) {
+        const profile = auth.value;
         this.ctx.waitUntil(
-          this.runAgent(
-            `a workout just showed up on their watch and it covers "${closing.text}". that is the commitment met — give them their ${solText(closing.stake.lamports)} back and hype them up.`,
-          ) as unknown as Promise<unknown>,
+          (async () => {
+            // Settle first, in code. Whether a workout covers a commitment is
+            // something HealthKit answered, not something to ask a model — and
+            // a turn where it simply forgets to call release_stake leaves the
+            // stake held forever with the loop looking finished.
+            await this.settle(closing, 'met', 'released');
+            await this.announce(
+              profile,
+              `a workout just showed up on their watch and it covers "${closing.text}". you already gave them their ${solText(closing.stake.lamports)} back. tell them, and hype them up.`,
+            );
+          })() as unknown as Promise<unknown>,
         );
       }
     }
@@ -823,11 +832,22 @@ export class UserAgent extends DurableObject<Env> {
             data: { commitmentId: commitment.id, kind: 'end_of_day' },
           },
         ]);
-        await this.runAgent(
-          covering
-            ? `end of day. "${commitment.text}" got done. release their ${solText(commitment.stake.lamports)} and hype them up.`
-            : `end of day. "${commitment.text}" never happened and no workout covers it. their ${solText(commitment.stake.lamports)} is yours to take now. decide.`,
-        );
+        // The clock and HealthKit decide this, not the model. It used to be
+        // asked to "decide", which meant a turn that chose the wrong tool left
+        // a missed commitment sitting held and the demo's last beat missing.
+        if (covering) {
+          await this.settle(commitment, 'met', 'released');
+          await this.announce(
+            profile,
+            `end of day. "${commitment.text}" got done and you already gave them their ${solText(commitment.stake.lamports)} back. tell them.`,
+          );
+        } else {
+          await this.settle(commitment, 'missed', 'slashed');
+          await this.announce(
+            profile,
+            `end of day. "${commitment.text}" never happened, so you just took their ${solText(commitment.stake.lamports)}. tell them straight — no lecture.`,
+          );
+        }
         return;
       }
 
@@ -861,14 +881,29 @@ export class UserAgent extends DurableObject<Env> {
 
   /** Points the object's single alarm at whichever wake-up comes first. */
   private async rearm(): Promise<void> {
+    await this.loadClock();
     const next = await this.ctx.storage.list<ScheduledAlarm>({
       start: ALARM_RANGE_START,
       end: 'alarm:~',
       limit: 1,
     });
     const first = [...next.values()][0];
-    if (first) await this.ctx.storage.setAlarm(first.at);
-    else await this.ctx.storage.deleteAlarm();
+    if (!first) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    // Wake-ups are stored on the agent's clock, which /debug/timewarp moves.
+    // setAlarm takes real wall-clock time, and the two are the same thing only
+    // while the offset is zero.
+    //
+    // The floor matters more than the conversion: an alarm set in the real
+    // past fires immediately, finds nothing due on the warped clock, rearms to
+    // the same past instant and fires again — a hot loop that never advances.
+    // A backward warp is the obvious way in, and a demo operator resetting the
+    // clock is exactly who would find it.
+    const realAt = first.at - this.clockOffsetMs;
+    await this.ctx.storage.setAlarm(Math.max(realAt, Date.now() + 1_000));
   }
 
   private async schedule(at: number, kind: AlarmKind, commitmentId?: string): Promise<void> {
@@ -1195,6 +1230,19 @@ not a system rejecting them.`,
         },
       ]);
     }
+  }
+
+  /**
+   * The money has already moved. Say so.
+   *
+   * Settling is a fact — HealthKit saw the workout, or the day ended — not a
+   * judgement, so it is not the model's to make. It only gets to do the
+   * talking, and it does not get to stay quiet about someone's stake.
+   */
+  private async announce(profile: Profile, instruction: string): Promise<void> {
+    const brain = this.brain();
+    if (!brain) return;
+    await this.followUp(brain, profile, instruction, [], true);
   }
 
   /** Second pass: you acted, now say something — or justify not saying it. */
