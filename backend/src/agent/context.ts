@@ -1,0 +1,155 @@
+/**
+ * The context handed to the model on every turn (BACKEND_TASKS step 3):
+ * goal, this week's count, last 7 days of hits and skips, open commitments
+ * and their stakes, and the recent conversation.
+ *
+ * Pure functions over stored records so this is testable without a model.
+ */
+
+import { startOfWeek, tzOffsetMs, parseIso } from '../time';
+import type { Commitment, TraceEvent } from '../types';
+
+export interface DayRecord {
+  /** Local calendar date, YYYY-MM-DD. */
+  date: string;
+  workouts: number;
+  /** A commitment existed that day and was not met. */
+  skipped: boolean;
+}
+
+export interface AgentContext {
+  now: string;
+  timezone: string;
+  name: string;
+  weeklyGoal: number;
+  workoutsThisWeek: number;
+  lastSevenDays: DayRecord[];
+  openCommitments: Commitment[];
+  recentMessages: Array<{ from: 'snap' | 'user'; text: string }>;
+}
+
+export interface WorkoutLike {
+  start: string;
+  durationSec: number;
+  type: string;
+  end: string | null;
+}
+
+/** Local YYYY-MM-DD for an instant, in the user's zone. */
+export function localDate(instant: number, tz: string): string {
+  return new Date(instant + tzOffsetMs(instant, tz)).toISOString().slice(0, 10);
+}
+
+export function buildDays(
+  now: number,
+  tz: string,
+  workouts: WorkoutLike[],
+  commitments: Commitment[],
+  days = 7,
+): DayRecord[] {
+  const counts = new Map<string, number>();
+  for (const workout of workouts) {
+    const startedAt = parseIso(workout.start);
+    if (startedAt === null) continue;
+    const date = localDate(startedAt, tz);
+    counts.set(date, (counts.get(date) ?? 0) + 1);
+  }
+
+  const missedDays = new Set<string>();
+  for (const commitment of commitments) {
+    if (commitment.status !== 'missed') continue;
+    const dueAt = parseIso(commitment.dueAt);
+    if (dueAt !== null) missedDays.add(localDate(dueAt, tz));
+  }
+
+  const out: DayRecord[] = [];
+  for (let back = days - 1; back >= 0; back--) {
+    const date = localDate(now - back * 86_400_000, tz);
+    out.push({ date, workouts: counts.get(date) ?? 0, skipped: missedDays.has(date) });
+  }
+  return out;
+}
+
+export function countThisWeek(now: number, tz: string, workouts: WorkoutLike[]): number {
+  const weekStart = startOfWeek(now, tz);
+  let count = 0;
+  for (const workout of workouts) {
+    const startedAt = parseIso(workout.start);
+    if (startedAt !== null && startedAt >= weekStart) count++;
+  }
+  return count;
+}
+
+/**
+ * Pulls the conversation back out of the trace feed, newest last. The trace is
+ * already the record of everything said, so there is no second message store
+ * to keep in sync.
+ */
+export function recentMessages(
+  events: TraceEvent[],
+  limit = 20,
+): Array<{ from: 'snap' | 'user'; text: string }> {
+  const messages: Array<{ from: 'snap' | 'user'; text: string }> = [];
+  for (const event of events) {
+    if (event.kind === 'message_sent') messages.push({ from: 'snap', text: event.summary });
+    else if (event.kind === 'message_received') messages.push({ from: 'user', text: event.summary });
+  }
+  return messages.slice(-limit);
+}
+
+/** Renders the context as the compact block the model reads. */
+export function renderContext(context: AgentContext): string {
+  const days = context.lastSevenDays
+    .map((day) => {
+      const mark = day.workouts > 0 ? `${day.workouts}x` : day.skipped ? 'skipped' : '-';
+      return `${day.date} ${mark}`;
+    })
+    .join('\n');
+
+  const commitments = context.openCommitments.length
+    ? context.openCommitments
+        .map(
+          (c) =>
+            `- ${c.id} "${c.text}" due ${c.dueAt} (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status}`,
+        )
+        .join('\n')
+    : '- none';
+
+  const conversation = context.recentMessages.length
+    ? context.recentMessages.map((m) => `${m.from}: ${m.text}`).join('\n')
+    : '(nothing yet)';
+
+  return [
+    `now: ${context.now} (${context.timezone})`,
+    `user: ${context.name}`,
+    `weekly goal: ${context.weeklyGoal}, done this week: ${context.workoutsThisWeek}`,
+    '',
+    'last 7 days:',
+    days,
+    '',
+    'open commitments:',
+    commitments,
+    '',
+    'recent conversation:',
+    conversation,
+  ].join('\n');
+}
+
+/** One-line display summary for the `context` trace event. */
+export function summarizeContext(context: AgentContext): string {
+  const today = context.lastSevenDays.at(-1);
+  const yesterday = context.lastSevenDays.at(-2);
+  const parts = [
+    today && today.workouts > 0 ? `${today.workouts} workout today` : 'no workout today',
+  ];
+  if (yesterday?.skipped) parts.push('skipped yesterday');
+  else if (yesterday && yesterday.workouts > 0) parts.push('trained yesterday');
+  parts.push(`${context.workoutsThisWeek}/${context.weeklyGoal} this week`);
+
+  const staked = context.openCommitments
+    .filter((c) => c.stake.status === 'held')
+    .reduce((sum, c) => sum + c.stake.lamports, 0);
+  if (staked > 0) parts.push(`${(staked / 1_000_000_000).toFixed(2)} SOL staked`);
+
+  return parts.join(' · ');
+}
