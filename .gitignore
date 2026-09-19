@@ -24,3 +24,6 @@ dist/
 target/
 .anchor/
 test-ledger/
+
+# Vercel CLI local state (contains deployment credentials)
+.vercel/
