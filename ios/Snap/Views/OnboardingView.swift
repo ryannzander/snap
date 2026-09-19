@@ -5,6 +5,10 @@ import SwiftUI
 /// The order is deliberate: we ask for the cheap things first (name, goal), explain the
 /// stake *before* anyone is surprised by it, and only then put up the HealthKit sheet —
 /// with the reason on screen behind it.
+///
+/// Every page is the same shape as the reference's check-in: chrome across the top,
+/// an illustration, the question in grey, the explanation, and the answer as a big
+/// statement at the bottom — with the next arrow under the thumb.
 struct OnboardingView: View {
     @Environment(AppModel.self) private var model
 
@@ -70,35 +74,31 @@ struct OnboardingView: View {
 
     // MARK: - Chrome
 
+    /// Back on the left, the dashes in the middle, a cross on the right that starts the
+    /// flow over. The hello page shows none of it — it's a cover, not a step.
     private var header: some View {
         HStack {
-            Button {
-                back()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(Theme.ink)
-                    .frame(width: 44, height: 44)
-                    .contentShape(.rect)
-            }
-            .opacity(page == .hello ? 0 : 1)
-            .disabled(page == .hello)
-            .accessibilityLabel("back")
+            Button { back() } label: { Image(systemName: "chevron.left") }
+                .buttonStyle(ChromeButtonStyle())
+                .accessibilityLabel("back")
 
             Spacer()
-            ProgressDashes(count: Page.allCases.count, index: page.rawValue)
+            ProgressDashes(count: Page.allCases.count - 1, index: page.rawValue - 1)
                 .frame(height: 44)
                 .contentShape(.rect)
                 // The debug panel is otherwise unreachable before a token exists, and the
                 // server URL is the one thing that can fix a failed onboard.
                 .onLongPressGesture(minimumDuration: 0.7) { showDebug = true }
-                .accessibilityLabel("step \(page.rawValue + 1) of \(Page.allCases.count)")
+                .accessibilityLabel("step \(page.rawValue) of \(Page.allCases.count - 1)")
             Spacer()
 
-            // Balances the back chevron so the dashes sit dead centre.
-            Color.clear.frame(width: 44, height: 44)
+            Button { startOver() } label: { Image(systemName: "xmark") }
+                .buttonStyle(ChromeButtonStyle())
+                .accessibilityLabel("start over")
         }
         .padding(.top, Theme.Space.xs)
+        .opacity(page == .hello ? 0 : 1)
+        .disabled(page == .hello)
     }
 
     private var footer: some View {
@@ -115,6 +115,7 @@ struct OnboardingView: View {
                         Text("can't reach snap. hold the dashes up top to check the server.")
                             .font(Theme.body(14))
                             .foregroundStyle(Theme.danger)
+                            .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel("error: \(model.lastError ?? "onboarding failed")")
                     }
@@ -126,16 +127,17 @@ struct OnboardingView: View {
                     .disabled(submitting)
 
                     Button("skip for now") { Task { await finish(health: false) } }
-                        .font(Theme.body(15))
+                        .font(Theme.medium(15))
                         .foregroundStyle(Theme.inkDim)
                         .disabled(submitting)
                 }
             default:
                 HStack {
                     Spacer()
-                    Button { advance() } label: { Image(systemName: "arrow.right") }
+                    Button { advance() } label: { Image(systemName: "chevron.right") }
                         .buttonStyle(CircleButtonStyle(enabled: canAdvance))
                         .disabled(!canAdvance)
+                        .accessibilityLabel("next")
                 }
             }
         }
@@ -163,6 +165,16 @@ struct OnboardingView: View {
         page = previous
     }
 
+    /// The cross. Back to the cover with the answers cleared, so the flow can be shown
+    /// again from the top without killing the app.
+    private func startOver() {
+        nameFocused = false
+        name = ""
+        goal = 4
+        attemptFailed = false
+        page = .hello
+    }
+
     /// Permission first so the system sheet appears over the page explaining why.
     /// A denial still continues — the app just won't sync.
     ///
@@ -181,17 +193,19 @@ struct OnboardingView: View {
 
 // MARK: - Pages
 
+/// The cover: the line up top, Snap himself filling the bottom of the screen.
 private struct HelloPage: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        VStack(spacing: 0) {
             Spacer()
-            BubbleMark(size: 76)
             Statement("meet snap.\nyour gym bro\nin your texts.")
-            Caption("he knows when you said you'd go.\nand he checks.")
             Spacer()
-            Spacer()
+            SnapMark(size: 300)
+                .offset(x: -30)
+                .accessibilityHidden(true)
+            Spacer(minLength: Theme.Space.m)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -201,14 +215,19 @@ private struct NamePage: View {
     let submit: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.l) {
+        VStack(spacing: Theme.Space.m) {
             Spacer()
-            Statement("what do i\ncall you?")
+            SnapMark(size: 120)
+            Question("what should\nsnap call you?")
+            Explanation("first name is plenty. it's what he'll text you as.")
 
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            Spacer()
+
+            VStack(spacing: Theme.Space.xs) {
                 TextField("", text: $name, prompt: Text("your name").foregroundStyle(Theme.inkDim))
-                    .font(Theme.display(34))
+                    .font(Theme.display(38))
                     .foregroundStyle(Theme.ink)
+                    .multilineTextAlignment(.center)
                     .textContentType(.givenName)
                     .autocorrectionDisabled()
                     .submitLabel(.done)
@@ -221,14 +240,14 @@ private struct NamePage: View {
 
                 Rectangle()
                     .fill(focused ? Theme.ink : Theme.hairline)
-                    .frame(height: 2)
+                    .frame(width: 180, height: 2)
                     .animation(.snappy, value: focused)
             }
 
             Spacer()
             Spacer()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
         // Focus after the page transition has settled; focusing mid-transition is the
         // classic way for the keyboard to silently not appear.
         .task { @MainActor in
@@ -238,130 +257,188 @@ private struct NamePage: View {
     }
 }
 
+/// The answer is a sentence that rewrites itself as the slider moves — the reference's
+/// "Last night / I slept quite well." beat, with the number said out loud.
 private struct GoalPage: View {
     @Binding var goal: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.l) {
+        VStack(spacing: Theme.Space.m) {
             Spacer()
-            Statement("how many days\na week?")
-            Caption("miss the number and snap has something to say about it.")
+            DumbbellMark()
+                .frame(width: 180, height: 110)
+            Question("how many days\na week?")
+            Explanation("this is the number snap holds you to. miss it and he has something to say. after a week you'll see how you did on the today screen.")
 
-            HStack(spacing: 6) {
-                ForEach(1...7, id: \.self) { day in
-                    Button {
-                        goal = day
-                    } label: {
-                        Text("\(day)")
-                            .font(Theme.numerals(20))
-                            .foregroundStyle(day <= goal ? Theme.ink : Theme.inkDim)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 58)
-                            .background(
-                                RoundedRectangle(cornerRadius: 16)
-                                    .fill(day <= goal ? Theme.accent : Theme.surfaceAlt)
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(day) days a week")
-                    .accessibilityAddTraits(day == goal ? .isSelected : [])
-                }
+            Spacer()
+
+            VStack(spacing: 4) {
+                Text("every week")
+                    .font(Theme.body(30))
+                    .foregroundStyle(Theme.inkDim)
+                Text(Self.statement(for: goal))
+                    .font(Theme.display(34))
+                    .foregroundStyle(Theme.ink)
+                    .contentTransition(.numericText())
+                    .animation(.snappy(duration: 0.2), value: goal)
             }
-            .animation(.snappy(duration: 0.2), value: goal)
+            .accessibilityElement(children: .combine)
 
-            // The chips read as a meter; this says the number out loud, and survives
-            // being read off a mirrored screen.
-            Text("\(goal) \(goal == 1 ? "day" : "days") a week")
-                .font(Theme.display(28))
-                .foregroundStyle(Theme.ink)
-                .contentTransition(.numericText())
-                .animation(.snappy(duration: 0.2), value: goal)
+            SnapSlider(value: $goal, range: 1...7, minLabel: "once", maxLabel: "every day")
+                .padding(.horizontal, Theme.Space.xs)
+                .accessibilityLabel("days a week")
 
-            Spacer()
             Spacer()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
+    }
+
+    static func statement(for goal: Int) -> String {
+        switch goal {
+        case 1: "i'll train once."
+        case 7: "i'll train every day."
+        default: "i'll train \(goal) days."
+        }
     }
 }
 
+/// The stake gets its own beat, laid out like a plan page: the headline, the one line
+/// in colour, then a card of what you get — with the row that costs money marked.
 private struct DealPage: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
             Spacer()
-            Statement("here's\nthe deal.")
+
+            VStack(alignment: .leading, spacing: Theme.Space.s) {
+                Text("put money\non it.")
+                    .font(Theme.display(40))
+                    .foregroundStyle(Theme.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                // Segment styles on concatenated text: the number takes the gradient,
+                // the words around it stay grey.
+                (Text("with ").foregroundStyle(Theme.inkDim)
+                    + Text("0.05 SOL").foregroundStyle(Theme.gradient).fontWeight(.bold)
+                    + Text(" on the line, every plan.").foregroundStyle(Theme.inkDim))
+                    .font(Theme.body(20))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             VStack(spacing: 0) {
-                DealRow(n: "1", text: "you text snap a plan.\n\u{201C}gym at 7, $5 on it\u{201D}")
+                DealRow(icon: "message.fill", title: "text a plan",
+                        text: "\u{201C}gym at 7, $5 on it\u{201D} is enough. snap turns it into a commitment.")
                 Divider().overlay(Theme.hairline)
-                DealRow(n: "2", text: "he watches your workouts.\nno photos. no honor system.")
+                DealRow(icon: "heart.fill", title: "he checks, not asks",
+                        text: "your watch tells him whether you went. no photos, no honor system.")
                 Divider().overlay(Theme.hairline)
-                DealRow(n: "3", text: "you go, you get it back.\nyou skip, half goes to charity.")
+                DealRow(icon: "lock.fill", title: "show up, get it back",
+                        text: "go and the stake comes home. skip and half of it goes to charity.",
+                        pill: "SOL")
             }
-            .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.surface))
+            .snapCard()
+
+            Text("held on solana devnet · returned the moment your workout lands")
+                .font(Theme.body(14))
+                .foregroundStyle(Theme.inkDim)
+                .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
 
             Spacer()
-            Spacer()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
     }
 }
 
 private struct DealRow: View {
-    let n: String
+    let icon: String
+    let title: String
     let text: String
+    var pill: String?
 
     var body: some View {
-        HStack(alignment: .top, spacing: Theme.Space.s) {
-            Text(n)
-                .font(Theme.numerals(15))
+        HStack(alignment: .center, spacing: Theme.Space.s) {
+            Image(systemName: icon)
+                .font(.system(size: 26, weight: .semibold))
                 .foregroundStyle(Theme.ink)
-                .frame(width: 30, height: 30)
-                .background(Circle().fill(Theme.accent))
+                .frame(width: 44)
 
-            Text(text)
-                .font(Theme.body(16))
-                .foregroundStyle(Theme.ink)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(Theme.medium(17))
+                    .foregroundStyle(Theme.ink)
+                Text(text)
+                    .font(Theme.body(15))
+                    .foregroundStyle(Theme.inkDim)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Spacer(minLength: 0)
+
+            if let pill {
+                Text(pill)
+                    .font(Theme.medium(13))
+                    .foregroundStyle(Theme.surface)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Theme.tint))
+            }
         }
-        .padding(Theme.Space.m)
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Space.s + 4)
     }
 }
 
 private struct HealthPage: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
+        VStack(spacing: Theme.Space.m) {
             Spacer()
             Image(systemName: "heart.text.square.fill")
-                .font(.system(size: 62))
+                .font(.system(size: 88))
                 .foregroundStyle(Theme.ink)
-            Statement("i need to see\nyour workouts.")
-            Caption("that's the whole trick — snap reads HealthKit, so he never has to ask if you went.\n\napple watch, strava, hevy, nike run club, whoop — anything that logs a workout counts. you just need one of them.\n\nnothing leaves your phone except the workout itself.")
+            Question("i need to see\nyour workouts.")
+            Explanation("that's the whole trick. snap reads HealthKit, so he never has to ask if you went.\n\napple watch, strava, hevy, nike run club, whoop — anything that logs a workout counts. you only need one of them.\n\nnothing leaves your phone except the workout itself.")
             Spacer()
             Spacer()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity)
     }
 }
 
 // MARK: - Bits
 
+/// The big bold line, centred.
 private struct Statement: View {
     let text: String
     init(_ text: String) { self.text = text }
 
     var body: some View {
         Text(text)
-            .font(Theme.display(40))
+            .font(Theme.display(38))
             .foregroundStyle(Theme.ink)
-            .lineSpacing(1)
+            .multilineTextAlignment(.center)
+            .lineSpacing(2)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-private struct Caption: View {
+/// The question, in grey — the answer is what gets the ink.
+private struct Question: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(Theme.medium(22))
+            .foregroundStyle(Theme.inkDim)
+            .multilineTextAlignment(.center)
+            .lineSpacing(2)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct Explanation: View {
     let text: String
     init(_ text: String) { self.text = text }
 
@@ -369,51 +446,30 @@ private struct Caption: View {
         Text(text)
             .font(Theme.body(16))
             .foregroundStyle(Theme.inkDim)
+            .multilineTextAlignment(.center)
             .lineSpacing(4)
             .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, Theme.Space.xs)
     }
 }
 
-/// The wordmark's bubble, drawn rather than shipped as an asset so it scales cleanly.
-struct BubbleMark: View {
-    var size: CGFloat = 60
-
+/// The goal page's illustration: a dumbbell in the same flat ink as the mark.
+private struct DumbbellMark: View {
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.29)
-                .fill(Theme.accent)
-                .frame(width: size, height: size * 0.68)
-
-            HStack(spacing: size * 0.04) {
-                plate(0.11, 0.115)
-                plate(0.16, 0.17)
-                Capsule().fill(Theme.ink).frame(width: size * 0.21, height: size * 0.05)
-                plate(0.16, 0.17)
-                plate(0.11, 0.115)
+        Canvas { context, size in
+            let s = size.width / 180
+            let midY = size.height / 2
+            func plate(x: CGFloat, w: CGFloat, h: CGFloat) -> Path {
+                Path(roundedRect: CGRect(x: x * s, y: midY - h * s / 2, width: w * s, height: h * s),
+                     cornerRadius: 8 * s)
+            }
+            context.fill(Path(roundedRect: CGRect(x: 40 * s, y: midY - 7 * s, width: 100 * s, height: 14 * s),
+                              cornerRadius: 7 * s), with: .color(Theme.ink))
+            for path in [plate(x: 8, w: 16, h: 58), plate(x: 28, w: 20, h: 84),
+                         plate(x: 132, w: 20, h: 84), plate(x: 156, w: 16, h: 58)] {
+                context.fill(path, with: .color(Theme.ink))
             }
         }
-        .overlay(alignment: .bottomLeading) {
-            Triangle()
-                .fill(Theme.accent)
-                .frame(width: size * 0.16, height: size * 0.19)
-                .offset(x: size * 0.13, y: size * 0.14)
-        }
-    }
-
-    private func plate(_ h: CGFloat, _ w: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: size * 0.02)
-            .fill(Theme.ink)
-            .frame(width: size * w * 0.36, height: size * h)
-    }
-}
-
-private struct Triangle: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
-        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-        path.closeSubpath()
-        return path
+        .accessibilityHidden(true)
     }
 }

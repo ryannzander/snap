@@ -9,39 +9,34 @@ struct LinkView: View {
     @State private var copiedAt: Date?
     @State private var showDebug = false
 
-    private var imessageNumber: String? {
-        guard let number = model.contact?.imessage, !number.isEmpty else { return nil }
-        return number
-    }
-
-    private var telegramBot: String? {
-        guard let bot = model.contact?.telegram, !bot.isEmpty else { return nil }
-        return bot
-    }
+    private var imessageNumber: String? { ThreadLink.imessage(model.contact) }
+    private var telegramBot: String? { ThreadLink.telegram(model.contact) }
 
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
 
-            VStack(alignment: .leading, spacing: Theme.Space.m) {
+            VStack(spacing: Theme.Space.m) {
                 Spacer()
 
-                VStack(alignment: .leading, spacing: Theme.Space.m) {
-                    BubbleMark(size: 76)
+                VStack(spacing: Theme.Space.m) {
+                    SnapMark(size: 120)
 
                     Text("last thing.\ntext snap.")
-                        .font(Theme.display(40))
+                        .font(Theme.display(38))
                         .foregroundStyle(Theme.ink)
+                        .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .contentShape(.rect)
                 // The only way out if linking is broken — otherwise the debug panel is
-                // unreachable, because it normally lives behind the brain screen.
+                // unreachable, because it normally lives behind the today screen.
                 .onLongPressGesture(minimumDuration: 0.7) { showDebug = true }
 
-                Text("he can't text you until you text him first. send exactly this:")
+                Text("he can't text you until you text him first.\nsend exactly this:")
                     .font(Theme.body(16))
                     .foregroundStyle(Theme.inkDim)
+                    .multilineTextAlignment(.center)
                     .lineSpacing(4)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -51,20 +46,21 @@ struct LinkView: View {
 
                 VStack(spacing: Theme.Space.s) {
                     if let number = imessageNumber {
-                        Button("open imessage") { open(imessage: number) }
+                        Button("open imessage") { ThreadLink.open(imessage: number, body: "yo \(model.linkCode)") }
                             .buttonStyle(PillButtonStyle())
                     }
                     if let bot = telegramBot {
                         // Primary when it's the only channel; otherwise the pale secondary.
-                        Button("open telegram") { open(telegram: bot) }
-                            .buttonStyle(PillButtonStyle(filled: imessageNumber == nil))
+                        Button("open telegram") { ThreadLink.open(telegram: bot, start: model.linkCode) }
+                            .buttonStyle(PillButtonStyle(kind: imessageNumber == nil ? .filled : .pale))
                     }
                     if imessageNumber == nil && telegramBot == nil {
                         // Onboard came back without a contact. Say so; a spinner with no
                         // address to text is a dead end.
-                        Text("snap didn't send a number to text. hold the wordmark to check the server.")
+                        Text("snap didn't send a number to text. hold the mark to check the server.")
                             .font(Theme.body(14))
                             .foregroundStyle(Theme.danger)
+                            .multilineTextAlignment(.center)
                             .fixedSize(horizontal: false, vertical: true)
                     }
 
@@ -83,6 +79,7 @@ struct LinkView: View {
         .sheet(isPresented: $showDebug) { DebugPanel() }
     }
 
+    /// The code, in the app's one colour: this is the moment the deal becomes real.
     private var codeCard: some View {
         Button {
             UIPasteboard.general.string = "yo \(model.linkCode)"
@@ -97,18 +94,20 @@ struct LinkView: View {
                 }
             }
         } label: {
-            HStack {
-                Spacer()
+            VStack(spacing: 6) {
                 Text(copiedAt != nil ? "copied" : "yo \(model.linkCode)")
-                    .font(Theme.numerals(44))
-                    .foregroundStyle(Theme.ink)
+                    .font(Theme.numerals(46))
+                    .foregroundStyle(Theme.surface)
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
                     .contentTransition(.opacity)
-                Spacer()
+                Text("tap to copy")
+                    .font(Theme.body(14))
+                    .foregroundStyle(Theme.surface.opacity(0.75))
             }
+            .frame(maxWidth: .infinity)
             .padding(.vertical, Theme.Space.l)
-            .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.accent))
+            .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.gradient))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("your link code is yo \(model.linkCode). double-tap to copy.")
@@ -116,24 +115,59 @@ struct LinkView: View {
         .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: pulse)
         .onAppear { pulse = true }
     }
+}
 
-    // MARK: - Handoff
+// MARK: - Handoff
 
-    private func open(imessage number: String) {
-        let body = "yo \(model.linkCode)".addingPercentEncoding(
-            withAllowedCharacters: .alphanumerics
-        ) ?? ""
-        // `&body=` (not `?body=`) is what Messages actually honours for sms: URLs.
-        openURL("sms:\(number)&body=\(body)")
+/// The two doors into Snap's thread. Used by the link screen with the code, and by the
+/// today screen's `+` and "text snap" with nothing pre-filled.
+enum ThreadLink {
+    static func imessage(_ contact: OnboardResponse.Contact?) -> String? {
+        guard let number = contact?.imessage, !number.isEmpty else { return nil }
+        return number
     }
 
-    private func open(telegram bot: String) {
-        let handle = bot.hasPrefix("@") ? String(bot.dropFirst()) : bot
-        openURL("https://t.me/\(handle)?start=\(model.linkCode)")
+    static func telegram(_ contact: OnboardResponse.Contact?) -> String? {
+        guard let bot = contact?.telegram, !bot.isEmpty else { return nil }
+        return bot
     }
 
-    private func openURL(_ string: String) {
-        guard let url = URL(string: string) else { return }
+    /// iMessage first, since that's where the demo lives; Telegram when it's all we have.
+    static func url(contact: OnboardResponse.Contact?, body: String? = nil) -> URL? {
+        if let number = imessage(contact) {
+            return imessageURL(number, body: body)
+        }
+        if let bot = telegram(contact) {
+            return telegramURL(bot, start: body)
+        }
+        return nil
+    }
+
+    static func open(contact: OnboardResponse.Contact?) {
+        guard let url = url(contact: contact) else { return }
         UIApplication.shared.open(url)
+    }
+
+    static func open(imessage number: String, body: String) {
+        guard let url = imessageURL(number, body: body) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    static func open(telegram bot: String, start: String) {
+        guard let url = telegramURL(bot, start: start) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    private static func imessageURL(_ number: String, body: String?) -> URL? {
+        guard let body, !body.isEmpty else { return URL(string: "sms:\(number)") }
+        let encoded = body.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        // `&body=` (not `?body=`) is what Messages actually honours for sms: URLs.
+        return URL(string: "sms:\(number)&body=\(encoded)")
+    }
+
+    private static func telegramURL(_ bot: String, start: String?) -> URL? {
+        let handle = bot.hasPrefix("@") ? String(bot.dropFirst()) : bot
+        guard let start, !start.isEmpty else { return URL(string: "https://t.me/\(handle)") }
+        return URL(string: "https://t.me/\(handle)?start=\(start)")
     }
 }
