@@ -449,6 +449,32 @@ export class UserAgent extends DurableObject<Env> {
   }
 
   /**
+   * Demo only. Puts a message in front of the agent exactly as an inbound text
+   * does, without the channel vendor in the path.
+   *
+   * The webhook backgrounds the turn because Linq retries anything slow. Here
+   * there is nothing retrying, so this awaits it: a caller that gets the
+   * decision back is what makes the loop measurable at all, and what lets a
+   * debug button show a result rather than hoping.
+   */
+  async receiveDebugMessage(
+    token: string,
+    text: string,
+  ): Promise<DoResult<{ optedOut: boolean; ran: boolean }>> {
+    await this.loadClock();
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    const received = await this.receiveMessage(text);
+    if (!received.ok) return received;
+    if (received.value.optedOut) return ok({ optedOut: true, ran: false });
+
+    const agent = await this.runAgent(`the user just texted you: "${text}". decide what to do.`);
+    if (!agent.ok) return agent;
+    return ok({ optedOut: false, ran: agent.value.ran });
+  }
+
+  /**
    * Sends a burst of texts and traces each one. Every channel is traced the
    * same way, so the brain screen is identical whether or not delivery is real.
    */

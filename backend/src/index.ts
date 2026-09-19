@@ -66,6 +66,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'POST');
       return seed(request, env);
 
+    case '/debug/message':
+      requireMethod(request, 'POST');
+      return debugMessage(request, env);
+
     case '/webhooks/linq':
       requireMethod(request, 'POST');
       return linqWebhook(request, env, ctx);
@@ -76,6 +80,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
 }
 
 // --- handlers --------------------------------------------------------------
+
+/** Longest inbound text /debug/message will accept — an SMS, not an essay. */
+const MAX_INBOUND_TEXT = 1000;
 
 async function onboard(request: Request, env: Env): Promise<Response> {
   const input = parseOnboardRequest(await readJsonBody(request));
@@ -218,6 +225,44 @@ async function timewarp(request: Request, env: Env): Promise<Response> {
   }
 
   return toResponse(await stub.timewarp(token, now));
+}
+
+/**
+ * Demo only. Delivers a message to the agent as though it had arrived as a
+ * text, without the channel vendor in the path.
+ *
+ * Until this existed a real Linq webhook was the only way to reach the agent,
+ * which made a sandbox API a single point of failure for the demo and put
+ * agent reliability out of reach of measurement — every trial cost real
+ * messages out of a 100/day budget.
+ *
+ * Same guard as the other debug routes: bearer token plus X-Debug-Key. It is
+ * not a way in, it is a way to skip the vendor: the caller must already hold
+ * the user's token.
+ */
+async function debugMessage(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/message');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+
+  const { token, stub } = authenticate(request, env);
+  const body = await readJsonBody(request);
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+  }
+
+  const text = (body as Record<string, unknown>).text;
+  if (typeof text !== 'string' || text.trim() === '') {
+    throw new HttpError(400, 'bad_request', 'text must be a non-empty string');
+  }
+  if (text.length > MAX_INBOUND_TEXT) {
+    throw new HttpError(400, 'bad_request', `text must be at most ${MAX_INBOUND_TEXT} characters`);
+  }
+
+  return toResponse(await stub.receiveDebugMessage(token, text.trim()));
 }
 
 /** Demo only. Same guard as timewarp: bearer token plus X-Debug-Key. */

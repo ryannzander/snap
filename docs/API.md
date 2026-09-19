@@ -101,6 +101,26 @@ Sets the agent's clock for this user and fires any alarm that is now due. `{ "no
 
 Demo only. Requires header `X-Debug-Key`. No body. Seeds a plausible week of history for this user (2/4 done, skipped yesterday, one earlier excuse).
 
+## POST /debug/message
+
+Demo only. Requires header `X-Debug-Key` **and** the bearer token.
+
+```json
+{ "text": "gym at 7 tonight" }
+```
+
+Delivers a message to the agent exactly as an inbound text does, without the channel vendor in the path. Use it when the messaging channel is unavailable, or to drive the loop without spending the sandbox message budget.
+
+```json
+{ "optedOut": false, "ran": true }
+```
+
+Unlike the webhook, this **waits for the turn to finish** before responding — there is no delivery service retrying, so the caller gets the decision back rather than having to poll. Expect it to take as long as the model does, up to about 30 seconds. Poll `GET /trace` afterwards for what happened.
+
+`ran` is `false` when no model is configured, and `optedOut` is `true` when the user has opted out — in both cases the message is still recorded.
+
+`text` must be a non-empty string of at most 1000 characters.
+
 ## Errors
 
 Every non-2xx response has the same body:
