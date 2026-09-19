@@ -158,7 +158,7 @@ async function linqWebhook(request: Request, env: Env, ctx: ExecutionContext): P
     return json({ ok: true, ignored: 'duplicate delivery' });
   }
 
-  return deliver(env, ctx, inbound.channel, inbound.chatId, inbound.text);
+  return deliver(env, ctx, inbound.channel, inbound.chatId, inbound.text, inbound.imageUrls);
 }
 
 /** `yo <code>` links a chat to a user; anything else goes to the linked user. */
@@ -168,6 +168,7 @@ async function deliver(
   channel: ChannelName,
   chatId: string,
   text: string,
+  imageUrls: string[] = [],
 ): Promise<Response> {
   const code = /^\s*yo[\s,]+(\d{4})\s*[.!]?\s*$/i.exec(text)?.[1];
 
@@ -186,15 +187,14 @@ async function deliver(
   if (!userId) return json({ ok: true, ignored: 'chat not linked' });
 
   const stub = userStub(env, userId);
-  const received = await stub.receiveMessage(text);
+  const received = await stub.receiveMessage(text, imageUrls);
 
   // The model, then a paced burst of texts, is far longer than a webhook
   // should be held open — and Linq retries anything slow. Acknowledge now and
-  // let the turn finish in the background.
+  // let the turn finish in the background. A photo adds a look at the image
+  // before the turn; that happens in the background too.
   if (received.ok && !received.value.optedOut) {
-    ctx.waitUntil(
-      stub.runAgent(`the user just texted you: "${text}". decide what to do.`, true) as unknown as Promise<unknown>,
-    );
+    ctx.waitUntil(stub.runInboundTurn(text, imageUrls) as unknown as Promise<unknown>);
   }
   return json({ ok: true, received: true });
 }
@@ -254,15 +254,22 @@ async function debugMessage(request: Request, env: Env): Promise<Response> {
     throw new HttpError(400, 'bad_request', 'body must be a JSON object');
   }
 
-  const text = (body as Record<string, unknown>).text;
-  if (typeof text !== 'string' || text.trim() === '') {
-    throw new HttpError(400, 'bad_request', 'text must be a non-empty string');
+  const record = body as Record<string, unknown>;
+  const imageUrl = record.imageUrl;
+  if (imageUrl !== undefined && (typeof imageUrl !== 'string' || !/^https?:\/\//i.test(imageUrl))) {
+    throw new HttpError(400, 'bad_request', 'imageUrl must be an http(s) URL');
+  }
+  const imageUrls = typeof imageUrl === 'string' ? [imageUrl] : [];
+
+  const text = record.text ?? '';
+  if (typeof text !== 'string' || (text.trim() === '' && imageUrls.length === 0)) {
+    throw new HttpError(400, 'bad_request', 'text must be a non-empty string, or send an imageUrl');
   }
   if (text.length > MAX_INBOUND_TEXT) {
     throw new HttpError(400, 'bad_request', `text must be at most ${MAX_INBOUND_TEXT} characters`);
   }
 
-  return toResponse(await stub.receiveDebugMessage(token, text.trim()));
+  return toResponse(await stub.receiveDebugMessage(token, text.trim(), imageUrls));
 }
 
 /** Demo only. Same guard as timewarp: bearer token plus X-Debug-Key. */
