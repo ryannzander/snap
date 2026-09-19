@@ -27,6 +27,9 @@ struct OnboardingView: View {
     @State private var page: Page = .initial
     @State private var name = ""
     @State private var goal = 4
+    @State private var submitting = false
+    @State private var attemptFailed = false
+    @State private var showDebug = false
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -36,27 +39,33 @@ struct OnboardingView: View {
             VStack(spacing: 0) {
                 header
 
+                // The identity (and so the transition) is on the page, but the frame is on
+                // the container: with both on the same view, the outgoing and incoming
+                // pages briefly share the VStack's height and every page change squashes.
                 ZStack {
-                    switch page {
-                    case .hello:  HelloPage()
-                    case .name:   NamePage(name: $name, focused: $nameFocused)
-                    case .goal:   GoalPage(goal: $goal)
-                    case .deal:   DealPage()
-                    case .health: HealthPage()
+                    Group {
+                        switch page {
+                        case .hello:  HelloPage()
+                        case .name:   NamePage(name: $name, focused: $nameFocused, submit: advance)
+                        case .goal:   GoalPage(goal: $goal)
+                        case .deal:   DealPage()
+                        case .health: HealthPage()
+                        }
                     }
+                    .transition(.asymmetric(
+                        insertion: .offset(x: 40).combined(with: .opacity),
+                        removal: .offset(x: -40).combined(with: .opacity)
+                    ))
+                    .id(page)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .transition(.asymmetric(
-                    insertion: .offset(x: 40).combined(with: .opacity),
-                    removal: .offset(x: -40).combined(with: .opacity)
-                ))
-                .id(page)
 
                 footer
             }
             .padding(.horizontal, Theme.screenPad)
         }
         .animation(.snappy(duration: 0.28), value: page)
+        .sheet(isPresented: $showDebug) { DebugPanel() }
     }
 
     // MARK: - Chrome
@@ -74,9 +83,16 @@ struct OnboardingView: View {
             }
             .opacity(page == .hello ? 0 : 1)
             .disabled(page == .hello)
+            .accessibilityLabel("back")
 
             Spacer()
             ProgressDashes(count: Page.allCases.count, index: page.rawValue)
+                .frame(height: 44)
+                .contentShape(.rect)
+                // The debug panel is otherwise unreachable before a token exists, and the
+                // server URL is the one thing that can fix a failed onboard.
+                .onLongPressGesture(minimumDuration: 0.7) { showDebug = true }
+                .accessibilityLabel("step \(page.rawValue + 1) of \(Page.allCases.count)")
             Spacer()
 
             // Balances the back chevron so the dashes sit dead centre.
@@ -93,16 +109,26 @@ struct OnboardingView: View {
                     .buttonStyle(PillButtonStyle())
             case .health:
                 VStack(spacing: Theme.Space.s) {
-                    Button(model.isWorking ? "one sec…" : "connect & finish") {
+                    // No error dialog, ever — but a tap that does nothing is worse. One dim
+                    // line in voice, only after a failed attempt on this page.
+                    if attemptFailed, !submitting {
+                        Text("can't reach snap. hold the dashes up top to check the server.")
+                            .font(Theme.body(14))
+                            .foregroundStyle(Theme.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("error: \(model.lastError ?? "onboarding failed")")
+                    }
+
+                    Button(submitting ? "one sec…" : "connect & finish") {
                         Task { await finish() }
                     }
-                    .buttonStyle(PillButtonStyle(enabled: !model.isWorking))
-                    .disabled(model.isWorking)
+                    .buttonStyle(PillButtonStyle(enabled: !submitting))
+                    .disabled(submitting)
 
                     Button("skip for now") { Task { await finish(health: false) } }
                         .font(Theme.body(15))
                         .foregroundStyle(Theme.inkDim)
-                        .disabled(model.isWorking)
+                        .disabled(submitting)
                 }
             default:
                 HStack {
@@ -139,9 +165,17 @@ struct OnboardingView: View {
 
     /// Permission first so the system sheet appears over the page explaining why.
     /// A denial still continues — the app just won't sync.
+    ///
+    /// `submitting` is set here, not in the model, because the HealthKit sheet is up
+    /// before `onboard` runs and a second tap during it would create a second user.
     private func finish(health: Bool = true) async {
+        guard !submitting else { return }
+        submitting = true
+        defer { submitting = false }
         if health { await model.requestHealthAuthorization() }
         await model.onboard(name: name, goal: goal)
+        // Still here means the request didn't succeed; the model kept the reason.
+        attemptFailed = model.phase == .onboarding
     }
 }
 
@@ -164,6 +198,7 @@ private struct HelloPage: View {
 private struct NamePage: View {
     @Binding var name: String
     @FocusState.Binding var focused: Bool
+    let submit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
@@ -178,6 +213,11 @@ private struct NamePage: View {
                     .autocorrectionDisabled()
                     .submitLabel(.done)
                     .focused($focused)
+                    .accessibilityLabel("your name")
+                    // "done" on the keyboard means the same as the arrow.
+                    .onSubmit {
+                        if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { submit() }
+                    }
 
                 Rectangle()
                     .fill(focused ? Theme.ink : Theme.hairline)
@@ -189,7 +229,12 @@ private struct NamePage: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear { focused = true }
+        // Focus after the page transition has settled; focusing mid-transition is the
+        // classic way for the keyboard to silently not appear.
+        .task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            focused = true
+        }
     }
 }
 
@@ -202,7 +247,7 @@ private struct GoalPage: View {
             Statement("how many days\na week?")
             Caption("miss the number and snap has something to say about it.")
 
-            HStack(spacing: 9) {
+            HStack(spacing: 6) {
                 ForEach(1...7, id: \.self) { day in
                     Button {
                         goal = day
@@ -214,13 +259,23 @@ private struct GoalPage: View {
                             .frame(height: 58)
                             .background(
                                 RoundedRectangle(cornerRadius: 16)
-                                    .fill(day <= goal ? Theme.accent : Theme.surface)
+                                    .fill(day <= goal ? Theme.accent : Theme.surfaceAlt)
                             )
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("\(day) days a week")
+                    .accessibilityAddTraits(day == goal ? .isSelected : [])
                 }
             }
             .animation(.snappy(duration: 0.2), value: goal)
+
+            // The chips read as a meter; this says the number out loud, and survives
+            // being read off a mirrored screen.
+            Text("\(goal) \(goal == 1 ? "day" : "days") a week")
+                .font(Theme.display(28))
+                .foregroundStyle(Theme.ink)
+                .contentTransition(.numericText())
+                .animation(.snappy(duration: 0.2), value: goal)
 
             Spacer()
             Spacer()

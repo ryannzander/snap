@@ -18,6 +18,11 @@ enum Keychain {
         }
     }
 
+    /// Non-nil when the last write did not succeed. A token that only lives in memory
+    /// works until the next launch, then the app silently re-onboards as a new user —
+    /// so the failure has to be visible somewhere, and the debug panel is where.
+    private(set) static var lastWriteError: String?
+
     private static var baseQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
@@ -40,17 +45,30 @@ enum Keychain {
         return token
     }
 
+    /// Update in place when the item exists, add it when it doesn't. Deleting first and
+    /// then adding leaves a window with no token at all if the add fails.
     private static func save(_ token: String) {
-        delete()
-        var query = baseQuery
-        query[kSecValueData as String] = Data(token.utf8)
-        // The app reads the token on a HealthKit background wake, so it has to be
-        // readable while the phone is locked.
-        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(query as CFDictionary, nil)
+        let data = Data(token.utf8)
+        let update: [String: Any] = [kSecValueData as String: data]
+        var status = SecItemUpdate(baseQuery as CFDictionary, update as CFDictionary)
+
+        if status == errSecItemNotFound {
+            var query = baseQuery
+            query[kSecValueData as String] = data
+            // The app reads the token on a HealthKit background wake, so it has to be
+            // readable while the phone is locked. `ThisDeviceOnly` keeps a live bearer
+            // token out of device backups.
+            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            status = SecItemAdd(query as CFDictionary, nil)
+        }
+
+        lastWriteError = status == errSecSuccess ? nil : "keychain save failed: OSStatus \(status)"
     }
 
     private static func delete() {
-        SecItemDelete(baseQuery as CFDictionary)
+        let status = SecItemDelete(baseQuery as CFDictionary)
+        lastWriteError = (status == errSecSuccess || status == errSecItemNotFound)
+            ? nil
+            : "keychain delete failed: OSStatus \(status)"
     }
 }

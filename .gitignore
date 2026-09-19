@@ -3,7 +3,12 @@
 .env.*
 !.env.example
 *.pem
+*.p8
+*.p12
+*.cer
+*.mobileprovision
 *-keypair.json
+id.json
 
 # macOS
 .DS_Store

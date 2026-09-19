@@ -31,11 +31,19 @@ final class AppModel {
         static let linkCode = "linkCode"
         static let telegram = "snapTelegram"
         static let imessage = "snapIMessage"
-        static let all = [name, linkCode, telegram, imessage]
+        /// Remembered so a cold launch of a linked phone opens on the brain screen
+        /// instead of flashing the link code until the first `/state` lands.
+        static let linked = "linked"
+        static let all = [name, linkCode, telegram, imessage, linked]
     }
 
     /// New events are shown one at a time so the feed reads like thinking, not like a refresh.
     private static let eventStagger = Duration.milliseconds(350)
+
+    /// A backlog (seeded history, a reconnect replaying the feed) drains at this pace
+    /// instead, so fifty old events don't turn into seventeen seconds of progress bar.
+    private static let backlogStagger = Duration.milliseconds(60)
+    private static let backlogThreshold = 8
 
     /// `/trace` returns at most this many events per call. A full page means there is
     /// more waiting, so poll again immediately instead of sitting out the interval.
@@ -47,6 +55,7 @@ final class AppModel {
     @ObservationIgnored private var token: String?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var authFailed = false
+    @ObservationIgnored private var lifecycleObservers: [any NSObjectProtocol] = []
 
     @ObservationIgnored private var pending: [TraceEvent] = []
     @ObservationIgnored private var lastEventId: Int?
@@ -64,7 +73,31 @@ final class AppModel {
         sync.onError = { [weak self] message in self?.lastError = message }
     }
 
+    /// True when the app is talking to the scripted mock rather than a server.
+    var isMock: Bool { api is MockAPI }
+
+    /// True until the HealthKit sheet has been answered — the one "not syncing" state
+    /// the app can actually name, since HealthKit hides read denial. Stored (not read
+    /// through `sync`) so the brain screen's notice goes away when it changes.
+    private(set) var isHealthAccessUndetermined = false
+
+    private func refreshHealthAccess() {
+        let undetermined = sync.isAuthorizationUndetermined
+        if undetermined != isHealthAccessUndetermined {
+            isHealthAccessUndetermined = undetermined
+        }
+    }
+
     // MARK: - Lifecycle
+
+    /// Registers the HealthKit observer as early as possible. `start()` runs from the
+    /// root view's `.task`, which a background launch for a HealthKit delivery may never
+    /// reach; the observer query has to be re-executed on every launch or iOS stops
+    /// delivering. Safe to call more than once.
+    func startWorkoutSyncIfOnboarded() {
+        guard token != nil else { return }
+        sync.start()
+    }
 
     func start() async {
         guard !started else { return }
@@ -79,6 +112,7 @@ final class AppModel {
         }
 
         observeLifecycle()
+        refreshHealthAccess()
 
         #if DEBUG
         // `SNAP_PHASE=linking|live` drops straight onto a screen against MockAPI, and
@@ -134,7 +168,8 @@ final class AppModel {
             phase = .onboarding
             return
         }
-        phase = .linking
+        // Start where we were last time; the first `/state` corrects it either way.
+        phase = defaults.bool(forKey: Key.linked) ? .live : .linking
         sync.start()
         startPolling()
     }
@@ -143,6 +178,7 @@ final class AppModel {
     /// the app just won't sync.
     func requestHealthAuthorization() async {
         await sync.requestAuthorization()
+        refreshHealthAccess()
     }
 
     func onboard(name rawName: String, goal: Int) async {
@@ -162,6 +198,12 @@ final class AppModel {
 
             token = response.token
             Keychain.token = response.token
+            if let keychainError = Keychain.lastWriteError {
+                // The session works for now but won't survive a relaunch.
+                lastError = describe(keychainError)
+            } else {
+                lastError = nil
+            }
             self.name = name
             linkCode = response.linkCode
             contact = response.snapContact
@@ -170,6 +212,7 @@ final class AppModel {
             defaults.set(response.linkCode, forKey: Key.linkCode)
             defaults.set(response.snapContact.telegram, forKey: Key.telegram)
             defaults.set(response.snapContact.imessage, forKey: Key.imessage)
+            defaults.set(false, forKey: Key.linked)
 
             // Rebuild with the token so everything after this is authenticated.
             api = Config.makeAPI(token: token)
@@ -199,6 +242,12 @@ final class AppModel {
         Keychain.token = nil
         WorkoutSync.clearAnchor()
         Key.all.forEach { defaults.removeObject(forKey: $0) }
+
+        // The mock is a process-wide singleton; without this a second run-through
+        // replays a finished loop instantly.
+        if let mock = api as? MockAPI {
+            Task { await mock.reset() }
+        }
 
         authFailed = false
         token = nil
@@ -247,13 +296,15 @@ final class AppModel {
 
         stateTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.refreshState()
+                guard let self else { break }
+                await self.refreshState()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
         traceTask = Task { [weak self] in
             while !Task.isCancelled {
-                let moreWaiting = await self?.refreshTrace() ?? false
+                guard let self else { break }
+                let moreWaiting = await self.refreshTrace()
                 if !moreWaiting {
                     try? await Task.sleep(for: .seconds(1))
                 }
@@ -271,10 +322,18 @@ final class AppModel {
     private func refreshState() async {
         do {
             let state = try await api.state()
-            self.state = state
+            guard !Task.isCancelled else { return }
+            // Unchanged state is not republished: every assignment invalidates the whole
+            // brain screen, and this runs twice a second for the life of the app.
+            if state != self.state {
+                self.state = state
+            }
             // Onboarding is driven by the token, not by the server.
             if phase != .onboarding {
                 phase = state.linked ? .live : .linking
+                if defaults.bool(forKey: Key.linked) != state.linked {
+                    defaults.set(state.linked, forKey: Key.linked)
+                }
             }
         } catch {
             handle(error)
@@ -285,6 +344,7 @@ final class AppModel {
     private func refreshTrace() async -> Bool {
         do {
             let events = try await api.trace(since: lastEventId)
+            guard !Task.isCancelled else { return false }
             let cursor = lastEventId
             ingest(events)
             // Only chase the next page if the cursor actually moved, so a server that
@@ -300,6 +360,9 @@ final class AppModel {
     /// error once a second. Recovery is "reset app" in the debug panel — deliberately not
     /// automatic, because silently wiping the session mid-demo is worse than a frozen screen.
     private func handle(_ error: Error) {
+        // Our own cancellation (background, reconnect) is not an error worth showing;
+        // it would sit in the debug panel masking whatever someone is trying to read.
+        if Self.isCancellation(error) { return }
         lastError = describe(error)
         if let apiError = error as? APIError, apiError.isUnauthorized {
             authFailed = true
@@ -307,12 +370,20 @@ final class AppModel {
         }
     }
 
+    private static func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
+    }
+
     // MARK: - Trace feed
 
     /// Queues whatever arrived; the drain shows them one at a time even when a single
     /// response carries several.
     private func ingest(_ incoming: [TraceEvent]) {
-        let floor = lastEventId ?? 0
+        // `since` is exclusive, so anything at or below the cursor was already shown.
+        // Before the first page there is no cursor — an event with id 0 must still count.
+        let floor = lastEventId ?? Int.min
         let fresh = incoming.filter { $0.id > floor }.sorted { $0.id < $1.id }
         guard !fresh.isEmpty else { return }
 
@@ -329,7 +400,10 @@ final class AppModel {
             while true {
                 guard let self, !Task.isCancelled, !self.pending.isEmpty else { break }
                 self.events.append(self.pending.removeFirst())
-                try? await Task.sleep(for: Self.eventStagger)
+                let stagger = self.pending.count > Self.backlogThreshold
+                    ? Self.backlogStagger
+                    : Self.eventStagger
+                try? await Task.sleep(for: stagger)
             }
             if let self, self.drainGeneration == generation { self.drainTask = nil }
         }
@@ -347,13 +421,27 @@ final class AppModel {
     // MARK: - Plumbing
 
     private func observeLifecycle() {
+        guard lifecycleObservers.isEmpty else { return }
         let center = NotificationCenter.default
-        center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.startPolling() }
-        }
-        center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.startPolling()
+                self.refreshHealthAccess()
+                // A POST that failed while we were away left the anchor where it was;
+                // HealthKit will not fire again for it, so this is the retry.
+                if self.token != nil {
+                    Task { await self.sync.drain() }
+                }
+            }
+        })
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
             MainActor.assumeIsolated { self?.stopPolling() }
-        }
+        })
     }
 
     private func attempt(_ work: (any SnapAPI) async throws -> Void) async {
@@ -365,7 +453,11 @@ final class AppModel {
     }
 
     private func describe(_ error: Error) -> String {
+        describe(error.localizedDescription)
+    }
+
+    private func describe(_ message: String) -> String {
         let time = Date.now.formatted(date: .omitted, time: .standard)
-        return "\(time) · \(error.localizedDescription)"
+        return "\(time) · \(message)"
     }
 }

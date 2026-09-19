@@ -8,6 +8,9 @@ settings:
     SWIFT_VERSION: "5.0"
     MARKETING_VERSION: "1.0"
     CURRENT_PROJECT_VERSION: "1"
+    # Project-wide so the test bundles sign on a device too. Not a secret — every IPA
+    # carries its team id. Regenerating with xcodegen used to drop this and the app icon.
+    DEVELOPMENT_TEAM: TP6Q77MJ35
 targets:
   Snap:
     type: application
@@ -20,6 +23,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Snap/Info.plist
       properties:
@@ -27,7 +31,6 @@ targets:
         UILaunchScreen: {}
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         UIUserInterfaceStyle: Light
-        UIBackgroundModes: [processing]
         NSHealthShareUsageDescription: Snap reads your workouts so it knows whether you actually went.
         NSHealthUpdateUsageDescription: Snap can save a test workout from its debug panel.
     entitlements:
@@ -66,6 +69,7 @@ schemes:
       config: Debug
     test:
       config: Debug
+      # SnapUITests drives a system HealthKit permission sheet; run it deliberately:
+      #   xcodebuild test -scheme Snap -only-testing:SnapUITests -destination '...'
       targets:
         - SnapTests
-        - SnapUITests

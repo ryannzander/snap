@@ -2,7 +2,16 @@ import SwiftUI
 
 @main
 struct SnapApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
+
+    init() {
+        let model = AppModel()
+        _model = State(initialValue: model)
+        // The HealthKit observer has to be re-executed on every launch, including the
+        // background launches iOS performs to deliver a workout while the phone is
+        // locked. Those never show a window, so the root view's `.task` is too late.
+        model.startWorkoutSyncIfOnboarded()
+    }
 
     var body: some Scene {
         WindowGroup {

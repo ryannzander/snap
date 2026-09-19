@@ -1,4 +1,5 @@
 import XCTest
+import HealthKit
 @testable import Snap
 
 /// Every non-2xx from the Worker is `{ "error": { "code", "message" } }`.
@@ -31,6 +32,32 @@ final class APIErrorTests: XCTestCase {
         XCTAssertFalse(APIError(status: 403, body: "").isUnauthorized)
         XCTAssertFalse(APIError(status: 500, body: "").isUnauthorized)
     }
+
+    /// A 2xx whose body didn't decode keeps its real status, so a 204 with an empty
+    /// body isn't reported as a malformed 200.
+    func testDecodeFailureCarriesTheRealStatus() {
+        struct Boom: Error {}
+        let error = APIError.decodeFailure(status: 204, type: SnapState.self, underlying: Boom())
+        XCTAssertEqual(error.status, 204)
+        XCTAssertFalse(error.isUnauthorized)
+        XCTAssertTrue(error.message.hasPrefix("decode SnapState"))
+    }
+}
+
+/// `Config.makeAPI` picks the mock for anything that isn't a usable server URL.
+final class ConfigTests: XCTestCase {
+
+    func testOnlyHTTPURLsWithAHostAreServers() {
+        XCTAssertNotNil(Config.serverURL(from: "https://snap.snap-backend.workers.dev"))
+        XCTAssertNotNil(Config.serverURL(from: "http://localhost:8787"))
+        XCTAssertNotNil(Config.serverURL(from: "  https://snap.example.com  "))
+
+        // These used to slip through as "live" and silently run the mock.
+        XCTAssertNil(Config.serverURL(from: ""))
+        XCTAssertNil(Config.serverURL(from: "snap.snap-backend.workers.dev"))
+        XCTAssertNil(Config.serverURL(from: "mailto:someone@example.com"))
+        XCTAssertNil(Config.serverURL(from: "https://"))
+    }
 }
 
 /// `MockAPI` is what the whole UI is built against, so its script has to behave.
@@ -49,14 +76,19 @@ final class MockAPITests: XCTestCase {
         XCTAssertEqual(events.first?.id, 1)
     }
 
-    /// `since` is exclusive, same as the real backend.
+    /// `since` is exclusive, same as the real backend. The time-warp first so there are
+    /// several events on the far side of the cursor — without it the second page is
+    /// empty and `allSatisfy` passes vacuously.
     func testTraceSinceIsExclusive() async throws {
         let api = MockAPI()
         let first = try await api.trace(since: nil)
         let firstID = try XCTUnwrap(first.last?.id)
 
+        try await api.timewarp(to: Date())
         let next = try await api.trace(since: firstID)
+        XCTAssertFalse(next.isEmpty, "the time-warp should have released more of the script")
         XCTAssertTrue(next.allSatisfy { $0.id > firstID })
+        XCTAssertFalse(next.contains { $0.id == firstID }, "since is exclusive")
     }
 
     /// The debug panel's time-warp has to reach the alarm without waiting out the script.
@@ -112,6 +144,37 @@ final class MockAPITests: XCTestCase {
         let after = try await api.state()
         XCTAssertEqual(after.workoutsThisWeek, 3, "a detected workout should count")
         XCTAssertEqual(after.commitments.first?.status, .met)
+    }
+
+    /// The link screen must actually be seen on the offline path: right after onboarding
+    /// the mock is not linked yet, and it flips on its own a few seconds later.
+    func testLinkedFlipsAfterOnboardingNotAtLaunch() async throws {
+        let api = MockAPI()
+        // Never onboarded through the mock (SNAP_PHASE=live): straight to the brain screen.
+        let cold = try await api.state()
+        XCTAssertTrue(cold.linked)
+
+        _ = try await api.onboard(OnboardRequest(name: "Ryan", weeklyGoal: 4, timezone: "UTC"))
+        let justOnboarded = try await api.state()
+        XCTAssertFalse(justOnboarded.linked, "the link screen should have a moment on screen")
+    }
+
+    /// The mock is a process-wide singleton. A second run-through of the demo must start
+    /// from the top of the script, not from a finished loop.
+    func testResetRewindsTheScript() async throws {
+        let api = MockAPI()
+        try await api.timewarp(to: Date())
+        let warmed = try await api.trace(since: nil)
+        XCTAssertTrue(warmed.contains { $0.kind == .alarmFired })
+
+        await api.reset()
+
+        let events = try await api.trace(since: nil)
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.first?.kind, .commitmentCreated)
+        let state = try await api.state()
+        XCTAssertGreaterThan(try XCTUnwrap(state.commitments.first).checkAt, Date())
+        XCTAssertEqual(state.commitments.first?.status, .pending)
     }
 }
 

@@ -24,10 +24,6 @@
 	<string>Snap reads your workouts so it knows whether you actually went.</string>
 	<key>NSHealthUpdateUsageDescription</key>
 	<string>Snap can save a test workout from its debug panel.</string>
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>processing</string>
-	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

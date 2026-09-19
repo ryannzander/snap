@@ -87,20 +87,24 @@ struct LiveAPI: SnapAPI {
 
     @discardableResult
     private func send(_ request: URLRequest) async throws -> Data {
+        try await exchange(request).data
+    }
+
+    private func exchange(_ request: URLRequest) async throws -> (data: Data, status: Int) {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? -1
         guard (200..<300).contains(status) else {
             throw APIError(status: status, body: String(decoding: data, as: UTF8.self))
         }
-        return data
+        return (data, status)
     }
 
     private func decode<T: Decodable>(_ request: URLRequest) async throws -> T {
-        let data = try await send(request)
+        let (data, status) = try await exchange(request)
         do {
             return try Self.decoder.decode(T.self, from: data)
         } catch {
-            throw APIError(status: 200, body: "decode \(T.self): \(error)")
+            throw APIError.decodeFailure(status: status, type: T.self, underlying: error)
         }
     }
 

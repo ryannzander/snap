@@ -5,6 +5,20 @@ This is the seam between the two of us. Change it only by telling the other pers
 Base URL: the deployed Worker (`https://snap.<account>.workers.dev`). JSON everywhere. Times are ISO 8601 UTC.
 Auth: `Authorization: Bearer <token>` on everything except `/onboard` and `/webhooks/*`.
 
+**Timestamps.** The backend emits fractional seconds (`2026-09-19T23:24:00.000Z`); the app accepts both forms and sends without them (`2026-09-19T23:24:00Z`). Accept both.
+
+**Optional fields.** The app omits a key rather than sending `null` for an absent optional (`end`, `activeKcal`). Treat missing and `null` the same.
+
+## Errors
+
+Every non-2xx response carries one envelope. The app shows it in the debug panel only.
+
+```json
+{ "error": { "code": "bad_request", "message": "weeklyGoal must be 1-21" } }
+```
+
+A `401` means the token is dead: the app stops polling until "reset app" in the debug panel. Nothing else stops it.
+
 ## POST /onboard
 
 ```json
@@ -57,6 +71,17 @@ Everything the app needs to draw its one screen.
 `commitment.status`: `pending | met | missed | renegotiated`
 `stake.status`: `none | held | released | slashed`
 
+`stake` may be absent and `txSig` may be `null` until the chain transaction lands. A value the app doesn't know for either `status` decodes as `unknown` and draws nothing, so adding one is safe — tell the other person anyway.
+
+On `slashed` the stake also carries the split. A miss returns half and forfeits half; the two always sum to `lamports`, and an odd lamport goes back to the user.
+
+```json
+"stake": { "lamports": 50000001, "status": "slashed", "txSig": "…",
+           "refundedLamports": 25000001, "forfeitedLamports": 25000000 }
+```
+
+Commitments are ordered oldest first; the app shows the open one, or the last one when none is open.
+
 ## GET /trace?since=<eventId>
 
 The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stretch goal — same event shape.)
@@ -70,9 +95,11 @@ The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stre
 ] }
 ```
 
-`kind`: `commitment_created | alarm_fired | context | decision | message_sent | message_received | workout_detected | stake_held | stake_released | stake_slashed`
+`kind`: `commitment_created | alarm_fired | context | decision | message_sent | message_received | workout_detected | stake_held | stake_released | stake_slashed | stay_quiet`
 
-`summary` is always display-ready. `data` is optional detail.
+`summary` is always display-ready. `data` is optional detail; on `decision` the app shows `data.reasoning` under the summary when present. An unknown `kind` still renders (as a plain row), and one malformed event is dropped without losing the rest of the page.
+
+`since` is exclusive: return events with `id > since`. Ids are positive integers, increasing. At most **200** events per response — the app treats a full page as "more waiting" and fetches again immediately.
 
 ## POST /debug/timewarp
 

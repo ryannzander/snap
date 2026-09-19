@@ -9,7 +9,7 @@ struct OnboardRequest: Encodable {
 }
 
 struct OnboardResponse: Codable {
-    struct Contact: Codable {
+    struct Contact: Codable, Equatable {
         let telegram: String?
         let imessage: String?
     }
@@ -34,7 +34,9 @@ struct WorkoutDTO: Encodable {
     let wasUserEntered: Bool
 }
 
-struct SnapState: Decodable {
+/// `Equatable` so the poll can skip re-publishing an unchanged state — otherwise every
+/// 2-second `/state` round-trip invalidates the whole brain screen for nothing.
+struct SnapState: Decodable, Equatable {
     let weeklyGoal: Int
     let workoutsThisWeek: Int
     let linked: Bool
@@ -45,8 +47,16 @@ struct SnapState: Decodable {
     }
 }
 
-struct Commitment: Decodable, Identifiable {
-    enum Status: String, Decodable { case pending, met, missed, renegotiated }
+struct Commitment: Decodable, Identifiable, Equatable {
+    /// A value the backend adds later must not take the whole `/state` decode down with
+    /// it — the countdown, the stake pill and the goal dots all hang off this one call.
+    enum Status: String, Decodable {
+        case pending, met, missed, renegotiated, unknown
+
+        init(from decoder: Decoder) throws {
+            self = Status(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
 
     let id: String
     let text: String
@@ -59,8 +69,14 @@ struct Commitment: Decodable, Identifiable {
     var checkAt: Date { dueAt.addingTimeInterval(Double(graceMin) * 60) }
 }
 
-struct Stake: Decodable {
-    enum Status: String, Decodable { case none, held, released, slashed }
+struct Stake: Decodable, Equatable {
+    enum Status: String, Decodable {
+        case none, held, released, slashed, unknown
+
+        init(from decoder: Decoder) throws {
+            self = Status(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
 
     let lamports: Int
     let status: Status
@@ -89,6 +105,8 @@ struct TraceEvent: Decodable, Identifiable, Equatable {
         case stakeHeld = "stake_held"
         case stakeReleased = "stake_released"
         case stakeSlashed = "stake_slashed"
+        /// The agent looked and chose not to text. DESIGN.md promises this shows too.
+        case stayQuiet = "stay_quiet"
         case unknown
 
         init(from decoder: Decoder) throws {
@@ -96,12 +114,63 @@ struct TraceEvent: Decodable, Identifiable, Equatable {
         }
     }
 
+    /// The optional `data` object from API.md. Only `reasoning` is read; anything else
+    /// the backend puts in there is ignored, and a `data` that isn't an object is dropped
+    /// rather than failing the event.
+    struct Detail: Decodable, Equatable {
+        let reasoning: String?
+    }
+
     let id: Int
     let ts: Date
     let kind: Kind
     let summary: String
+    let data: Detail?
+
+    init(id: Int, ts: Date, kind: Kind, summary: String, data: Detail? = nil) {
+        self.id = id
+        self.ts = ts
+        self.kind = kind
+        self.summary = summary
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, ts, kind, summary, data }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        ts = try container.decode(Date.self, forKey: .ts)
+        kind = try container.decode(Kind.self, forKey: .kind)
+        summary = try container.decode(String.self, forKey: .summary)
+        data = try? container.decodeIfPresent(Detail.self, forKey: .data)
+    }
+
+    /// The agent's reasoning, when the backend sent it.
+    var reasoning: String? {
+        guard let reasoning = data?.reasoning?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !reasoning.isEmpty else { return nil }
+        return reasoning
+    }
+}
+
+/// One malformed event must not blank the whole feed. Each element decodes on its own;
+/// the ones that fail are dropped and the rest still arrive.
+struct Lossy<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
+    }
 }
 
 struct TraceResponse: Decodable {
     let events: [TraceEvent]
+
+    private enum CodingKeys: String, CodingKey { case events }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        events = try container.decode([Lossy<TraceEvent>].self, forKey: .events).compactMap(\.value)
+    }
 }
