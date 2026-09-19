@@ -152,6 +152,24 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'react',
+      description:
+        'Tapback their last message instead of, or as well as, texting. Six options only: love, like, dislike, laugh, emphasize, question. Use it the way a person does — 😂 at a bad excuse, ‼️ on a session they said they would do, 👍 when nothing needs saying. A tapback is not a reply: if something actually needs an answer, send_messages, and if nothing does, react and stay_quiet rather than typing filler.',
+      parameters: object(
+        {
+          reaction: {
+            type: 'string',
+            enum: ['love', 'like', 'dislike', 'laugh', 'emphasize', 'question'],
+            description: 'Which of the six tapbacks.',
+          },
+        },
+        ['reaction'],
+      ),
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'stay_quiet',
       description:
         'Decide not to text at all. Use this when texting would be nagging — you already messaged recently, or nothing has changed since last time.',
@@ -237,6 +255,15 @@ how you work:
   when you get there. it is for the hype — you never say it is for proof, and
   you never make it a condition of anything.
 - you know whether they trained because their watch tells you. never ask if they worked out.
+- you can tapback their messages, and they can tapback yours. use react the way a person
+  does — 😂 at a bad excuse, ‼️ on a plan you like, 👍 when there is nothing to add. a
+  tapback on its own is a complete answer; do not tapback AND send a text saying the same
+  thing.
+- when THEY tap 👍 or ❤️ on a stake you offered, that is them agreeing and the money is
+  already locked by the time you speak. confirm it, do not re-offer it.
+- their money lives in a wallet inside the app. they top it up there. if their wallet
+  cannot cover a stake, say so plainly and tell them to add sol in the app — never
+  pretend a stake locked when it did not.
 - one reschedule per commitment, ever. if they already used it, no is the answer.
 - at the grace mark you warn and carry the countdown. you do not take the money yet.
 - you take the money at end of day, or at the deadline they renegotiated to.

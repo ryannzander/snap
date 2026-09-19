@@ -6,6 +6,10 @@ protocol SnapAPI: Sendable {
     func onboard(_ body: OnboardRequest) async throws -> OnboardResponse
     func postWorkouts(_ workouts: [WorkoutDTO]) async throws
     func state() async throws -> SnapState
+    func wallet() async throws -> Wallet
+    /// Adds money. Returns the wallet as it is afterwards, so the screen never
+    /// has to guess what the new balance is.
+    func topUp(sol: Double) async throws -> Wallet
     func trace(since: Int?) async throws -> [TraceEvent]
     func timewarp(to date: Date?) async throws
     func seed() async throws

@@ -191,4 +191,89 @@ final class ContractTests: XCTestCase {
         let stake = try decoder.decode(Stake.self, from: Data(json.utf8))
         XCTAssertEqual(stake.sol, 0.05, accuracy: 1e-9)
     }
+
+    // MARK: - Wallet
+
+    func testDecodesWallet() throws {
+        let json = """
+        {"address":"Snap111","cluster":"devnet","balanceLamports":150000000,
+         "heldLamports":50000000,"funded":true,
+         "entries":[
+          {"id":3,"kind":"held","lamports":50000000,"label":"gym at 7","at":"2026-09-19T22:00:00.000Z","txSig":"sig"},
+          {"id":2,"kind":"funded","lamports":200000000,"label":"you added money","at":"2026-09-18T10:00:00Z","txSig":null}]}
+        """
+        let wallet = try decoder.decode(Wallet.self, from: Data(json.utf8))
+
+        XCTAssertEqual(wallet.address, "Snap111")
+        XCTAssertEqual(wallet.balanceSol ?? 0, 0.15, accuracy: 1e-9)
+        XCTAssertEqual(wallet.heldSol, 0.05, accuracy: 1e-9)
+        // What the user thinks of as "my money" is both numbers together, even though
+        // half of it is sitting in escrow right now.
+        XCTAssertEqual(wallet.totalSol ?? 0, 0.2, accuracy: 1e-9)
+        XCTAssertEqual(wallet.entries.map(\.kind), [.held, .funded])
+        XCTAssertNil(wallet.entries[1].txSig)
+    }
+
+    /// A balance the backend could not read comes back null, and null is not zero: one
+    /// means "we can't see it", the other means "it's empty", and under a stake those
+    /// are very different sentences to read.
+    func testUnreachableChainIsNullBalanceNotZero() throws {
+        let json = #"{"address":"Snap111","cluster":"devnet","balanceLamports":null,"heldLamports":0,"funded":true,"entries":[]}"#
+        let wallet = try decoder.decode(Wallet.self, from: Data(json.utf8))
+
+        XCTAssertNil(wallet.balanceLamports)
+        XCTAssertNil(wallet.balanceSol)
+        XCTAssertNil(wallet.totalSol)
+    }
+
+    /// Same rule as the trace feed: one bad row must not blank the wallet screen.
+    func testOneMalformedWalletEntryIsDropped() throws {
+        let json = """
+        {"address":"Snap111","cluster":"devnet","balanceLamports":0,"heldLamports":0,"funded":false,
+         "entries":[
+          {"id":2,"kind":"funded","lamports":10000000,"label":"you added money","at":"2026-09-18T10:00:00Z","txSig":null},
+          {"id":"oops","kind":"funded","lamports":1,"label":"bad","at":"2026-09-18T10:00:00Z","txSig":null},
+          {"id":1,"kind":"brand_new_kind","lamports":1000,"label":"?","at":"2026-09-18T09:00:00Z","txSig":null}]}
+        """
+        let wallet = try decoder.decode(Wallet.self, from: Data(json.utf8))
+
+        XCTAssertEqual(wallet.entries.map(\.id), [2, 1])
+        XCTAssertEqual(wallet.entries[1].kind, .unknown, "a kind we don't know still shows as a row")
+    }
+
+    // MARK: - Reactions
+
+    func testReactionAndWalletTraceKindsDecode() throws {
+        let json = """
+        {"events":[
+         {"id":1,"ts":"2026-09-19T23:24:00Z","kind":"reaction_sent","summary":"😂 on: homework bro"},
+         {"id":2,"ts":"2026-09-19T23:24:01Z","kind":"reaction_received","summary":"👍 on: 30 mins then"},
+         {"id":3,"ts":"2026-09-19T23:24:02Z","kind":"wallet_funded","summary":"0.1 SOL added to your wallet"}]}
+        """
+        let events = try decoder.decode(TraceResponse.self, from: Data(json.utf8)).events
+        XCTAssertEqual(events.map(\.kind), [.reactionSent, .reactionReceived, .walletFunded])
+    }
+
+    func testSplitsAReactionSummaryIntoEmojiAndTarget() {
+        let both = BrainView.splitReaction("👍 on: bro lock in")
+        XCTAssertEqual(both.0, "👍")
+        XCTAssertEqual(both.1, "bro lock in")
+
+        // The backend sends the emoji alone when it doesn't know what was reacted to.
+        let alone = BrainView.splitReaction("😂")
+        XCTAssertEqual(alone.0, "😂")
+        XCTAssertNil(alone.1)
+
+        let empty = BrainView.splitReaction("👍 on: ")
+        XCTAssertNil(empty.1, "an empty target is no target, not a blank line")
+
+        XCTAssertEqual(
+            BrainView.spokenReaction(emoji: "👍", target: "bro lock in", fromSnap: true),
+            "snap reacted 👍 to: bro lock in"
+        )
+        XCTAssertEqual(
+            BrainView.spokenReaction(emoji: "😂", target: nil, fromSnap: false),
+            "you reacted 😂"
+        )
+    }
 }

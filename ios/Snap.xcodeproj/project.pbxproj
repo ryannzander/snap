@@ -25,6 +25,7 @@
 		B9B1F09C5DA6838FD92C4BC4 /* WorkoutSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA043FCE89B3FA2426279335 /* WorkoutSync.swift */; };
 		D42E454EB15A56F1EA443672 /* HealthKitProvenanceUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 92490F6D35DBFDB402752572 /* HealthKitProvenanceUITests.swift */; };
 		E65D9BD7FD42A0AE1C610395 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5B40C7AE2FC8C0F98E74737 /* Theme.swift */; };
+		A1C4F0D25E7B3A9016D4C812 /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B3D9E41C2A85F60D1937EA4 /* WalletView.swift */; };
 		EC893BAFD1FAC53210061C17 /* DebugPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = C065A2DFBB2D2FF21C2106EF /* DebugPanel.swift */; };
 /* End PBXBuildFile section */
 
@@ -70,6 +71,7 @@
 		EA043FCE89B3FA2426279335 /* WorkoutSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutSync.swift; sourceTree = "<group>"; };
 		F4AB2EB975627D538D2ECED5 /* Snap.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Snap.entitlements; sourceTree = "<group>"; };
 		F5B40C7AE2FC8C0F98E74737 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		7B3D9E41C2A85F60D1937EA4 /* WalletView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -129,6 +131,7 @@
 				22972189FC4D4040CF999084 /* LinkView.swift */,
 				CFFE5D44E89766501A947B51 /* OnboardingView.swift */,
 				F5B40C7AE2FC8C0F98E74737 /* Theme.swift */,
+				7B3D9E41C2A85F60D1937EA4 /* WalletView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -301,6 +304,7 @@
 				0998DF72EA298463CCA859D9 /* SnapAPI.swift in Sources */,
 				135B51962923B12A6742BF6E /* SnapApp.swift in Sources */,
 				E65D9BD7FD42A0AE1C610395 /* Theme.swift in Sources */,
+				A1C4F0D25E7B3A9016D4C812 /* WalletView.swift in Sources */,
 				B9B1F09C5DA6838FD92C4BC4 /* WorkoutSync.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

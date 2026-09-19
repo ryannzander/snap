@@ -9,6 +9,23 @@
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
 /**
+ * What POST /wallet/topup will move in one go, and how full a wallet is
+ * allowed to get. Here rather than next to the route or the Durable Object
+ * because both of them enforce it — the edge rejects the obvious cases before
+ * any work is done, and the object re-checks against the live balance — and
+ * two copies of a money limit is one copy too many.
+ */
+export const MIN_TOPUP_LAMPORTS = 10_000_000; // 0.01 SOL
+export const MAX_TOPUP_LAMPORTS = LAMPORTS_PER_SOL; // 1 SOL
+
+/**
+ * The treasury funds top-ups on devnet, so a wallet must not be usable as a
+ * tap: past this a top-up is refused rather than draining the account every
+ * other part of the demo depends on.
+ */
+export const WALLET_CEILING_LAMPORTS = 2 * LAMPORTS_PER_SOL;
+
+/**
  * "0.05 SOL", "0.025 SOL", "1 SOL", "0.0005 SOL".
  *
  * Exact, with trailing zeros trimmed — never a fixed number of places. Half

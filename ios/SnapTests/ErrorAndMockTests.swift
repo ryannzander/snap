@@ -176,6 +176,47 @@ final class MockAPITests: XCTestCase {
         XCTAssertGreaterThan(try XCTUnwrap(state.commitments.first).checkAt, Date())
         XCTAssertEqual(state.commitments.first?.status, .pending)
     }
+
+    /// The wallet screen is built against the mock, so the mock's money has to move:
+    /// a top-up adds to the balance and leaves a receipt.
+    func testTopUpAddsToTheBalanceAndLeavesAReceipt() async throws {
+        let api = MockAPI()
+
+        let before = try await api.wallet()
+        XCTAssertEqual(before.heldLamports, 50_000_000, "the scripted stake is on the line")
+        let startingBalance = try XCTUnwrap(before.balanceLamports)
+
+        let after = try await api.topUp(sol: 0.1)
+        XCTAssertEqual(after.balanceLamports, startingBalance + 100_000_000)
+        XCTAssertEqual(after.entries.first?.kind, .funded)
+        XCTAssertEqual(after.entries.first?.lamports, 100_000_000)
+        XCTAssertGreaterThan(after.entries.count, before.entries.count)
+    }
+
+    /// Whatever the stake card says, the wallet has to agree: a released stake is back
+    /// in the balance and no longer held, and nothing is ever in both places at once.
+    func testAReleasedStakeIsNeverHeldAndCountedAtTheSameTime() async throws {
+        let api = MockAPI()
+        let before = try await api.wallet()
+        let balance = try XCTUnwrap(before.balanceLamports)
+
+        try await api.postWorkouts([
+            WorkoutDTO(hkUuid: "u", type: "traditionalStrengthTraining",
+                       start: Date(), end: Date(), durationSec: 2700, activeKcal: 300,
+                       source: "com.apple.health", wasUserEntered: false)
+        ])
+        _ = try await api.trace(since: nil)
+
+        let after = try await api.wallet()
+        if after.heldLamports == 0 {
+            XCTAssertEqual(after.balanceLamports, balance + 50_000_000,
+                           "released money is back in the balance")
+            XCTAssertEqual(after.entries.first?.kind, .released)
+        } else {
+            XCTAssertEqual(after.balanceLamports, balance,
+                           "still held means the balance has not moved yet")
+        }
+    }
 }
 
 /// The backend matches on the `HKWorkoutActivityType` case name.

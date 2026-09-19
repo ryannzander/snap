@@ -34,21 +34,39 @@ actor MockAPI: SnapAPI {
         Step(.messageSent,       "7:24 and no workout 😭"),
         Step(.messageSent,       "you said no excuses today"),
         Step(.messageReceived,   "homework bro"),
+        Step(.reactionSent,      "😂 on: homework bro"),
         Step(.decision,          "one reschedule left · allow 30 min"),
         Step(.messageSent,       "30 mins then. push day. go."),
+        Step(.reactionReceived,  "👍 on: 30 mins then. push day. go."),
         Step(.workoutDetected,   "strength training started"),
         Step(.stakeReleased,     "0.05 SOL back in your wallet"),
         Step(.messageSent,       "that's my guy"),
     ]
 
     private static let stepInterval: TimeInterval = 1.2
+    // Indices into `script`. Named rather than inlined because inserting a step
+    // silently moved the stake's release two beats away from where the state
+    // said it happened.
     private static let alarmStep = 2
-    private static let workoutStep = 11
+    private static let rescheduleStep = 10
+    private static let workoutStep = 13
+    private static let releaseStep = 14
 
     /// The link screen "receives the text" this long after onboarding. Anchored to the
     /// onboard call, not process launch: the mock is a singleton built at launch, and
     /// clicking through onboarding takes longer than any delay measured from there.
     private static let linkDelay: TimeInterval = 6
+
+    /// The mock's wallet. Money moves here the same way it does on the server —
+    /// a top-up adds to it, and the staked 0.05 is shown as held — so the wallet
+    /// screen can be built and demoed with no backend at all.
+    private var balanceLamports = 150_000_000
+    private var walletEntries: [Wallet.Entry] = [
+        Wallet.Entry(id: 2, kind: .held, lamports: 50_000_000, label: "gym at 7",
+                     at: Date().addingTimeInterval(-600), txSig: MockAPI.mockSignature),
+        Wallet.Entry(id: 1, kind: .funded, lamports: 200_000_000, label: "starting balance from snap",
+                     at: Date().addingTimeInterval(-86_400), txSig: MockAPI.mockSignature),
+    ]
 
     private var dueAt: Date
     private var onboardedAt: Date?
@@ -66,6 +84,13 @@ actor MockAPI: SnapAPI {
         scriptStartedAt = nil
         onboardedAt = nil
         dueAt = Date().addingTimeInterval(120)
+        balanceLamports = 150_000_000
+        walletEntries = [
+            Wallet.Entry(id: 2, kind: .held, lamports: 50_000_000, label: "gym at 7",
+                         at: Date().addingTimeInterval(-600), txSig: MockAPI.mockSignature),
+            Wallet.Entry(id: 1, kind: .funded, lamports: 200_000_000, label: "starting balance from snap",
+                         at: Date().addingTimeInterval(-86_400), txSig: MockAPI.mockSignature),
+        ]
     }
 
     // MARK: - SnapAPI
@@ -114,6 +139,33 @@ actor MockAPI: SnapAPI {
                 )
             ]
         )
+    }
+
+    func wallet() async throws -> Wallet {
+        let released = emitted.count > Self.releaseStep
+        return Wallet(
+            address: "SnapMockWa11etAddre55xxxxxxxxxxxxxxxxxxxxxxx",
+            // Once the script releases the stake it is back in the balance and
+            // no longer held, exactly as it would be for real.
+            balanceLamports: released ? balanceLamports + 50_000_000 : balanceLamports,
+            heldLamports: released ? 0 : 50_000_000,
+            funded: true,
+            entries: released
+                ? [Wallet.Entry(id: 3, kind: .released, lamports: 50_000_000, label: "gym at 7",
+                                at: Date(), txSig: MockAPI.mockSignature)] + walletEntries
+                : walletEntries
+        )
+    }
+
+    func topUp(sol: Double) async throws -> Wallet {
+        let lamports = Int((sol * 1_000_000_000).rounded())
+        balanceLamports += lamports
+        walletEntries.insert(
+            Wallet.Entry(id: (walletEntries.first?.id ?? 0) + 1, kind: .funded, lamports: lamports,
+                         label: "you added money", at: Date(), txSig: MockAPI.mockSignature),
+            at: 0
+        )
+        return try await wallet()
     }
 
     func trace(since: Int?) async throws -> [TraceEvent] {
@@ -169,12 +221,12 @@ actor MockAPI: SnapAPI {
 
     private func commitmentStatus(_ reached: Int) -> Commitment.Status {
         if reached > Self.workoutStep { return .met }
-        if reached > 9 { return .renegotiated }
+        if reached > Self.rescheduleStep { return .renegotiated }
         return .pending
     }
 
     private func stakeStatus(_ reached: Int) -> Stake.Status {
-        if reached > 12 { return .released }
+        if reached > Self.releaseStep { return .released }
         if reached > 1 { return .held }
         return .none
     }

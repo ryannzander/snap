@@ -130,6 +130,7 @@ section('what the model actually sees');
       },
     ] as unknown as Array<Commitment & { renegotiations: number }>,
     standingOffer: null,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
 
@@ -151,6 +152,17 @@ section('what the model actually sees');
   for (const needle of ['weekly goal: 4', 'done this week: 2', 'gym at 7', 'held', 'Ryan']) {
     isTrue(`carries "${needle}"`, rendered.includes(needle));
   }
+  // Snap offers stakes unprompted, so it has to know what is actually there
+  // to offer — otherwise it proposes 0.05 to a wallet holding 0.01 and the
+  // guards refuse a stake the user has already said yes to.
+  isTrue('the spendable balance', rendered.includes('0.12 SOL spendable'));
+  isTrue('and what is already locked', rendered.includes('0.05 SOL already locked'));
+  isTrue(
+    'an unreachable chain is unknown, not empty',
+    renderContext({ ...context, wallet: { balanceLamports: null, heldLamports: 0 } }).includes(
+      'balance unknown right now',
+    ),
+  );
 }
 
 section('an offer on the table is something the model must see');
@@ -165,6 +177,7 @@ section('an offer on the table is something the model must see');
     lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
     openCommitments: [],
     standingOffer: null,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
 

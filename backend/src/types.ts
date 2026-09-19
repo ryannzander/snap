@@ -17,7 +17,10 @@ export type TraceKind =
   | 'workout_detected'
   | 'stake_held'
   | 'stake_released'
-  | 'stake_slashed';
+  | 'stake_slashed'
+  | 'reaction_sent'
+  | 'reaction_received'
+  | 'wallet_funded';
 
 /** POST /onboard */
 export interface OnboardRequest {
@@ -77,6 +80,41 @@ export interface StateResponse {
   workoutsThisWeek: number;
   linked: boolean;
   commitments: Commitment[];
+}
+
+/** GET /wallet */
+export interface WalletEntry {
+  id: number;
+  /** What moved the money. Mirrors the trace kinds that touch the wallet. */
+  kind: 'funded' | 'held' | 'released' | 'slashed';
+  /** Always positive: `kind` says which way it went. */
+  lamports: number;
+  label: string;
+  at: string;
+  txSig: string | null;
+}
+
+export interface WalletResponse {
+  address: string;
+  cluster: 'devnet';
+  /**
+   * Spendable right now, read from the chain. Null when the RPC could not be
+   * reached — the app says "can't reach the chain" rather than showing a zero
+   * balance, which would read as "your money is gone".
+   */
+  balanceLamports: number | null;
+  /** Locked in escrow against open commitments and competition entries. */
+  heldLamports: number;
+  /** True once the treasury has put something in it. */
+  funded: boolean;
+  /** Newest first, capped. Deposits, locks, returns and slashes. */
+  entries: WalletEntry[];
+}
+
+/** POST /wallet/topup */
+export interface TopUpResponse extends WalletResponse {
+  addedLamports: number;
+  txSig: string | null;
 }
 
 /** GET /trace?since=<eventId> */

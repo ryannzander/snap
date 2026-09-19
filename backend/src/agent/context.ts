@@ -37,6 +37,12 @@ export interface AgentContext {
   openCommitments: Array<Commitment & { renegotiations: number }>;
   /** A stake Snap has proposed and the user has not answered yet. */
   standingOffer: { text: string; dueAt: string; lamports: number } | null;
+  /**
+   * What is actually in their wallet, so Snap can size an offer to it rather
+   * than proposing a stake the guards will then refuse. `balanceLamports` is
+   * null when devnet could not be reached — unknown, not empty.
+   */
+  wallet: { balanceLamports: number | null; heldLamports: number };
   recentMessages: Array<{ from: 'snap' | 'user'; text: string }>;
 }
 
@@ -164,10 +170,16 @@ export function renderContext(context: AgentContext): string {
     ? context.recentMessages.map((m) => `${m.from}: ${m.text}`).join('\n')
     : '(nothing yet)';
 
+  const wallet =
+    context.wallet.balanceLamports === null
+      ? 'wallet: balance unknown right now — do not tell them how much they have'
+      : `wallet: ${solText(context.wallet.balanceLamports)} spendable, ${solText(context.wallet.heldLamports)} already locked in stakes. they top it up in the app.`;
+
   return [
     `their local time right now: ${context.localTime} (${context.timezone})`,
     `user: ${context.name}`,
     `weekly goal: ${context.weeklyGoal}, done this week: ${context.workoutsThisWeek}`,
+    wallet,
     '',
     'last 7 days:',
     days,

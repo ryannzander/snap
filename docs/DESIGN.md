@@ -38,6 +38,7 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 | Agent trace | Every agent step is logged as a trace event and shown live on the "Snap's brain" screen. The agent can decide *not* to text, and that shows too. |
 | Demo | Real HealthKit, real agent, unscripted messages. A debug time-warp endpoint moves the agent's clock past the deadline. |
 | Voice | One persona: your gym bro. Lowercase, short, multiple texts in a row, never a paragraph. "bro", "nah", "😭", "lock in". Funny, not mean. Never sounds like an assistant. |
+| Tapbacks | Both directions. Snap reacts to your texts the way a person does, and a 👍 or ❤️ on a stake he offered **is** the yes that locks it — decided in the backend, not by the model, and explained in the thread's onboarding before it can ever cost anyone anything. |
 | Codex | One self-contained piece is built with Codex (the Anchor program + tests). Keep the prompt and the diff — the OpenAI prize asks for a concrete Codex story. |
 
 ## Prize mapping
@@ -50,7 +51,8 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 
 ## Stake rules
 
-- **Wallet:** at onboarding the backend creates a devnet wallet per user and airdrops into it. Staking happens by text — no wallet app. Custodial for the demo; say so to Solana judges, Phantom is the production path.
+- **Wallet:** at onboarding the backend creates a devnet wallet per user and funds it from the treasury. The app has a wallet screen — balance, what is locked, where it went, and an "add money" button (`POST /wallet/topup`) — because a stake nobody can see the source of is a stake nobody trusts. Staking itself still happens by text: the wallet screen hands you the thread with the words typed, it does not have a stake button. Custodial for the demo; say so to Solana judges, Phantom is the production path.
+- **Covering the stake:** a stake larger than the wallet is refused before anything is offered or locked, and Snap says so and points at the app. Never a stake that "locked" against money that is not there.
 - **Size:** 0.05 SOL unless the user names an amount.
 - **Timeline:** commitment time + 20 min grace → Snap texts a warning (not a slash). Slash happens at end of day, or at the renegotiated deadline. Texts in between carry the countdown ("36 mins left on your $5").
 - **Renegotiation:** at most one per commitment. Same stake, new deadline. The agent decides whether the excuse earns it, using history — skipped yesterday → "nah. you said that yesterday 😭".

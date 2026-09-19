@@ -1,18 +1,19 @@
 import SwiftUI
 
-/// The live app: two screens and a bar.
+/// The live app: three screens and a bar.
 ///
 /// **today** is the reference's home — a greeting, the week, one dark card for the plan
 /// on the line and one white card for the stake — and ends with the last few thoughts
-/// from Snap's brain. **brain** is the full trace, the thing judges actually watch.
-/// The `+` in the middle of the bar opens the message thread, because a new plan is
-/// a text, never a form.
+/// from Snap's brain. **wallet** is the money: what you have, how to add to it, and
+/// where the rest of it went. **brain** is the full trace, the thing judges actually
+/// watch. The `+` in the middle of the bar opens the message thread, because a new plan
+/// is a text, never a form.
 struct BrainView: View {
     @Environment(AppModel.self) private var model
     @State private var tab: Tab = .today
     @State private var showDebug = false
 
-    enum Tab { case today, brain }
+    enum Tab { case today, wallet, brain }
 
     var body: some View {
         ZStack {
@@ -21,8 +22,11 @@ struct BrainView: View {
             VStack(spacing: 0) {
                 Group {
                     switch tab {
-                    case .today: TodayScreen(openBrain: { tab = .brain }, openDebug: { showDebug = true })
-                    case .brain: BrainScreen()
+                    case .today:  TodayScreen(openBrain: { tab = .brain },
+                                              openWallet: { tab = .wallet },
+                                              openDebug: { showDebug = true })
+                    case .wallet: WalletScreen()
+                    case .brain:  BrainScreen()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -39,8 +43,10 @@ struct BrainView: View {
 
 // MARK: - Bar
 
-/// today · + · brain. The plus is the one filled thing in the bar, and it leaves the app
-/// on purpose: Snap lives in the thread, so that's where a plan gets made.
+/// today · wallet · + · brain. The plus is the one filled thing in the bar, and it
+/// leaves the app on purpose: Snap lives in the thread, so that's where a plan gets
+/// made. The wallet sits next to it because the two are the same sentence — the money
+/// you have, and the place you put it on the line.
 private struct BottomBar: View {
     @Environment(AppModel.self) private var model
     @Binding var tab: BrainView.Tab
@@ -48,6 +54,8 @@ private struct BottomBar: View {
     var body: some View {
         HStack {
             item(.today, icon: "house.fill", label: "today")
+            Spacer()
+            item(.wallet, icon: "wallet.bifold.fill", label: "wallet")
             Spacer()
             Button {
                 ThreadLink.open(contact: model.contact)
@@ -60,7 +68,7 @@ private struct BottomBar: View {
             Spacer()
             item(.brain, icon: "brain", label: "brain")
         }
-        .padding(.horizontal, Theme.Space.xl)
+        .padding(.horizontal, Theme.Space.m)
         .padding(.top, Theme.Space.s)
         .padding(.bottom, Theme.Space.xs)
         .background(
@@ -85,7 +93,7 @@ private struct BottomBar: View {
                     .font(selected ? Theme.medium(13) : Theme.body(13))
             }
             .foregroundStyle(selected ? Theme.ink : Theme.inkDim)
-            .frame(width: 64)
+            .frame(width: 58)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -98,6 +106,7 @@ private struct BottomBar: View {
 private struct TodayScreen: View {
     @Environment(AppModel.self) private var model
     let openBrain: () -> Void
+    let openWallet: () -> Void
     let openDebug: () -> Void
 
     var body: some View {
@@ -110,6 +119,7 @@ private struct TodayScreen: View {
                    let stake = commitment.stake, stake.status != .none {
                     StakeCard(stake: stake)
                 }
+                WalletStrip(open: openWallet)
                 if model.isHealthAccessUndetermined {
                     healthNotice
                 }
@@ -434,6 +444,26 @@ extension BrainView {
         guard signature.count > 16 else { return signature }
         return "\(signature.prefix(6))…\(signature.suffix(6))"
     }
+
+    /// `"👍 on: bro lock in"` → `("👍", "bro lock in")`. The backend builds the summary
+    /// and sends the emoji alone when it doesn't know which message was reacted to —
+    /// so a missing target is normal, not a parse failure.
+    nonisolated static func splitReaction(_ summary: String) -> (String, String?) {
+        guard let range = summary.range(of: " on: ") else {
+            return (summary.trimmingCharacters(in: .whitespaces), nil)
+        }
+        let target = String(summary[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return (
+            String(summary[..<range.lowerBound]).trimmingCharacters(in: .whitespaces),
+            target.isEmpty ? nil : target
+        )
+    }
+
+    nonisolated static func spokenReaction(emoji: String, target: String?, fromSnap: Bool) -> String {
+        let who = fromSnap ? "snap reacted" : "you reacted"
+        guard let target else { return "\(who) \(emoji)" }
+        return "\(who) \(emoji) to: \(target)"
+    }
 }
 
 // MARK: - Countdown
@@ -516,6 +546,87 @@ private struct CountdownView: View {
     }
 }
 
+// MARK: - Wallet
+
+private struct WalletScreen: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("your money.")
+                .font(Theme.display(26))
+                .foregroundStyle(Theme.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.xs)
+            WalletView()
+        }
+    }
+}
+
+/// One line on the today screen: what is in the wallet, and the way to the rest of it.
+/// It exists because the stake card only ever says what is *gone* — without this, a
+/// balance is something you have to go looking for to find out you have.
+private struct WalletStrip: View {
+    @Environment(AppModel.self) private var model
+    let open: () -> Void
+
+    private static let sol = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...3))
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: Theme.Space.s) {
+                Image(systemName: "wallet.bifold.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("wallet")
+                        .font(Theme.medium(15))
+                        .foregroundStyle(Theme.ink)
+                    Text(subtitle)
+                        .font(Theme.body(13))
+                        .foregroundStyle(Theme.inkDim)
+                }
+
+                Spacer(minLength: 0)
+
+                Text(balance)
+                    .font(Theme.numerals(20))
+                    .foregroundStyle(Theme.ink)
+                    .contentTransition(.numericText())
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.inkDim)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s + 2)
+            .frame(maxWidth: .infinity)
+            .snapCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spoken)
+        .animation(.snappy, value: model.wallet)
+    }
+
+    private var balance: String {
+        guard let balance = model.wallet?.balanceSol else { return "—" }
+        return "\(balance.formatted(Self.sol)) SOL"
+    }
+
+    private var subtitle: String {
+        guard let wallet = model.wallet else { return "loading…" }
+        if wallet.balanceLamports == nil { return "can't reach the chain" }
+        if wallet.heldSol > 0 { return "\(wallet.heldSol.formatted(Self.sol)) SOL on the line" }
+        // An empty wallet cannot stake anything, and finding that out mid-negotiation
+        // is the worst time to find it out.
+        if (wallet.balanceSol ?? 0) < 0.05 { return "add money to put some on a session" }
+        return "tap to add money"
+    }
+
+    private var spoken: String {
+        model.wallet == nil ? "wallet, loading" : "wallet, \(balance). \(subtitle)"
+    }
+}
+
 // MARK: - Brain
 
 /// The full trace, and nothing else on the screen to compete with it.
@@ -592,11 +703,45 @@ private struct TraceRow: View {
     @ViewBuilder
     private var content: some View {
         switch event.kind {
-        case .messageSent:     bubble(fromSnap: true)
-        case .messageReceived: bubble(fromSnap: false)
-        case .decision:        decision
-        default:               plain
+        case .messageSent:      bubble(fromSnap: true)
+        case .messageReceived:  bubble(fromSnap: false)
+        case .reactionSent:     tapback(fromSnap: true)
+        case .reactionReceived: tapback(fromSnap: false)
+        case .decision:         decision
+        default:                plain
         }
+    }
+
+    /// A tapback, drawn the way iMessage draws one: a small capsule tucked against the
+    /// bubble it belongs to, on that bubble's side. Snap's sit right, theirs sit left.
+    /// Pulled up into the row above, because a reaction floating on its own line is
+    /// just another message and this is explicitly not one.
+    private func tapback(fromSnap: Bool) -> some View {
+        let (emoji, target) = BrainView.splitReaction(event.summary)
+
+        return HStack(spacing: 0) {
+            if fromSnap { Spacer(minLength: 56) }
+
+            HStack(spacing: 6) {
+                Text(emoji)
+                    .font(.system(size: 15))
+                if let target {
+                    Text(target)
+                        .font(Theme.body(12))
+                        .foregroundStyle(Theme.inkDim)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Theme.surface))
+            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
+
+            if !fromSnap { Spacer(minLength: 56) }
+        }
+        .padding(.top, -6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(BrainView.spokenReaction(emoji: emoji, target: target, fromSnap: fromSnap))
     }
 
     /// Snap's own messages sit right in ink, yours sit left in grey — this is his head,
@@ -677,6 +822,7 @@ private struct TraceRow: View {
         case .stakeHeld:         "lock.fill"
         case .stakeReleased:     "lock.open.fill"
         case .stakeSlashed:      "flame.fill"
+        case .walletFunded:      "plus.circle.fill"
         default:                 "circle.fill"
         }
     }

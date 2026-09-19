@@ -6,7 +6,9 @@ Built at Hack the North 2026.
 
 ## The loop
 
-commitment → missed workout detected → agent evaluates context → proactive text → reply → personalized response → workout detected → stake returned
+commitment → missed workout detected → agent evaluates context → proactive text → reply (or a 👍) → personalized response → workout detected → stake returned
+
+The first text you ever get explains all of it: what Snap does, that the watch is the referee, and that tapping 👍 on an offer is how you agree to a stake. The money it comes out of lives in the app's wallet screen — balance, what's locked, where it went, and a button to add more.
 
 ## Layout
 

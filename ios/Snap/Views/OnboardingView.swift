@@ -335,6 +335,9 @@ private struct DealPage: View {
                 DealRow(icon: "lock.fill", title: "show up, get it back",
                         text: "go and the stake comes home. skip and it's gone.",
                         pill: "SOL")
+                Divider().overlay(Theme.hairline)
+                DealRow(icon: "wallet.bifold.fill", title: "it comes from your wallet",
+                        text: "there's one in the app. top it up, and snap stakes out of it.")
             }
             .snapCard()
 

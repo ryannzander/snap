@@ -23,6 +23,8 @@ Auth: `Authorization: Bearer <token>` on everything except `/onboard` and `/webh
 
 The app then tells the user to text Snap `yo 4821`. That first inbound message links the chat to the user (and satisfies Linq's text-first rule), after which `/state` reports `linked: true`.
 
+Linking sends the thread's onboarding: what Snap does, that a plan is a text, that the money is theirs and comes back if they train, that a 👍 is how they agree to a stake, that the watch is the referee, and that the wallet lives in the app. It is fixed copy, not a model turn — the one message that explains how money moves can never be improvised. Texting `help` (or "how does this work") replays it without the greeting.
+
 Limits: `name` ≤ 100 characters and non-empty after trimming, `weeklyGoal` a whole number 1–21, `timezone` a zone name the runtime knows. Anything else is a 400.
 
 `token` is opaque to the app. Store it in the Keychain and send it on everything below.
@@ -82,6 +84,47 @@ Commitments come back oldest first, ordered by `dueAt`. The app shows the open o
 
 This is deliberately the same bar that releases a stake: if a 30-minute walk cannot release your money, it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`).
 
+## GET /wallet
+
+The money, from the app's side. Everything a stake comes out of and goes back into.
+
+```json
+{
+  "address": "7Xc…",
+  "cluster": "devnet",
+  "balanceLamports": 150000000,
+  "heldLamports": 50000000,
+  "funded": true,
+  "entries": [
+    { "id": 3, "kind": "held", "lamports": 50000000, "label": "gym at 7", "at": "…", "txSig": "…" },
+    { "id": 2, "kind": "funded", "lamports": 200000000, "label": "you added money", "at": "…", "txSig": "…" }
+  ]
+}
+```
+
+`balanceLamports` is read from the chain and is **null when the RPC could not be reached**. Null is not zero, and the app must not draw it as one: one means "we can't see it", the other means "it's empty", and under a stake those read very differently.
+
+`heldLamports` is what has already *left* the wallet into escrow — the sum of open commitments whose `stake.status` is `held`, plus competition entries that have not settled. It is never part of `balanceLamports`; adding the two is what the user thinks of as "my money", and the app says so rather than showing one number.
+
+`entries` is the ledger, newest first, at most 40: `kind` is `funded | held | released | slashed`, `lamports` is always positive (the kind says which way it went), and `txSig` is null until the chain confirms — same rule as `stake.txSig`. An unknown `kind` still renders as a row.
+
+The wallet is **custodial on devnet**: the backend holds the key, and the address is the one it holds. It is created at `/onboard` and funded from Snap's treasury in the background, so a new user can stake within seconds of linking.
+
+## POST /wallet/topup
+
+Adds money. On devnet the source is Snap's treasury — there is no card to charge, and the public faucet rate-limits too hard to put on a stage.
+
+```json
+{ "sol": 0.1 }
+```
+→ the same body as `GET /wallet`, plus `addedLamports` and `txSig`.
+
+Limits: 0.01 to 1 SOL per call, and the call is refused if it would put the wallet over a 2 SOL ceiling (a 400 either way). **The response is the wallet as it actually is afterwards** — the app must draw that, never a locally guessed balance, because a top-up that failed on-chain plus an optimistic number on screen is how someone agrees to a stake they cannot cover.
+
+`503 chain_unavailable` means the transfer did not land and no money moved. Nothing is recorded in that case.
+
+**A stake is refused when the wallet cannot cover it**, leaving 0.005 SOL of fee headroom: the agent's `create_commitment`, `offer_stake` and `accept_offer` all fail the guard, the trace says how much is there and how much was needed, and Snap tells the user to top up instead of pretending the money locked. When the chain is unreachable the check passes rather than telling a user they are broke on a devnet hiccup.
+
 ## GET /trace?since=<eventId>
 
 The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stretch goal — same event shape.)
@@ -95,9 +138,11 @@ The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stre
 ] }
 ```
 
-`kind`: `commitment_created | alarm_fired | context | decision | message_sent | message_received | workout_detected | stake_held | stake_released | stake_slashed`
+`kind`: `commitment_created | alarm_fired | context | decision | message_sent | message_received | reaction_sent | reaction_received | workout_detected | stake_held | stake_released | stake_slashed | wallet_funded`
 
 A turn where the agent looked and chose not to text is **not** its own kind — it arrives as a `decision` whose summary reads `stayed quiet — <reason>`.
+
+A tapback is `reaction_sent` (Snap reacted to them) or `reaction_received` (they reacted to Snap). The summary is `<emoji> on: <the message it was aimed at>`, or just `<emoji>` when the backend does not know which message. Snap's own tapbacks always name the user's last message, because that is the only one he reacts to. An inbound tapback is matched against the last ten texts Snap sent, by the id the channel returned for each — a tapback on something older, or delivered through a channel that does not return ids, arrives unlabelled rather than mislabelled. A removed tapback reads `<emoji> took back on: …`. `data` carries `{ emoji, name, targetMessageId, removed }`, where `name` is one of the six iMessage slots (`love | like | dislike | laugh | emphasize | question`) or null for an emoji outside them. The app draws these as a small capsule tucked against the bubble they belong to — Snap's on the right, the user's on the left.
 
 A photo the user texts arrives as a `message_received` whose summary starts with `📷` (the caption, or `sent a photo`), with the URLs in `data.imageUrls`, followed by a `context` row `looked at the photo · <description>` (or a `decision` saying the photo could not be seen). The agent's reply follows as usual.
 
@@ -258,6 +303,7 @@ Every non-2xx response has the same body:
 | 409 | `already_onboarded` | `/onboard` for a user that already exists |
 | 413 | `payload_too_large` | body over 1 MB |
 | 500 | `internal_error` | anything unhandled |
+| 503 | `chain_unavailable` | `/wallet/topup` only — devnet would not take the transfer, or no treasury is configured. No money moved. |
 
 `message` is for the debug panel, not the user.
 
@@ -266,4 +312,8 @@ Every non-2xx response has the same body:
 ## Webhooks (backend only)
 
 - `POST /webhooks/linq` — Linq `message.received` (text parts, and image parts as photos), Standard Webhooks signature (`webhook-id` / `webhook-timestamp` / `webhook-signature`), 5-minute replay window, deliveries de-duplicated by event id. Always answers 200 for anything it cannot route, because a retry of an unroutable message is no more routable the second time.
+
+  Tapbacks arrive here too, as `message.reaction` / `reaction.received` / `reaction.removed`, or as a `reaction`/`tapback` part inside an ordinary delivery — Linq has used both shapes, so both are read. A reaction is routed apart from messages: it can never carry a link code, an unlinked chat is ignored, and the agent's turn on one is told plainly that a tapback is usually not worth answering.
+
+  **A 👍 or ❤️ on a standing stake offer is an acceptance** and locks the money, decided in the backend rather than by the model — "did they agree?" is not a judgement call when the answer is a thumbs up. Nothing else about the six reaction slots moves money. This is said out loud in the thread's onboarding, because a tapback that quietly takes money and was never explained is a trap.
 - `POST /webhooks/telegram` — planned, **not routed yet** (currently 404).
