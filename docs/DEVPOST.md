@@ -1,8 +1,59 @@
 # Snap — Devpost submission
 
-Paste each section into the matching Devpost field. Written against the
-Ranked read of the current submission (#38 of 341, 71.8): evidence 0/100,
-technical 59/100, 5 of 7 sections filled, no video, no repo link, generic tags.
+---
+
+# ⚠️ DO THESE TWO FIRST — 60 seconds, needs your Devpost login
+
+## 1. The charity line is false
+
+In **What it does**, the last line of the gym paragraph currently reads:
+
+> Then you actually go to the gym. Your Apple Watch ends the workout, Snap syncs it, and the escrow releases your stake. **If you skip, your stake gets slashed and donated to a charity of your choice.**
+
+Replace that bolded sentence with:
+
+> If you skip, at the end of your local day the stake is gone — a real devnet transaction you can open in Solana Explorer.
+
+The half-to-charity mechanic was proposed and reverted this afternoon. A miss forfeits the whole stake to the treasury. The deployed backend, the iOS onboarding copy and Snap's own texts all say so; only Devpost still doesn't.
+
+## 2. Built With — replace the tags
+
+Currently: `app`, `apple`, `b2c`, `consumer`, `gym`, `imessage`, `linq`, `openai`, `solana`.
+
+Five of those nine are generic category words, which is what Ranked penalised. Delete `app`, `b2c`, `consumer`, `gym`, `apple` and use:
+
+```
+typescript
+swift
+swiftui
+healthkit
+cloudflare-workers
+cloudflare-durable-objects
+workers-ai
+solana
+solana-web3js
+devnet
+openai
+gpt-5
+llama
+imessage
+linq
+```
+
+Keep `imessage`, `linq`, `openai` and `solana` — those four were already real.
+
+## 3. Two more, if you have longer
+
+- **Link the repo** in *Try it out*: `https://github.com/ryannzander/snap` — Ranked scored our repo links at **0**.
+- **Add the video.** Biggest single completeness gap, and you're filming one anyway.
+
+---
+
+# The full rewrite
+
+Everything below replaces the current write-up section by section. Optional — the two fixes above are the ones that matter most per minute spent.
+
+Written against the Ranked read of the current submission (#38 of 341, 71.8): evidence 0/100, technical 59/100, 5 of 7 sections filled, no video, no repo link, generic tags.
 
 ---
 
@@ -107,18 +158,3 @@ The Anchor program: one `competition` PDA holding the pot, the rule hash, the en
 The competition engine is already built — 1v1, group pots, and a weekly pot, settled from HealthKit, winners get 100% of their stake back plus an equal share of what the skippers forfeited. Sponsored pots are the business: a brand funds the pot and buys an audience that **provably trained**, which is a number no other channel can sell.
 
 ---
-
-## Devpost fields to fix
-
-**Built With** — replace the generic tags (`app`, `b2c`, `consumer`) with:
-
-```
-typescript, swift, swiftui, cloudflare-workers, durable-objects, healthkit,
-solana, web3js, openai, gpt-5, llama, workers-ai, imessage, linq, devnet
-```
-
-**Repo** — link `https://github.com/ryannzander/snap` in the *Try it out* field. Ranked scored our repo links at 0.
-
-**Video** — the single biggest completeness gap. Screen-record the five beats.
-
-**Fix before submitting:** the current write-up says a slashed stake is *"donated to a charity of your choice."* It isn't — that mechanic was proposed and reverted, and a miss forfeits the whole stake to the treasury. Judges check.
