@@ -157,27 +157,35 @@ export class UserAgent extends DurableObject<Env> {
       for (const workout of chunk) {
         const key = KEY.workout(workout.hkUuid);
         const prior = previous.get(key);
-        writes[key] = {
+
+        // Merge forwards only. The app resends freely, so a stale payload can
+        // arrive after a fresher one; letting `end` go back to null would
+        // un-finish a finished workout and fire the completion trace twice.
+        const merged: StoredWorkout = {
           ...workout,
+          end: workout.end ?? prior?.end ?? null,
+          durationSec: Math.max(workout.durationSec, prior?.durationSec ?? 0),
+          activeKcal: workout.activeKcal ?? prior?.activeKcal ?? null,
           firstSeenAt: prior?.firstSeenAt ?? seenAt,
           updatedAt: seenAt,
         };
+        writes[key] = merged;
 
-        const startedAt = parseIso(workout.start);
+        const startedAt = parseIso(merged.start);
         const recent = startedAt !== null && startedAt >= traceFloor;
         if (!recent) continue;
 
         if (!prior) {
           traces.push({
             kind: 'workout_detected',
-            summary: describeWorkout(workout),
-            data: { hkUuid: workout.hkUuid },
+            summary: describeWorkout(merged),
+            data: { hkUuid: merged.hkUuid },
           });
-        } else if (!prior.end && workout.end) {
+        } else if (!prior.end && merged.end) {
           traces.push({
             kind: 'workout_detected',
-            summary: `${humanizeType(workout.type)} · done · ${minutes(workout.durationSec)} min`,
-            data: { hkUuid: workout.hkUuid },
+            summary: `${humanizeType(merged.type)} · done · ${minutes(merged.durationSec)} min`,
+            data: { hkUuid: merged.hkUuid },
           });
         }
       }
@@ -281,7 +289,13 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
     dueAt: stored.dueAt,
     graceMin: stored.graceMin,
     status: stored.status,
-    stake: stored.stake,
+    // Projected field by field too: step 6 hangs Solana vault bookkeeping off
+    // the stake record, and none of that belongs on the wire.
+    stake: {
+      lamports: stored.stake.lamports,
+      status: stored.stake.status,
+      txSig: stored.stake.txSig,
+    },
   };
 }
 
