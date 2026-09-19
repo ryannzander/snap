@@ -69,11 +69,11 @@ schemes:
       config: Debug
     test:
       config: Debug
-      # SnapUITests drives a system HealthKit permission sheet, so it is in the scheme
-      # but skipped by default (Cmd-U and a plain `xcodebuild test` leave it alone).
-      # Run it deliberately:
+      # SnapUITests drives a system HealthKit permission sheet. A scheme-level skip
+      # would also block `-only-testing`, so it stays a normal member and the unit-only
+      # run leaves it out explicitly:
+      #   xcodebuild test -scheme Snap -skip-testing:SnapUITests -destination '...'
       #   xcodebuild test -scheme Snap -only-testing:SnapUITests -destination '...'
       targets:
         - SnapTests
-        - name: SnapUITests
-          skipped: true
+        - SnapUITests
