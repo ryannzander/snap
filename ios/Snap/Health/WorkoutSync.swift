@@ -192,7 +192,9 @@ private extension WorkoutDTO {
             start: workout.startDate,
             end: workout.endDate,
             durationSec: Int(workout.duration.rounded()),
-            activeKcal: kcal.map { Int($0.rounded()) }
+            activeKcal: kcal.map { Int($0.rounded()) },
+            source: workout.sourceRevision.source.bundleIdentifier,
+            wasUserEntered: workout.metadata?[HKMetadataKeyWasUserEntered] as? Bool ?? false
         )
     }
 }

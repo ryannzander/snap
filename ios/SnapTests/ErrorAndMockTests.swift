@@ -89,7 +89,8 @@ final class MockAPITests: XCTestCase {
         let api = MockAPI()
         try await api.postWorkouts([
             WorkoutDTO(hkUuid: "u", type: "traditionalStrengthTraining",
-                       start: Date(), end: Date(), durationSec: 2700, activeKcal: 300)
+                       start: Date(), end: Date(), durationSec: 2700, activeKcal: 300,
+                       source: "com.apple.health", wasUserEntered: false)
         ])
 
         let events = try await api.trace(since: nil)
@@ -104,7 +105,8 @@ final class MockAPITests: XCTestCase {
 
         try await api.postWorkouts([
             WorkoutDTO(hkUuid: "u", type: "running",
-                       start: Date(), end: Date(), durationSec: 1800, activeKcal: nil)
+                       start: Date(), end: Date(), durationSec: 1800, activeKcal: nil,
+                       source: "com.strava.stravaride", wasUserEntered: false)
         ])
 
         let after = try await api.state()

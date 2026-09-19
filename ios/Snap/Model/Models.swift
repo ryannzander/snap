@@ -26,6 +26,12 @@ struct WorkoutDTO: Encodable {
     let end: Date?
     let durationSec: Int
     let activeKcal: Int?
+    /// Bundle id of whatever wrote the sample — a Watch, Strava, Hevy, or Snap itself.
+    let source: String
+    /// True when a human typed this into the Health app rather than recording it.
+    /// The whole product claim is that Snap knows rather than asks, so a hand-typed
+    /// workout must not be able to release a stake.
+    let wasUserEntered: Bool
 }
 
 struct SnapState: Decodable {
