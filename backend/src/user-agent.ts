@@ -20,6 +20,7 @@ import {
 } from './agent/guards';
 import { DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
 import type { Brain, ToolCall } from './brain';
+import { FallbackBrain } from './brains/fallback';
 import { OpenAIBrain } from './brains/openai';
 import { WorkersAIBrain, type AiBinding } from './brains/workers-ai';
 import type { Channel, ChannelName } from './channel';
@@ -1314,12 +1315,27 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
    * OpenAI is unreachable mid-demo.
    */
   private brain(): Brain | null {
-    if (this.env.OPENAI_API_KEY) {
-      return new OpenAIBrain(this.env.OPENAI_API_KEY, this.env.OPENAI_MODEL || 'gpt-4o');
-    }
     const ai = (this.env as unknown as { AI?: AiBinding }).AI;
-    if (ai) return new WorkersAIBrain(ai, this.env.WORKERS_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast');
-    return null;
+    const workersAI = ai
+      ? new WorkersAIBrain(ai, this.env.WORKERS_AI_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+      : null;
+
+    if (!this.env.OPENAI_API_KEY) return workersAI;
+
+    const openai = new OpenAIBrain(this.env.OPENAI_API_KEY, this.env.OPENAI_MODEL || 'gpt-4o');
+    if (!workersAI) return openai;
+
+    // A wrong model name or a dead key used to mean the agent said nothing.
+    // The binding is already there; use it rather than going quiet.
+    return new FallbackBrain(openai, workersAI, async (error) => {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `openai unavailable — falling back to ${workersAI.name}`,
+          data: { error: redact(error), model: this.env.OPENAI_MODEL || 'gpt-4o' },
+        },
+      ]);
+    });
   }
 
   // --- internals -----------------------------------------------------------
