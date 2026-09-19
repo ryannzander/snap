@@ -10,6 +10,7 @@
 import {
   buildDays,
   countThisWeek,
+  countVerifiedThisWeek,
   recentMessages,
   renderContext,
   summarizeContext,
@@ -63,6 +64,52 @@ section('the weekly count uses the same bar as releasing a stake');
     workout('2026-09-17T16:00:00Z', 1800, 'running'),
   ];
   eq('two that can, count for two', countThisWeek(NOW, TZ, [...junk, ...real]), 2);
+}
+
+section('a verified photo fills a goal dot, because it releases a stake');
+{
+  const real = [
+    workout('2026-09-18T16:00:00Z', 2700, 'traditionalStrengthTraining'), // Fri
+    workout('2026-09-17T16:00:00Z', 1800, 'running'),                      // Thu
+  ];
+  const met = (proofAt: string) => ({ status: 'met', dueAt: proofAt, proof: { at: proofAt } });
+
+  eq('the watch alone is unchanged', countVerifiedThisWeek(NOW, TZ, real, []), 2);
+
+  // Wednesday: a photo and nothing on the watch. This is the whole point —
+  // the pic is what returns the money, so it has to move the number too.
+  eq(
+    'a photo-only session counts',
+    countVerifiedThisWeek(NOW, TZ, real, [met('2026-09-16T16:00:00Z')]),
+    3,
+  );
+
+  // Friday already has a workout. Someone who trains with the watch on AND
+  // sends a picture did one session; counting it twice flatters the goal.
+  eq(
+    'a photo on a day that already has a workout does not count twice',
+    countVerifiedThisWeek(NOW, TZ, real, [met('2026-09-18T17:00:00Z')]),
+    2,
+  );
+
+  eq(
+    'two photos on the same day are still one day',
+    countVerifiedThisWeek(NOW, TZ, real, [met('2026-09-16T14:00:00Z'), met('2026-09-16T20:00:00Z')]),
+    3,
+  );
+
+  // A commitment that was missed has no proof on it, and last week's does
+  // not belong to this week.
+  eq(
+    'a missed commitment counts for nothing',
+    countVerifiedThisWeek(NOW, TZ, real, [{ status: 'missed', dueAt: '2026-09-16T16:00:00Z', proof: null }]),
+    2,
+  );
+  eq(
+    'and last week stays in last week',
+    countVerifiedThisWeek(NOW, TZ, real, [met('2026-09-11T16:00:00Z')]),
+    2,
+  );
 }
 
 section('a missed commitment marks its local day skipped');
@@ -130,6 +177,7 @@ section('what the model actually sees');
       },
     ] as unknown as Array<Commitment & { renegotiations: number }>,
     standingOffer: null,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
 
@@ -151,6 +199,17 @@ section('what the model actually sees');
   for (const needle of ['weekly goal: 4', 'done this week: 2', 'gym at 7', 'held', 'Ryan']) {
     isTrue(`carries "${needle}"`, rendered.includes(needle));
   }
+  // Snap offers stakes unprompted, so it has to know what is actually there
+  // to offer — otherwise it proposes 0.05 to a wallet holding 0.01 and the
+  // guards refuse a stake the user has already said yes to.
+  isTrue('the spendable balance', rendered.includes('0.12 SOL spendable'));
+  isTrue('and what is already locked', rendered.includes('0.05 SOL already locked'));
+  isTrue(
+    'an unreachable chain is unknown, not empty',
+    renderContext({ ...context, wallet: { balanceLamports: null, heldLamports: 0 } }).includes(
+      'balance unknown right now',
+    ),
+  );
 }
 
 section('an offer on the table is something the model must see');
@@ -165,6 +224,7 @@ section('an offer on the table is something the model must see');
     lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
     openCommitments: [],
     standingOffer: null,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
 

@@ -1,4 +1,5 @@
-import { TEXT_GAP_MS, sleep, type Channel, type InboundMessage } from '../channel';
+import { TEXT_GAP_MS, sleep, type Channel, type InboundMessage, type InboundReaction } from '../channel';
+import { reactionEmoji, toReaction, type ReactionName } from '../reactions';
 
 /**
  * Linq adapter — real iMessage. https://docs.linqapp.com/channel/imessage
@@ -18,7 +19,9 @@ export class LinqChannel implements Channel {
 
   constructor(private readonly apiKey: string) {}
 
-  async send(chatId: string, texts: string[]): Promise<void> {
+  async send(chatId: string, texts: string[]): Promise<Array<string | null>> {
+    const ids: Array<string | null> = [];
+
     for (const [index, text] of texts.entries()) {
       // Snap texts in bursts; pace them so they land like someone typing.
       if (index > 0) await sleep(TEXT_GAP_MS);
@@ -40,7 +43,89 @@ export class LinqChannel implements Channel {
         // 403 with code 2024 is a keyword opt-out. Never retry it.
         throw new Error(`linq send failed: ${response.status} ${body.slice(0, 300)}`);
       }
+
+      ids.push(await sentMessageId(response));
     }
+
+    return ids;
+  }
+
+  /**
+   * Tapback one of their messages.
+   *
+   * Deliberately never throws. A tapback is the one thing Snap sends that is
+   * pure texture: if the line, the payload version or the recipient's device
+   * will not carry it, the turn it decorates must still land. The trace event
+   * is written by the caller either way, so the brain screen shows what Snap
+   * meant even when the channel dropped it.
+   *
+   * Sent as a `reaction` part naming the target message, which is the shape
+   * the v3 message payload uses for everything that is not text or media. A
+   * reaction with no target has nothing to attach to and is skipped rather
+   * than sent as a bare emoji text — a stray "👍" in the thread reads as Snap
+   * losing the plot.
+   */
+  async react(chatId: string, reaction: ReactionName, messageId: string | null): Promise<void> {
+    if (!messageId) return;
+
+    try {
+      const response = await fetch(`${API_BASE}/messages`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          to: [chatId],
+          message: {
+            parts: [
+              {
+                type: 'reaction',
+                value: reaction,
+                emoji: reactionEmoji(reaction),
+                target_message_id: messageId,
+              },
+            ],
+          },
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        console.error(`linq reaction not delivered: ${response.status} ${body.slice(0, 200)}`);
+      }
+    } catch (error) {
+      console.error('linq reaction failed', String(error).slice(0, 200));
+    }
+  }
+}
+
+/**
+ * The id Linq gave the message it just accepted, or null.
+ *
+ * Best effort by design: the id is only used to label a tapback on that text
+ * later, so a payload shape we cannot read costs a caption, not a message. A
+ * body that will not even parse is not worth failing a delivered send over.
+ */
+async function sentMessageId(response: Response): Promise<string | null> {
+  try {
+    const body = (await response.json()) as Record<string, unknown>;
+    const data = (body.data ?? body) as Record<string, unknown>;
+    if (typeof data.id === 'string') return data.id;
+    const messages = data.messages ?? data.message;
+    if (Array.isArray(messages)) {
+      const first = messages[0];
+      if (typeof first === 'object' && first !== null) {
+        const id = (first as Record<string, unknown>).id;
+        if (typeof id === 'string') return id;
+      }
+    }
+    if (typeof messages === 'object' && messages !== null) {
+      const id = (messages as Record<string, unknown>).id;
+      if (typeof id === 'string') return id;
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -117,8 +202,8 @@ export function normalizeInbound(body: unknown): InboundMessage | null {
   if (typeof body !== 'object' || body === null) return null;
   const envelope = body as Record<string, unknown>;
 
-  const eventType = envelope.event_type ?? envelope.event;
-  if (eventType !== 'message.received') return null;
+  const eventType = String(envelope.event_type ?? envelope.event ?? '');
+  if (!INBOUND_EVENTS.has(eventType)) return null;
 
   const data = envelope.data;
   if (typeof data !== 'object' || data === null) return null;
@@ -131,17 +216,101 @@ export function normalizeInbound(body: unknown): InboundMessage | null {
 
   const text = textFromParts(message.parts) ?? '';
   const imageUrls = imageUrlsFromParts(message.parts);
-  if (text === '' && imageUrls.length === 0) return null;
+  const reaction = reactionFrom(envelope, message, eventType);
+  if (text === '' && imageUrls.length === 0 && !reaction) return null;
 
+  const messageId = typeof message.id === 'string' ? message.id : null;
   const eventId =
     typeof envelope.event_id === 'string'
       ? envelope.event_id
-      : typeof message.id === 'string'
-        ? message.id
-        : `${handle}:${text || imageUrls[0]}`;
+      : messageId
+        ? // A removed tapback carries the same message id as the one that
+          // added it; without the suffix the removal looks like a duplicate
+          // delivery of the reaction and is dropped.
+          `${messageId}${reaction ? `:${reaction.emoji}${reaction.removed ? ':off' : ''}` : ''}`
+        : `${handle}:${text || imageUrls[0] || reaction?.emoji}`;
 
-  return { channel: 'linq', chatId: handle, text, imageUrls, eventId };
+  return { channel: 'linq', chatId: handle, text, imageUrls, eventId, messageId, ...(reaction ? { reaction } : {}) };
 }
+
+/** Message deliveries, and the tapback events that ride the same webhook. */
+const INBOUND_EVENTS = new Set([
+  'message.received',
+  'message.reaction',
+  'message.reaction.received',
+  'reaction.received',
+  'reaction.removed',
+]);
+
+/**
+ * The tapback in a delivery, or null when it is an ordinary message.
+ *
+ * Linq has carried reactions as their own event type and as a part inside a
+ * normal message delivery depending on payload version, so both are read.
+ * An emoji we cannot place in the six iMessage slots still comes back with
+ * `name: null` — Snap should hear that they reacted even when we cannot say
+ * which tapback it was.
+ */
+function reactionFrom(
+  envelope: Record<string, unknown>,
+  message: Record<string, unknown>,
+  eventType: string,
+): InboundReaction | null {
+  const fromEvent = eventType !== 'message.received';
+  const part = reactionPart(message.parts);
+  const payload =
+    part ??
+    (typeof message.reaction === 'object' && message.reaction !== null
+      ? (message.reaction as Record<string, unknown>)
+      : fromEvent
+        ? message
+        : null);
+  if (!payload) return null;
+
+  const raw =
+    firstString(payload, ['value', 'reaction', 'emoji', 'name', 'type_name', 'kind']) ?? '';
+  const name = toReaction(raw);
+  const emoji = name ? reactionEmoji(name) : raw;
+  if (!emoji) return null;
+
+  const removed =
+    eventType === 'reaction.removed' ||
+    payload.removed === true ||
+    payload.is_removed === true ||
+    envelope.removed === true ||
+    String(payload.action ?? '') === 'removed';
+
+  return {
+    name,
+    emoji,
+    targetMessageId: firstString(payload, [
+      'target_message_id',
+      'message_id',
+      'targetMessageId',
+      'in_reply_to',
+      'associated_message_id',
+    ]),
+    removed,
+  };
+}
+
+/** The first `reaction`/`tapback` part of a message, if it has one. */
+function reactionPart(parts: unknown): Record<string, unknown> | null {
+  if (!Array.isArray(parts)) return null;
+  for (const part of parts) {
+    if (typeof part !== 'object' || part === null) continue;
+    const entry = part as Record<string, unknown>;
+    if (!REACTION_PART_TYPES.has(String(entry.type ?? ''))) continue;
+    // `value` is a bare string on some versions and an object on others.
+    if (typeof entry.value === 'object' && entry.value !== null) {
+      return { ...(entry.value as Record<string, unknown>), ...entry, value: undefined };
+    }
+    return entry;
+  }
+  return null;
+}
+
+const REACTION_PART_TYPES = new Set(['reaction', 'tapback', 'associated_message']);
 
 function senderHandle(message: Record<string, unknown>): string | null {
   const sender = message.sender_handle ?? message.from_handle;

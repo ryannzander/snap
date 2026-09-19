@@ -1,4 +1,5 @@
 import type { Channel } from '../channel';
+import type { ReactionName } from '../reactions';
 
 /**
  * Development channel: delivers nothing.
@@ -12,7 +13,12 @@ import type { Channel } from '../channel';
 export class TraceChannel implements Channel {
   readonly name = 'trace' as const;
 
-  async send(_chatId: string, _texts: string[]): Promise<void> {
-    // Intentionally empty: the trace event is the whole point.
+  async send(_chatId: string, texts: string[]): Promise<Array<string | null>> {
+    // Nothing is delivered, so there are no ids: the trace event is the point.
+    return texts.map(() => null);
+  }
+
+  async react(_chatId: string, _reaction: ReactionName, _messageId: string | null): Promise<void> {
+    // Same: the `reaction_sent` trace row is what the brain screen shows.
   }
 }

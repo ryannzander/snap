@@ -17,7 +17,12 @@ export type TraceKind =
   | 'workout_detected'
   | 'stake_held'
   | 'stake_released'
-  | 'stake_slashed';
+  | 'stake_slashed'
+  | 'reaction_sent'
+  | 'reaction_received'
+  | 'photo_accepted'
+  | 'photo_rejected'
+  | 'wallet_funded';
 
 /** POST /onboard */
 export interface OnboardRequest {
@@ -63,6 +68,19 @@ export interface Stake {
   txSig: string | null;
 }
 
+/**
+ * The photo that verified a session.
+ *
+ * Null until one lands. The app draws the difference — a plan with no proof
+ * is asking for a picture, a plan with proof is done — so this is the one
+ * field on a commitment that changes what the user is being told to do.
+ */
+export interface Proof {
+  at: string;
+  /** What the vision model saw, one sentence. Shown to the user.  */
+  description: string;
+}
+
 export interface Commitment {
   id: string;
   text: string;
@@ -70,6 +88,13 @@ export interface Commitment {
   graceMin: number;
   status: CommitmentStatus;
   stake: Stake;
+  proof: Proof | null;
+  /**
+   * How the session was verified once it is settled: the photo they sent, or
+   * the watch quietly covering them when they forgot. Null while open, and
+   * on a commitment that was missed.
+   */
+  verifiedBy: 'photo' | 'watch' | null;
 }
 
 export interface StateResponse {
@@ -77,6 +102,41 @@ export interface StateResponse {
   workoutsThisWeek: number;
   linked: boolean;
   commitments: Commitment[];
+}
+
+/** GET /wallet */
+export interface WalletEntry {
+  id: number;
+  /** What moved the money. Mirrors the trace kinds that touch the wallet. */
+  kind: 'funded' | 'held' | 'released' | 'slashed';
+  /** Always positive: `kind` says which way it went. */
+  lamports: number;
+  label: string;
+  at: string;
+  txSig: string | null;
+}
+
+export interface WalletResponse {
+  address: string;
+  cluster: 'devnet';
+  /**
+   * Spendable right now, read from the chain. Null when the RPC could not be
+   * reached — the app says "can't reach the chain" rather than showing a zero
+   * balance, which would read as "your money is gone".
+   */
+  balanceLamports: number | null;
+  /** Locked in escrow against open commitments and competition entries. */
+  heldLamports: number;
+  /** True once the treasury has put something in it. */
+  funded: boolean;
+  /** Newest first, capped. Deposits, locks, returns and slashes. */
+  entries: WalletEntry[];
+}
+
+/** POST /wallet/topup */
+export interface TopUpResponse extends WalletResponse {
+  addedLamports: number;
+  txSig: string | null;
 }
 
 /** GET /trace?since=<eventId> */
