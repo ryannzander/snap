@@ -105,8 +105,9 @@ export async function verifySignature(
 }
 
 /**
- * Pulls `{ channel, chatId, text }` out of a webhook body.
- * Returns null for any event that is not an inbound text message.
+ * Pulls `{ channel, chatId, text, imageUrls }` out of a webhook body.
+ * Returns null for any event that is not an inbound message with at least a
+ * text part or a photo.
  *
  * Handles both the current payload (`data.chat.id` + `sender_handle`) and the
  * older `2025-01-01` shape (`data.chat_id` + `from`), since the sandbox
@@ -128,17 +129,18 @@ export function normalizeInbound(body: unknown): InboundMessage | null {
   const handle = senderHandle(message);
   if (!handle) return null;
 
-  const text = textFromParts(message.parts);
-  if (text === null) return null;
+  const text = textFromParts(message.parts) ?? '';
+  const imageUrls = imageUrlsFromParts(message.parts);
+  if (text === '' && imageUrls.length === 0) return null;
 
   const eventId =
     typeof envelope.event_id === 'string'
       ? envelope.event_id
       : typeof message.id === 'string'
         ? message.id
-        : `${handle}:${text}`;
+        : `${handle}:${text || imageUrls[0]}`;
 
-  return { channel: 'linq', chatId: handle, text, eventId };
+  return { channel: 'linq', chatId: handle, text, imageUrls, eventId };
 }
 
 function senderHandle(message: Record<string, unknown>): string | null {
@@ -148,6 +150,50 @@ function senderHandle(message: Record<string, unknown>): string | null {
     if (typeof handle === 'string' && handle.length > 0) return handle;
   }
   if (typeof message.from === 'string' && message.from.length > 0) return message.from;
+  return null;
+}
+
+/**
+ * The photos in a message, as fetchable URLs.
+ *
+ * Linq's part shape for media has moved between payload versions, so this
+ * reads every form seen so far: a part typed `image`/`attachment`/`media`/
+ * `file` whose `value` is a URL string, or an object carrying `url`,
+ * `media_url` or `src`. Anything with a mime type that is not `image/*` is
+ * skipped — a PDF is not a gym selfie.
+ */
+export function imageUrlsFromParts(parts: unknown): string[] {
+  if (!Array.isArray(parts)) return [];
+  const urls: string[] = [];
+  for (const part of parts) {
+    if (typeof part !== 'object' || part === null) continue;
+    const entry = part as Record<string, unknown>;
+    if (entry.type === 'text') continue;
+    if (!MEDIA_PART_TYPES.has(String(entry.type ?? ''))) continue;
+
+    const payload =
+      typeof entry.value === 'object' && entry.value !== null
+        ? (entry.value as Record<string, unknown>)
+        : entry;
+    const mime = firstString(payload, ['mime_type', 'content_type', 'mimeType', 'contentType']);
+    if (mime && !mime.toLowerCase().startsWith('image/')) continue;
+
+    const url =
+      typeof entry.value === 'string'
+        ? entry.value
+        : firstString(payload, ['url', 'media_url', 'src', 'href']);
+    if (url && /^https?:\/\//i.test(url)) urls.push(url);
+  }
+  return urls;
+}
+
+const MEDIA_PART_TYPES = new Set(['image', 'attachment', 'media', 'file', 'photo', 'picture']);
+
+function firstString(record: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
   return null;
 }
 

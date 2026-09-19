@@ -67,6 +67,7 @@ SNAP_CHANNEL = "trace"
 # OPENAI_API_KEY set, the agent falls back to the Workers AI binding below.
 OPENAI_MODEL = "gpt-4o"
 WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+WORKERS_AI_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
 
 # SOLANA_RPC_URL is deliberately NOT here. The working devnet URL carries its
 # API key in the query string, this file is committed, and the repo is public.

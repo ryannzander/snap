@@ -99,6 +99,8 @@ The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stre
 
 A turn where the agent looked and chose not to text is **not** its own kind — it arrives as a `decision` whose summary reads `stayed quiet — <reason>`.
 
+A photo the user texts arrives as a `message_received` whose summary starts with `📷` (the caption, or `sent a photo`), with the URLs in `data.imageUrls`, followed by a `context` row `looked at the photo · <description>` (or a `decision` saying the photo could not be seen). The agent's reply follows as usual.
+
 `summary` is always display-ready. `data` is optional detail, and its contents are not part of this contract with one exception: on `decision`, `data.reasoning` is the agent's own words and the app shows it under the summary when present. Anything else in `data`, or a `data` that isn't an object, must be ignored rather than treated as fatal. An unknown `kind` still renders as a plain row, and one malformed event is dropped without losing the rest of the page.
 
 `id` is a positive integer starting at 1 and increasing. `since` is **exclusive**: pass the `id` of the last event you received and you get events with a strictly greater `id`. Omit it on the first poll. It must be a whole number between 0 and 1000000000000, or you get a 400.
@@ -149,7 +151,13 @@ Unlike the webhook, this **waits for the turn to finish** before responding — 
 
 `ran` is `false` when no model is configured, and `optedOut` is `true` when the user has opted out — in both cases the message is still recorded.
 
-`text` must be a non-empty string of at most 1000 characters.
+`text` must be a non-empty string of at most 1000 characters — unless `imageUrl` is sent, in which case `text` may be empty and acts as the caption.
+
+```json
+{ "text": "pump check", "imageUrl": "https://example.com/gym.jpg" }
+```
+
+`imageUrl` makes it a **photo turn**: the backend fetches the image, describes it with the vision model, traces the look, and the agent reacts to the description. This is how the photo beat is rehearsed without spending the sandbox message budget. A photo never releases a stake — release still needs a covering HealthKit workout.
 
 ## Competitions
 
@@ -257,5 +265,5 @@ Every non-2xx response has the same body:
 
 ## Webhooks (backend only)
 
-- `POST /webhooks/linq` — Linq `message.received`, Standard Webhooks signature (`webhook-id` / `webhook-timestamp` / `webhook-signature`), 5-minute replay window, deliveries de-duplicated by event id. Always answers 200 for anything it cannot route, because a retry of an unroutable message is no more routable the second time.
+- `POST /webhooks/linq` — Linq `message.received` (text parts, and image parts as photos), Standard Webhooks signature (`webhook-id` / `webhook-timestamp` / `webhook-signature`), 5-minute replay window, deliveries de-duplicated by event id. Always answers 200 for anything it cannot route, because a retry of an unroutable message is no more routable the second time.
 - `POST /webhooks/telegram` — planned, **not routed yet** (currently 404).

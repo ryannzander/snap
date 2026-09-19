@@ -48,6 +48,10 @@ SNAP_CHANNEL = "linq"
 OPENAI_MODEL = "gpt-5.5"
 WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
+# Looks at photos the user texts. OpenAI's chat model sees images itself; this
+# is the Workers AI fallback when there is no OpenAI key or it is down.
+WORKERS_AI_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
+
 # SOLANA_RPC_URL is deliberately NOT here. The working devnet URL carries its
 # API key in the query string, this file is committed, and the repo is public.
 # It is a secret: `wrangler secret put SOLANA_RPC_URL`.
