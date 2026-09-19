@@ -79,12 +79,23 @@ interface FetchedImage {
   mime: string;
 }
 
+/**
+ * Workers' fetch sends no User-Agent, and a fair number of image hosts refuse
+ * that outright — Wikimedia answers 403 with "scripts should use an
+ * informative User-Agent", which is what a rehearsal with a Wikipedia link
+ * hits. Saying who we are costs nothing and makes an arbitrary public URL
+ * work, which is what anyone testing by hand will reach for.
+ */
+const USER_AGENT = 'SnapBot/1.0 (+https://github.com/ryannzander/snap)';
+
 async function fetchImage(url: string, linqApiKey: string | undefined): Promise<FetchedImage> {
-  let response = await fetch(url);
+  let response = await fetch(url, { headers: { 'user-agent': USER_AGENT } });
   // Linq's media URLs may be behind the partner key; try plain first so a
   // public CDN link never sees the key.
   if ((response.status === 401 || response.status === 403) && linqApiKey) {
-    response = await fetch(url, { headers: { authorization: `Bearer ${linqApiKey}` } });
+    response = await fetch(url, {
+      headers: { 'user-agent': USER_AGENT, authorization: `Bearer ${linqApiKey}` },
+    });
   }
   if (!response.ok) throw new Error(`photo fetch failed: ${response.status}`);
 
