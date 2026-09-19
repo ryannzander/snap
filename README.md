@@ -12,4 +12,5 @@ commitment → missed workout detected → agent evaluates context → proactive
 
 - `ios/` — SwiftUI app (onboarding, HealthKit sync, "Snap's brain" trace screen)
 - `backend/` — agent, messaging channel adapters (Telegram first, swappable), Solana stake escrow. **Lives in a separate repository**; this one holds only the app, which talks to the deployed Worker in `ios/Snap/Config.swift`.
+- `brand/` — the mark, app icon, wordmark and Devpost banner. `brand/snap-icon.png` is what ships in the app's asset catalog.
 - `docs/` — design decisions. [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md) is the last full review of this repo.

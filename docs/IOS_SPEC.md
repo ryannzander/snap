@@ -100,13 +100,15 @@ Colors, fonts, spacing. See "Look" below.
 
 ### `Views/OnboardingView.swift`
 
-Five pages, one idea each, with progress dashes and a back chevron across the top and a
-circular next button bottom-right. Structure borrowed from Stoic; layouts are Snap's.
+Five pages, one idea each. Every page has the same shape as the reference check-in: back chevron,
+progress dashes and a "start over" cross across the top; an illustration; the question in grey;
+the explanation; the answer as a big statement at the bottom; the circular next button bottom-right.
+Everything is centred. The hello page is a cover and shows no chrome.
 
-1. **`meet snap.`** — the mark, the line, one pill button.
-2. **`what do i call you?`** — name field.
-3. **`how many days a week?`** — 1–7 selector, default 4. These become the dots on the brain screen.
-4. **`here's the deal.`** — three numbered rows: you text a plan · he watches your workouts · you go you get it back, you skip half is forfeited. The stake gets its own beat so nobody is surprised by it later.
+1. **`meet snap.`** — the line up top, the mark filling the bottom of the screen, one pill button.
+2. **`what should snap call you?`** — centred name field with an underline.
+3. **`how many days a week?`** — the dumbbell, then "every week / i'll train 4 days." over a 1–7 slider (`SnapSlider`, snapping, haptic per step). The sentence rewrites itself as the thumb moves.
+4. **`put money on it.`** — laid out like the reference's plan page: the headline, "0.05 SOL" in the gradient, then a white card of three rows (text a plan · he checks, not asks · show up, get it back) with the stake row marked by a `SOL` pill.
 5. **`i need to see your workouts.`** — the reason on screen, then the HealthKit sheet over it. Denied permission still continues — the app just won't sync. A "skip for now" link does the same thing without asking.
 
 Page 5's button requests HealthKit permission, then calls `onboard`.
@@ -117,15 +119,21 @@ same for the link screen.
 
 ### `Views/LinkView.swift`
 
-"text snap" and the code, huge: `yo 4821`. Two buttons: **iMessage** opens `sms:<number>&body=yo%204821`, **Telegram** opens `https://t.me/<bot>?start=4821`. Show only the buttons whose contact came back from `/onboard`. The screen advances by itself when `state.linked` turns true.
+"last thing. text snap." and the code, huge, in the app's one gradient: `yo 4821` (tap to copy). Two buttons: **iMessage** opens `sms:<number>&body=yo%204821`, **Telegram** opens `https://t.me/<bot>?start=4821`. Show only the buttons whose contact came back from `/onboard`. The screen advances by itself when `state.linked` turns true. `ThreadLink` at the bottom of this file is the one place that builds those URLs; the today screen's `+` uses it too, with nothing pre-filled.
 
 ### `Views/BrainView.swift`
 
-The only screen that matters. Top to bottom:
+The live app: two screens and a bottom bar — **today · + · brain**. The `+` opens the message thread (iMessage first, Telegram otherwise), because a new plan is a text, never a form.
 
-1. **Header.** `snap` wordmark (long-press opens the debug panel), and one dot per weekly-goal workout, filled for each done.
-2. **Commitment card.** The commitment text; a live countdown to `checkAt` using `TimelineView(.periodic(from: .now, by: 1))` — counting down in the accent color, then counting **up** in red with "late" once passed; a stake pill: `0.05 SOL · held`, changing color for `released` / `slashed`. With no open commitment: "no plan yet. text snap."
-3. **Trace feed.** Fills the rest of the screen. Each row: time (`HH:mm:ss`, monospaced, dim), a glyph per `kind`, the `summary`. Rows enter from the bottom with opacity + slight offset and the feed auto-scrolls to the newest. `message_sent` and `message_received` rows are drawn as small chat bubbles (right / left) so the conversation is readable inside the trace. `decision` rows are the brightest thing on screen.
+**today** is the reference's home screen, top to bottom:
+
+1. **Header.** Streak pill (`flame 2/4`, workouts this week over the goal), the greeting (`good evening.`, by hour), and an ink circle with the first letter of your name. Long-press anywhere in the header for the debug panel; nothing on screen advertises it.
+2. **Week strip.** Sunday to Saturday with today in a hairline box. It's a calendar, not a scoreboard.
+3. **Plan card.** The dark gradient card. Kicker (`today's plan`), the commitment text in white, then a live countdown to `checkAt` using `TimelineView(.periodic(from: .now, by: 1))` — white, then counting **up** in red with "late" once passed. `met` shows `done.`, `missed` shows `missed.` in red. A white "text snap" pill at the bottom. With no open commitment: "no plan yet / what's the move today?".
+4. **Stake card.** White, only when a stake exists: `0.05 SOL on the line.`, where it is (`held · solana devnet`, `released · back in your wallet`, or the refunded/forfeited split), a status pill (the gradient for `held`, ink for `released`, red for `slashed`), one line of what happens next, and the explorer receipt as an outline pill when the backend sent a signature (labelled `mock` on the mock).
+5. **`SNAP'S BRAIN`** section label, the last three trace rows, and a "see everything" pill that switches to the brain tab.
+
+**brain** is the full trace and nothing else. Each row: time (`HH:mm:ss`, monospaced, dim), a glyph per `kind`, the `summary`. Rows enter from the bottom with opacity + slight offset and the feed auto-scrolls to the newest. `message_sent` rows are ink bubbles on the right, `message_received` grey bubbles on the left, so the conversation is readable inside the trace. `decision` rows are white cards with a lavender bolt — the only cards in the feed.
 
 ### `Views/DebugPanel.swift`
 
@@ -133,7 +141,7 @@ Sheet from the long-press. Server URL and debug key fields (save → `reloadAPI(
 
 ## Look
 
-Light only. Off-white paper (`#F3F3F1`), near-black ink (`#0B0C0A`), one acid-lime accent (`#C8FF1E`) used **as a fill, never as type** — lime on white is illegible, so it only ever sits behind ink. One warning red (`#D92E22`). Avenir Next Heavy for statements, rounded heavy numerals for the countdown, monospaced for the trace. Soft high-radius cards, no borders, no gradients, no tab bar, no navigation bar. The one visual idea is the trace: a live stream of an agent thinking, with the countdown above it as the only large element. Lowercase copy throughout, same voice as Snap's texts.
+Light only, and monochrome. Paper (`#F2F2F2`), white cards, near-black ink (`#141414`), grey secondary type (`#6B6B6B`, 4.9:1 on paper), hairlines (`#D9D9D9`). One colour in the whole app: a lavender-to-rose diagonal gradient (`#8C8BD8` → `#D990B4`) that appears only where money is on the line — the `0.05 SOL` line on the deal page, the code card, the `held` stake pill. One warning red for "late" and "missed" (`#D0342C`, `#FF6B5E` on the dark card). The system face, bold and lowercase, for everything the user reads; tabular digits for the countdown; monospaced for the trace. Big-radius cards (36 pt) with a faint lift, one dark gradient card per screen, a thick ink slider with a white thumb, tracked uppercase for section labels and nowhere else. The mark is Snap himself: a speech bubble with its eyes closed, happy, drawn in code (`SnapMark`) and shipped as `brand/snap-mark.svg`. Lowercase copy throughout, same voice as Snap's texts.
 
 ## Done means
 
