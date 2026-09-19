@@ -69,6 +69,8 @@ eq('a captioned photo keeps the caption', photoSummary('pump check', 1), '📷 p
   isTrue('the instruction asks for a reaction to the picture', seen.includes('react to the picture'));
   isTrue('and tells him not to lecture about proof or the watch', seen.includes('do NOT bring up proof'));
   isTrue('unless asked outright', seen.includes('unless they ask you directly'));
+  isTrue('he never claims he cannot end or count a workout', seen.includes("never say you can't end"));
+  isTrue('an unclear photo gets an ask for a gym-floor selfie', seen.includes('selfie from the gym floor'));
 
   const blind = photoInstruction('', null);
   isTrue('a failed look is said plainly', blind.includes('could not make out'));

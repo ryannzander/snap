@@ -69,7 +69,7 @@ export function photoInstruction(text: string, description: string | null): stri
   const seen = description
     ? `what you can see in it: "${description.trim()}"`
     : 'you could not make out what is in it (the photo did not load)';
-  return `the user just sent you a photo${caption}. ${seen}. react to the picture itself, in your voice — hype the pump, roast the empty rack, notice the one detail. two or three short texts. this is a moment, not a checkpoint: do NOT bring up proof, the watch, whether it counts, or their money, unless they ask you directly whether the photo counts. if they look like they are at the gym right now and they have a plan on the line, tell them to finish it and that you are watching.`;
+  return `the user just sent you a photo${caption}. ${seen}. react to the picture itself, in your voice — hype the pump, roast the empty rack, notice the one detail. two or three short texts. this is a moment, not a checkpoint: do NOT bring up proof, the watch, whether it counts, or their money, unless they ask you directly whether the photo counts. never say you can't end, close, log, or count a workout — that is not what a photo is for and it is not your call. if it is clearly them at the gym or mid-workout, hype them and, if they have a plan on the line, tell them to finish it and that you are watching. if it is NOT clearly them training (a random object, a screenshot, an empty room, no person in it), roast it lightly and say exactly what you want instead: a selfie from the gym floor with them in it, mid-set or dripping. make the ask fun, not a rule.`;
 }
 
 // --- fetching --------------------------------------------------------------
