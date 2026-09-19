@@ -6,6 +6,7 @@ import SwiftUI
 struct LinkView: View {
     @Environment(AppModel.self) private var model
     @State private var pulse = false
+    @State private var copied = false
 
     var body: some View {
         ZStack {
@@ -56,17 +57,24 @@ struct LinkView: View {
     }
 
     private var codeCard: some View {
-        HStack {
-            Spacer()
-            Text("yo \(model.linkCode)")
-                .font(Theme.numerals(44))
-                .foregroundStyle(Theme.ink)
-                .minimumScaleFactor(0.6)
-                .lineLimit(1)
-            Spacer()
+        Button {
+            UIPasteboard.general.string = "yo \(model.linkCode)"
+            withAnimation(.snappy) { copied = true }
+        } label: {
+            HStack {
+                Spacer()
+                Text(copied ? "copied" : "yo \(model.linkCode)")
+                    .font(Theme.numerals(44))
+                    .foregroundStyle(Theme.ink)
+                    .minimumScaleFactor(0.6)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                Spacer()
+            }
+            .padding(.vertical, Theme.Space.l)
+            .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.accent))
         }
-        .padding(.vertical, Theme.Space.l)
-        .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.accent))
+        .buttonStyle(.plain)
         .scaleEffect(pulse ? 1.015 : 1)
         .animation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true), value: pulse)
         .onAppear { pulse = true }
