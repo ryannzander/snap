@@ -29,9 +29,6 @@ enum Config {
         return url
     }
 
-    /// True when the current settings run the scripted mock rather than a server.
-    static var isMock: Bool { serverURL(from: baseURL) == nil }
-
     static func makeAPI(token: String?) -> SnapAPI {
         guard let url = serverURL(from: baseURL) else { return MockAPI.shared }
         return LiveAPI(baseURL: url, token: token, debugKey: debugKey)

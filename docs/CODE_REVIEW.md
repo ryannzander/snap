@@ -107,6 +107,9 @@ What the repository establishes on its own:
 - **`TraceRow` re-animates when scrolled back into view** (its `@State shown` resets in the `LazyVStack`). Cosmetic; left.
 - **No `LiveAPI` or `AppModel` unit tests.** Both need an injection seam (`URLProtocol` stub, `init(api:)`) that is a bigger change than this pass.
 - **`SWIFT_VERSION: 5.0`** means none of the concurrency reasoning is compiler-checked; the `@Sendable` HealthKit handlers capturing a `@MainActor` class and the non-`Sendable` formatter statics are Swift 6 errors. Worth `SWIFT_STRICT_CONCURRENCY: targeted` after the demo.
+- **A full `/trace` page with one malformed event** now counts 199 after the bad one is dropped, so the "fetch the next page immediately" fast path doesn't trigger; the regular one-second poll picks the rest up. Not worth threading a raw count through the API protocol.
+- **`Keychain.lastWriteError`** is a mutable static; fine in Swift 5 mode, a strict-concurrency error later. Make `Keychain` `@MainActor` when the project moves to Swift 6.
+- **The observer's completion handler** now waits on up to two short retries (3 s of sleep) before acknowledging a background delivery. That is inside iOS's budget for a HealthKit wake, but if deliveries ever stop arriving, this is the first thing to shorten.
 - **The debug key** lives in UserDefaults (as the spec asked). It authorises `/debug/*` for any user; the Worker should scope it to the bearer token's own user.
 
 ## What was done well (worth keeping)

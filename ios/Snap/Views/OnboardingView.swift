@@ -28,6 +28,7 @@ struct OnboardingView: View {
     @State private var name = ""
     @State private var goal = 4
     @State private var submitting = false
+    @State private var attemptFailed = false
     @State private var showDebug = false
     @FocusState private var nameFocused: Bool
 
@@ -45,7 +46,7 @@ struct OnboardingView: View {
                     Group {
                         switch page {
                         case .hello:  HelloPage()
-                        case .name:   NamePage(name: $name, focused: $nameFocused, onSubmit: advance)
+                        case .name:   NamePage(name: $name, focused: $nameFocused, submit: advance)
                         case .goal:   GoalPage(goal: $goal)
                         case .deal:   DealPage()
                         case .health: HealthPage()
@@ -110,12 +111,12 @@ struct OnboardingView: View {
                 VStack(spacing: Theme.Space.s) {
                     // No error dialog, ever — but a tap that does nothing is worse. One dim
                     // line in voice, only after a failed attempt on this page.
-                    if let error = model.lastError, !submitting {
+                    if attemptFailed, !submitting {
                         Text("can't reach snap. hold the dashes up top to check the server.")
                             .font(Theme.body(14))
                             .foregroundStyle(Theme.danger)
                             .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel("error: \(error)")
+                            .accessibilityLabel("error: \(model.lastError ?? "onboarding failed")")
                     }
 
                     Button(submitting ? "one sec…" : "connect & finish") {
@@ -173,6 +174,8 @@ struct OnboardingView: View {
         defer { submitting = false }
         if health { await model.requestHealthAuthorization() }
         await model.onboard(name: name, goal: goal)
+        // Still here means the request didn't succeed; the model kept the reason.
+        attemptFailed = model.phase == .onboarding
     }
 }
 
@@ -195,7 +198,7 @@ private struct HelloPage: View {
 private struct NamePage: View {
     @Binding var name: String
     @FocusState.Binding var focused: Bool
-    let onSubmit: () -> Void
+    let submit: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.l) {
@@ -213,7 +216,7 @@ private struct NamePage: View {
                     .accessibilityLabel("your name")
                     // "done" on the keyboard means the same as the arrow.
                     .onSubmit {
-                        if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { onSubmit() }
+                        if !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { submit() }
                     }
 
                 Rectangle()
@@ -228,7 +231,7 @@ private struct NamePage: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         // Focus after the page transition has settled; focusing mid-transition is the
         // classic way for the keyboard to silently not appear.
-        .task {
+        .task { @MainActor in
             try? await Task.sleep(for: .milliseconds(350))
             focused = true
         }

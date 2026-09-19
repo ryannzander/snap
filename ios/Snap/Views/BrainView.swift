@@ -172,7 +172,7 @@ struct BrainView: View {
 
     /// Signatures are 88 characters. Show enough of both ends to check it against
     /// the explorer by eye, which is the only thing anyone does with one on stage.
-    static func shorten(_ signature: String) -> String {
+    nonisolated static func shorten(_ signature: String) -> String {
         guard signature.count > 16 else { return signature }
         return "\(signature.prefix(6))…\(signature.suffix(6))"
     }

@@ -77,8 +77,16 @@ final class AppModel {
     var isMock: Bool { api is MockAPI }
 
     /// True until the HealthKit sheet has been answered — the one "not syncing" state
-    /// the app can actually name, since HealthKit hides read denial.
-    var isHealthAccessUndetermined: Bool { sync.isAuthorizationUndetermined }
+    /// the app can actually name, since HealthKit hides read denial. Stored (not read
+    /// through `sync`) so the brain screen's notice goes away when it changes.
+    private(set) var isHealthAccessUndetermined = false
+
+    private func refreshHealthAccess() {
+        let undetermined = sync.isAuthorizationUndetermined
+        if undetermined != isHealthAccessUndetermined {
+            isHealthAccessUndetermined = undetermined
+        }
+    }
 
     // MARK: - Lifecycle
 
@@ -104,6 +112,7 @@ final class AppModel {
         }
 
         observeLifecycle()
+        refreshHealthAccess()
 
         #if DEBUG
         // `SNAP_PHASE=linking|live` drops straight onto a screen against MockAPI, and
@@ -169,6 +178,7 @@ final class AppModel {
     /// the app just won't sync.
     func requestHealthAuthorization() async {
         await sync.requestAuthorization()
+        refreshHealthAccess()
     }
 
     func onboard(name rawName: String, goal: Int) async {
@@ -321,7 +331,9 @@ final class AppModel {
             // Onboarding is driven by the token, not by the server.
             if phase != .onboarding {
                 phase = state.linked ? .live : .linking
-                defaults.set(state.linked, forKey: Key.linked)
+                if defaults.bool(forKey: Key.linked) != state.linked {
+                    defaults.set(state.linked, forKey: Key.linked)
+                }
             }
         } catch {
             handle(error)
@@ -417,6 +429,7 @@ final class AppModel {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.startPolling()
+                self.refreshHealthAccess()
                 // A POST that failed while we were away left the anchor where it was;
                 // HealthKit will not fire again for it, so this is the retry.
                 if self.token != nil {

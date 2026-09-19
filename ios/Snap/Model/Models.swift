@@ -169,10 +169,6 @@ struct TraceResponse: Decodable {
 
     private enum CodingKeys: String, CodingKey { case events }
 
-    init(events: [TraceEvent]) {
-        self.events = events
-    }
-
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         events = try container.decode([Lossy<TraceEvent>].self, forKey: .events).compactMap(\.value)

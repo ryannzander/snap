@@ -13,13 +13,14 @@ final class WorkoutSync {
     private static let workoutType = HKObjectType.workoutType()
 
     /// Only workouts from the last week are ever interesting to Snap, so every query is
-    /// bounded to it — the same predicate on every drain keeps the anchor lineage
-    /// consistent instead of mixing a bounded first fetch with unbounded later ones.
+    /// bounded to it. The window rolls forward with each drain; that is fine because the
+    /// backend dedupes on `hkUuid` and nothing older than a week can matter.
     private static let lookback: TimeInterval = 7 * 86_400
 
     /// A failed POST is retried a couple of times before the anchor is left for the
-    /// next drain. Short, because on a background wake iOS gives us seconds, not minutes.
-    private static let retryDelays: [Duration] = [.seconds(1.5), .seconds(3)]
+    /// next drain. Short, because the observer's completion handler waits on this and
+    /// a background wake gives us seconds, not minutes.
+    private static let retryDelays: [Duration] = [.seconds(1), .seconds(2)]
 
     /// Surfaced in the debug panel only.
     var onError: ((String) -> Void)?
@@ -125,6 +126,8 @@ final class WorkoutSync {
                 try await post(workouts)
             }
             Self.saveAnchor(newAnchor)
+        } catch is CancellationError {
+            // Ours (app going away mid-drain), not a sync failure. Anchor untouched.
         } catch {
             // Anchor untouched: the next drain resends.
             onError?("workout sync: \(error.localizedDescription)")
