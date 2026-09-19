@@ -40,18 +40,6 @@ SNAP_CHANNEL = "linq"
 OPENAI_MODEL = "gpt-5.5"
 WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
-# Where the forfeited half of a missed stake goes. A public key, so it belongs
-# here rather than in a secret — there is nothing to leak and every judge can
-# check it on the explorer.
-#
-# Say what this is accurately: on devnet it is a wallet we generated, not a
-# registered charity. "Forfeited to a charity wallet" is true; "goes to
-# charity" is not, and is the kind of claim that unravels under one question.
-#
-# Unset is safe: the forfeited half goes to the treasury instead, and the user
-# still gets their half either way.
-SNAP_CHARITY_ADDRESS = "GcFcbjLBuwmF1kDnwP3FdMEU45tKHbyJTsUmRwgxcY84"
-
 # SOLANA_RPC_URL is deliberately NOT here. The working devnet URL carries its
 # API key in the query string, this file is committed, and the repo is public.
 # It is a secret: `wrangler secret put SOLANA_RPC_URL`.
