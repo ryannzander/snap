@@ -40,6 +40,7 @@ final class AppModel {
     @ObservationIgnored private let sync: WorkoutSync
     @ObservationIgnored private var token: String?
     @ObservationIgnored private var started = false
+    @ObservationIgnored private var authFailed = false
 
     @ObservationIgnored private var pending: [TraceEvent] = []
     @ObservationIgnored private var lastEventId: Int?
@@ -87,6 +88,10 @@ final class AppModel {
         case "live":
             name = "Ryan"
             token = "debug"
+            // Force the mock explicitly: `token` is not a real credential, so against a
+            // deployed Worker this would 401 immediately.
+            api = MockAPI.shared
+            sync.setAPI(api)
             phase = .live
             startPolling()
             if env["SNAP_TIMEWARP"] == "1" {
@@ -153,6 +158,7 @@ final class AppModel {
 
     /// Called after the debug panel changes the server URL or debug key.
     func reloadAPI() {
+        authFailed = false
         api = Config.makeAPI(token: token)
         sync.setAPI(api)
         clearFeed()
@@ -167,6 +173,7 @@ final class AppModel {
         WorkoutSync.clearAnchor()
         Key.all.forEach { defaults.removeObject(forKey: $0) }
 
+        authFailed = false
         token = nil
         state = nil
         name = ""
@@ -206,7 +213,9 @@ final class AppModel {
     // MARK: - Polling
 
     private func startPolling() {
-        guard token != nil else { return }
+        // A dead token fails identically forever, including after a trip to the
+        // background, so this stays stopped until the session is rebuilt.
+        guard token != nil, !authFailed else { return }
         stopPolling()
 
         stateTask = Task { [weak self] in
@@ -266,6 +275,7 @@ final class AppModel {
     private func handle(_ error: Error) {
         lastError = describe(error)
         if let apiError = error as? APIError, apiError.isUnauthorized {
+            authFailed = true
             stopPolling()
         }
     }
