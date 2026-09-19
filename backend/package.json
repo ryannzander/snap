@@ -13,5 +13,9 @@
     "wrangler": "^4.135.0"
   },
   "private": true,
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@solana-program/system": "^0.14.1",
+    "@solana/kit": "^8.3.0"
+  }
 }
