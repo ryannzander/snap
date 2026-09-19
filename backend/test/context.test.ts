@@ -126,8 +126,9 @@ section('what the model actually sees');
         graceMin: 20,
         status: 'pending',
         stake: { lamports: 50_000_000, status: 'held', txSig: null },
+        renegotiations: 0,
       },
-    ] as unknown as Commitment[],
+    ] as unknown as Array<Commitment & { renegotiations: number }>,
     standingOffer: null,
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
@@ -139,6 +140,14 @@ section('what the model actually sees');
   );
 
   const rendered = renderContext(context);
+  // 23:00Z is 19:00 in Toronto. Rendering the UTC stamp made the model read
+  // a 19:00 deadline as 23:00 and conclude it had hours left.
+  isTrue('the deadline is on their clock', renderContext(context).includes('Sat 19:00'));
+  // Without this the model told the user they had used their one reschedule
+  // when they had not.
+  isTrue('the reschedule count is visible', renderContext(context).includes('reschedules used 0/1'));
+  isTrue('the UTC stamp never reaches the model', !renderContext(context).includes('T23:00:00Z'));
+
   for (const needle of ['weekly goal: 4', 'done this week: 2', 'gym at 7', 'held', 'Ryan']) {
     isTrue(`carries "${needle}"`, rendered.includes(needle));
   }
@@ -167,7 +176,8 @@ section('an offer on the table is something the model must see');
   };
   const rendered = renderContext(offered);
   isTrue('the offer is rendered', rendered.includes('"gym at 7"'));
-  isTrue('with its deadline', rendered.includes('2026-09-19T23:00:00Z'));
+  isTrue('with its deadline on their clock, not UTC', rendered.includes('Sat 19:00'));
+  isTrue('and never as a UTC stamp', !rendered.includes('2026-09-19T23:00:00Z'));
   isTrue('and that it is unanswered', rendered.includes('waiting on their yes'));
 
   // The summary must not claim money is staked when it is only offered —

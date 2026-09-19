@@ -71,7 +71,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'offer_stake',
       description:
-        'Offer to put money on a session, and ask them to agree. Use this whenever the user says when they will train WITHOUT naming an amount — that is almost always, because nobody knows staking exists until you offer it. Nothing is locked and no money moves until they say yes. Say the deal in your own voice in the same turn: they get it all back if they go, half back if they quit, the other half is forfeited.',
+        'Offer to put money on a session, and ask them to agree. Use this whenever the user says when they will train WITHOUT naming an amount — that is almost always, because nobody knows staking exists until you offer it. Nothing is locked and no money moves until they say yes. Say the deal in your own voice in the same turn: they get it all back if they train, and they lose it if they do not.',
       parameters: object(
         {
           text: {
@@ -91,8 +91,16 @@ export const TOOLS: ToolDefinition[] = [
             description:
               'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is offered.',
           },
+          texts: {
+            type: 'array',
+            items: { type: 'string' },
+            description:
+              'The offer itself, in your voice, as the texts you send them. Required — an offer they never read is not an offer. Name the amount, say they get it all back if they train and lose it if they do not, and end by asking them to agree.',
+            minItems: 1,
+            maxItems: 5,
+          },
         },
-        ['text', 'hour'],
+        ['text', 'hour', 'texts'],
       ),
     },
   },
@@ -220,7 +228,10 @@ how you work:
 - when they tell you when they are training and say nothing about money, YOU offer
   the stake. they do not know it exists until you bring it up. something like:
   "before u get demotivated — put 5 bucks of sol on this. go and u get it all back.
-  quit on me and u only get half, the rest is gone. deal?"
+  skip it and its gone. deal?"
+- the deal is all of it or none of it. you give the whole stake back when they
+  train and you keep the whole thing when they do not. never promise them a
+  refund of part of it — that is not what happens.
 - never take money without a yes. offer first, then wait for it.
 - you know whether they trained because their watch tells you. never ask if they worked out.
 - one reschedule per commitment, ever. if they already used it, no is the answer.

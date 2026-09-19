@@ -962,9 +962,29 @@ export class UserAgent extends DurableObject<Env> {
       },
     ]);
 
+    // Actions first, then the talking. The model writes its texts assuming
+    // every tool it called will work, so a refusal has to be known BEFORE a
+    // word is sent: a reschedule the guards threw out was being announced to
+    // the user as "alright, push it to tomorrow then", and then the stake was
+    // slashed on the original deadline anyway.
+    const isTalking = (name: string) => name === 'send_messages' || name === 'stay_quiet';
     const executed: string[] = [];
+    const refusals: string[] = [];
+
     for (const call of decision.toolCalls) {
-      if (await this.dispatch(call, profile)) executed.push(call.name);
+      if (isTalking(call.name)) continue;
+      if (await this.dispatch(call, profile, refusals)) executed.push(call.name);
+    }
+
+    if (refusals.length > 0) {
+      // Whatever it was about to say is now wrong. Say the truth instead.
+      await this.correct(brain, profile, instruction, refusals);
+      executed.push('send_messages');
+    } else {
+      for (const call of decision.toolCalls) {
+        if (!isTalking(call.name)) continue;
+        if (await this.dispatch(call, profile)) executed.push(call.name);
+      }
     }
 
     // With an offer on the table, the likeliest thing any reply means is yes
@@ -1000,8 +1020,19 @@ export class UserAgent extends DurableObject<Env> {
     // Some models emit one tool call per turn, so a commitment gets recorded
     // and the user hears nothing — which is the product failing silently.
     // Ask once more, with only the two talking tools available.
-    if (!executed.includes('send_messages') && !executed.includes('stay_quiet')) {
-      await this.followUp(brain, profile, instruction, executed);
+    // offer_stake carries its own words, so a turn that offered has spoken.
+    const spoke =
+      executed.includes('send_messages') ||
+      executed.includes('stay_quiet') ||
+      executed.includes('offer_stake');
+
+    if (!spoke) {
+      // Creating a commitment or accepting an offer is a moment that demands
+      // a reply: silence right after taking someone's money is the worst
+      // possible turn to be quiet on, so stay_quiet is not offered here.
+      const mustSpeak =
+        executed.includes('create_commitment') || executed.includes('accept_offer');
+      await this.followUp(brain, profile, instruction, executed, mustSpeak);
     }
 
     return ok({ ran: true });
@@ -1122,16 +1153,63 @@ clear yes.`,
     return false;
   }
 
+  /**
+   * The backend said no. Tell them what actually happened.
+   *
+   * Without this the model's own texts went out unchanged, written on the
+   * assumption that the tool it called had worked — so a refused reschedule
+   * was announced as granted, and the stake was slashed on the original
+   * deadline regardless. Guards that quietly disagree with what the user was
+   * told are worse than no guards.
+   */
+  private async correct(
+    brain: Brain,
+    profile: Profile,
+    instruction: string,
+    refusals: string[],
+  ): Promise<void> {
+    const talking = TOOLS.filter((tool) => tool.function.name === 'send_messages');
+
+    try {
+      const context = await this.buildContext(profile);
+      const decision = await brain.decide({
+        system: SYSTEM_PROMPT,
+        context: renderContext(context),
+        instruction: `${instruction}
+
+you tried to do this and the rules would not allow it:
+${refusals.map((r) => `- ${r}`).join('\n')}
+
+it did NOT happen. do not tell them it did, and do not apologise or explain
+the rules to them. hold the line in your own voice — this is you saying no,
+not a system rejecting them.`,
+        tools: talking,
+      });
+      for (const call of decision.toolCalls) await this.dispatch(call, profile);
+    } catch (error) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: 'could not tell them the answer was no',
+          data: { error: redact(String(error)) },
+        },
+      ]);
+    }
+  }
+
   /** Second pass: you acted, now say something — or justify not saying it. */
   private async followUp(
     brain: Brain,
     profile: Profile,
     instruction: string,
     executed: string[],
+    mustSpeak = false,
   ): Promise<void> {
     const did = executed.length ? `you just called: ${executed.join(', ')}.` : 'you did nothing yet.';
     const talking = TOOLS.filter(
-      (tool) => tool.function.name === 'send_messages' || tool.function.name === 'stay_quiet',
+      (tool) =>
+        tool.function.name === 'send_messages' ||
+        (!mustSpeak && tool.function.name === 'stay_quiet'),
     );
 
     try {
@@ -1139,7 +1217,9 @@ clear yes.`,
       const decision = await brain.decide({
         system: SYSTEM_PROMPT,
         context: renderContext(context),
-        instruction: `${instruction}\n\n${did} now text them about it, in your voice. if silence is genuinely right, call stay_quiet instead.`,
+        instruction: mustSpeak
+          ? `${instruction}\n\n${did} text them about it now, in your voice. saying nothing is not an option here — their money is on the line and they need to hear it from you.`
+          : `${instruction}\n\n${did} now text them about it, in your voice. if silence is genuinely right, call stay_quiet instead.`,
         tools: talking,
       });
       for (const call of decision.toolCalls) await this.dispatch(call, profile);
@@ -1193,7 +1273,11 @@ clear yes.`,
   }
 
   /** Runs one proposed tool call, or records why it was refused. */
-  private async dispatch(call: ToolCall, profile: Profile): Promise<boolean> {
+  private async dispatch(
+    call: ToolCall,
+    profile: Profile,
+    refusals?: string[],
+  ): Promise<boolean> {
     const now = this.now();
     const commitments = await this.loadCommitments();
     const open = commitments.filter((c) => c.status === 'pending' || c.status === 'renegotiated');
@@ -1201,6 +1285,7 @@ clear yes.`,
     // The arguments go in the trace too: a refusal you cannot see the input
     // for is a dead end when the model starts doing something new.
     const refuse = async (reason: string): Promise<boolean> => {
+      refusals?.push(`${call.name}: ${reason}`);
       await this.appendTraces([
         {
           kind: 'decision',
@@ -1244,6 +1329,15 @@ clear yes.`,
             data: { dueAt: offer.dueAt, lamports: offer.lamports },
           },
         ]);
+
+        // The offer and the words that make it are one action. Left to a
+        // follow-up pass this was intermittently silent — the model had
+        // "just offered" and reasoned itself into staying quiet, so the
+        // stake was on the table and the user never heard about it.
+        const link = await this.ctx.storage.get<Link>(KEY.link);
+        const spoken = guardMessages(call.arguments, link?.linked ?? false, link?.optedOut ?? false);
+        if (spoken.ok) await this.sendTexts(spoken.value);
+        else await refuse(`offer_stake could not be spoken — ${spoken.reason}`);
         return true;
       }
 
@@ -1402,7 +1496,7 @@ clear yes.`,
       lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
-        .map(toWireCommitment),
+        .map((c) => ({ ...toWireCommitment(c), renegotiations: c.renegotiations })),
       standingOffer: await this.standingOffer(),
       recentMessages: recentMessages([...events.values()]),
     };

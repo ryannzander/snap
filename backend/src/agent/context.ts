@@ -8,6 +8,7 @@
 
 import { startOfWeek, tzOffsetMs, parseIso } from '../time';
 import { disqualification } from './guards';
+import { MAX_RENEGOTIATIONS } from './tools';
 import { solText } from '../money';
 import type { Commitment, TraceEvent } from '../types';
 
@@ -28,7 +29,12 @@ export interface AgentContext {
   weeklyGoal: number;
   workoutsThisWeek: number;
   lastSevenDays: DayRecord[];
-  openCommitments: Commitment[];
+  /**
+   * Carries `renegotiations` on top of the wire shape: without it the model
+   * could not tell whether the one allowed reschedule had been used, and
+   * asserted to the user that it had when it had not.
+   */
+  openCommitments: Array<Commitment & { renegotiations: number }>;
   /** A stake Snap has proposed and the user has not answered yet. */
   standingOffer: { text: string; dueAt: string; lamports: number } | null;
   recentMessages: Array<{ from: 'snap' | 'user'; text: string }>;
@@ -116,6 +122,27 @@ export function recentMessages(
 }
 
 /** Renders the context as the compact block the model reads. */
+/**
+ * An instant on the user's clock, e.g. "Sat 19:00".
+ *
+ * The model is never asked to do timezone maths on the way in — it names an
+ * hour and the backend converts. This is the same rule on the way out, and it
+ * was missing: deadlines were rendered as raw UTC, so at 19:25 local the model
+ * read "due 2026-09-19T23:00:00Z", concluded the deadline was hours away, and
+ * stayed quiet through the grace warning it had been woken up to send.
+ */
+function localStamp(iso: string, tz: string): string {
+  const at = parseIso(iso);
+  if (at === null) return iso;
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(at));
+}
+
 export function renderContext(context: AgentContext): string {
   const days = context.lastSevenDays
     .map((day) => {
@@ -128,7 +155,7 @@ export function renderContext(context: AgentContext): string {
     ? context.openCommitments
         .map(
           (c) =>
-            `- ${c.id} "${c.text}" due ${c.dueAt} (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status}`,
+            `- ${c.id} "${c.text}" due ${localStamp(c.dueAt, context.timezone)} their time (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status} · reschedules used ${c.renegotiations}/${MAX_RENEGOTIATIONS}`,
         )
         .join('\n')
     : '- none';
@@ -150,7 +177,7 @@ export function renderContext(context: AgentContext): string {
     '',
     'stake you have offered and they have not answered:',
     context.standingOffer
-      ? `- "${context.standingOffer.text}" due ${context.standingOffer.dueAt} · ${context.standingOffer.lamports} lamports · waiting on their yes`
+      ? `- "${context.standingOffer.text}" due ${localStamp(context.standingOffer.dueAt, context.timezone)} their time · ${context.standingOffer.lamports} lamports · waiting on their yes`
       : '- none',
     '',
     'recent conversation:',
