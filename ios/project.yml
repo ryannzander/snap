@@ -35,6 +35,16 @@ targets:
       properties:
         com.apple.developer.healthkit: true
         com.apple.developer.healthkit.background-delivery: true
+  SnapUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [SnapUITests]
+    dependencies:
+      - target: Snap
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.ryanzander.snap.uitests
   SnapTests:
     type: bundle.unit-test
     platform: iOS
@@ -51,9 +61,11 @@ schemes:
       targets:
         Snap: all
         SnapTests: [test]
+        SnapUITests: [test]
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - SnapTests
+        - SnapUITests

@@ -123,7 +123,8 @@ final class WorkoutSync {
     // MARK: - Debug
 
     /// A 45-minute strength workout ending now, for demoing without an Apple Watch.
-    func saveSimulatedWorkout() async throws {
+    @discardableResult
+    func saveSimulatedWorkout() async throws -> HKWorkout? {
         let configuration = HKWorkoutConfiguration()
         configuration.activityType = .traditionalStrengthTraining
 
@@ -131,10 +132,39 @@ final class WorkoutSync {
         let end = Date()
         try await builder.beginCollection(at: end.addingTimeInterval(-45 * 60))
         try await builder.endCollection(at: end)
-        _ = try await builder.finishWorkout()
+        let workout = try await builder.finishWorkout()
 
         await drain()
+        return workout
     }
+
+    #if DEBUG
+    /// Saves a simulated workout and reports exactly what would go over the wire.
+    ///
+    /// Without an Apple Watch this is the on-stage path, and the whole demo turns on one
+    /// bit: if HealthKit stamps `wasUserEntered` on a workout this app builds, the backend
+    /// reads it as typed in by hand and the stake can never release. Reasoning about that
+    /// from the docs is not the same as watching it come back.
+    func diagnoseSimulatedWorkout() async -> String {
+        do {
+            guard let workout = try await saveSimulatedWorkout() else {
+                return "HKDIAG fail: finishWorkout returned nil"
+            }
+            let dto = WorkoutDTO(workout: workout)
+            let verdict = dto.wasUserEntered
+                ? "FAIL — arrives hand-entered, the stake can never release"
+                : "PASS — releases a stake"
+            return """
+            HKDIAG type=\(dto.type) durationSec=\(dto.durationSec) \
+            wasUserEntered=\(dto.wasUserEntered) source=\(dto.source)
+            HKDIAG metadata=\(workout.metadata.map { String(describing: $0) } ?? "nil")
+            HKDIAG \(verdict)
+            """
+        } catch {
+            return "HKDIAG fail: \(error.localizedDescription)"
+        }
+    }
+    #endif
 
     // MARK: - Anchor
 

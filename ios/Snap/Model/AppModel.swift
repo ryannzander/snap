@@ -20,6 +20,12 @@ final class AppModel {
     /// Shown in the debug panel only. The main screen never puts an error in front of a judge.
     var lastError: String?
 
+    #if DEBUG
+    /// Verdict from the `SNAP_HKDIAG` launch hook, read by the UI test. Nil in every
+    /// ordinary run, and rendered invisibly — it is a test channel, not a feature.
+    private(set) var hkDiagnostic: String?
+    #endif
+
     private enum Key {
         static let name = "name"
         static let linkCode = "linkCode"
@@ -78,6 +84,27 @@ final class AppModel {
         // `SNAP_PHASE=linking|live` drops straight onto a screen against MockAPI, and
         // `SNAP_TIMEWARP=1` pushes the clock past the deadline the way the debug panel does.
         let env = ProcessInfo.processInfo.environment
+        // `SNAP_HKDIAG=1` saves a simulated workout on launch and prints what would be
+        // POSTed. Exists so the one bit the demo turns on — whether HealthKit stamps
+        // `wasUserEntered` on a workout we build — can be checked on a simulator instead
+        // of guessed at, or discovered on stage.
+        if env["SNAP_HKDIAG"] == "1" {
+            Task {
+                await sync.requestAuthorization()
+                let result = await sync.diagnoseSimulatedWorkout()
+                print(result)
+                hkDiagnostic = result
+                // Also on disk, so the verdict survives the app being killed at the end
+                // of a UI test run. UserDefaults would not — it flushes lazily.
+                if let documents = FileManager.default.urls(
+                    for: .documentDirectory, in: .userDomainMask
+                ).first {
+                    try? Data(result.utf8).write(
+                        to: documents.appendingPathComponent("hkdiag.txt")
+                    )
+                }
+            }
+        }
         switch env["SNAP_PHASE"] {
         case "linking":
             name = "Ryan"

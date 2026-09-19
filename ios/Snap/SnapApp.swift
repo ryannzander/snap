@@ -28,5 +28,19 @@ struct RootView: View {
         }
         .animation(.snappy, value: model.phase)
         .task { await model.start() }
+        #if DEBUG
+        // Carries the SNAP_HKDIAG verdict out to the UI test. Zero-size and hidden from
+        // sight, but present in the accessibility tree, which is the only channel a UI
+        // test can read. Never rendered unless the launch hook set it.
+        .overlay(alignment: .topLeading) {
+            if let diagnostic = model.hkDiagnostic {
+                Color.clear
+                    .frame(width: 1, height: 1)
+                    .accessibilityElement()
+                    .accessibilityIdentifier("hkDiagnostic")
+                    .accessibilityLabel(diagnostic)
+            }
+        }
+        #endif
     }
 }

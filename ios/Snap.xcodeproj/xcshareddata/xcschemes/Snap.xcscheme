@@ -35,6 +35,20 @@
                ReferencedContainer = "container:Snap.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "7F6CC3D4B8AC6CC0900846A3"
+               BuildableName = "SnapUITests.xctest"
+               BlueprintName = "SnapUITests"
+               ReferencedContainer = "container:Snap.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -61,6 +75,17 @@
                BlueprintIdentifier = "EE48C72F1ADF6562DB8CE96B"
                BuildableName = "SnapTests.xctest"
                BlueprintName = "SnapTests"
+               ReferencedContainer = "container:Snap.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "7F6CC3D4B8AC6CC0900846A3"
+               BuildableName = "SnapUITests.xctest"
+               BlueprintName = "SnapUITests"
                ReferencedContainer = "container:Snap.xcodeproj">
             </BuildableReference>
          </TestableReference>
