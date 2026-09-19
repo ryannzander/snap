@@ -151,6 +151,87 @@ Unlike the webhook, this **waits for the turn to finish** before responding — 
 
 `text` must be a non-empty string of at most 1000 characters.
 
+## Competitions
+
+`ROADMAP.md` → "Competitions": a pot, a rule, a set of entrants, and an oracle that settles it from HealthKit. Three kinds — `solo`, `h2h`, `group` — differ only in how many people are in the entrant list.
+
+**Verification is the same bar as a stake.** A workout counts toward a goal only if it would release a stake: 30 minutes or longer, `wasUserEntered` false, and an accepted type. A competition that counts a walk while the core loop refuses it would make "it knows" untrue the moment money is involved.
+
+### POST /competitions
+
+Creates one and enters you into it. The creator is always the first entrant.
+
+```json
+{
+  "kind": "h2h",
+  "name": "me vs tyler, 3 sessions by sunday",
+  "goal": { "type": "workouts", "target": 3 },
+  "sol": 0.1,
+  "days": 7
+}
+```
+
+`kind`: `solo | h2h | group` (default `group`). `h2h` is capped at two entrants.
+`goal.type`: `workouts` (sessions) | `activeHours` (summed duration) | `activeDays` (distinct local days).
+`sol`: entry stake, default 0.05, between 0.001 and 1.
+`days`: 1–90, default 7.
+
+Returns the competition (below). Entering locks the stake into escrow immediately.
+
+### POST /competitions/join
+
+```json
+{ "joinCode": "Y9QT8P" }
+```
+
+Six characters, no vowels and no `0/1/I/O`, so it survives being read aloud or typed from a screenshot. Joining twice is a no-op rather than a second stake.
+
+### GET /competitions
+
+`{ "competitions": [ … ] }` — every competition you are in, each with live standings.
+
+### GET /competitions/&lt;id&gt;
+
+```json
+{
+  "id": "comp_5aa4c7b7",
+  "kind": "h2h",
+  "name": "me vs tyler, 3 sessions by sunday",
+  "goal": { "type": "workouts", "target": 3 },
+  "entryLamports": 100000000,
+  "rakeBps": 1500,
+  "joinCode": "Y9QT8P",
+  "startsAt": "…", "endsAt": "…",
+  "status": "open",
+  "entrants": [ { "userId": "…", "name": "Ryan", "stakeLamports": 100000000, "entryTxSig": "…" } ],
+  "standings": [ { "userId": "…", "name": "Ryan", "progress": 3, "met": true, "stakeLamports": 100000000 } ]
+}
+```
+
+`standings` are recomputed from HealthKit on every read, never stored. `progress` is in the goal's own unit — sessions, hours (two decimals) or days.
+
+`status`: `open | settled`. A settled competition also carries `potLamports`, `rakeLamports`, `settledAt`, and per-entrant `progress`, `met`, `payoutLamports`, `payoutTxSig`.
+
+### POST /competitions/&lt;id&gt;/settle
+
+Demo only — requires `X-Debug-Key` as well as the bearer token, because settling early moves real money. A competition settles itself when `endsAt` passes; this is the button for the stage.
+
+Settling twice is safe: a settled competition returns unchanged rather than paying out again.
+
+### How the money splits
+
+**Winners get 100% of their own stake back**, always. The rake comes out of what the skippers forfeited, never out of a winner — a haircut on winners turns the stake into a fee and people stop staking.
+
+| | |
+|---|---|
+| pot | sum of the losers' stakes |
+| rake | 15% of the pot, to the house |
+| each winner | their own stake + an equal share of the rest |
+| nobody wins | the whole pot goes to the house |
+| everybody wins | no pot, no rake, everyone gets exactly their stake back |
+
+Shares are **equal, not proportional to stake** — a competition is a contest of showing up, and paying the biggest wallet the biggest share would make it a contest of wallets. Leftover lamports from integer division go to the house rather than to whichever winner sorts first, so the books always balance exactly.
+
 ## Errors
 
 Every non-2xx response has the same body:

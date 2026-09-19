@@ -57,6 +57,19 @@ import type {
  * the same object — its storage is the user's whole world.
  */
 
+/** What a user keeps about a competition they entered. */
+export interface CompetitionEntry {
+  id: string;
+  name: string;
+  stakeLamports: number;
+  joinedAt: string;
+  status: 'entered' | 'settled';
+  met?: boolean;
+  progress?: number;
+  payoutLamports?: number;
+  settledAt?: string;
+}
+
 const KEY = {
   profile: 'profile',
   token: 'token',
@@ -66,6 +79,7 @@ const KEY = {
   traceSeq: 'traceSeq',
   clockOffset: 'clockOffset',
   wallet: 'wallet',
+  competition: (id: string) => `competition:${id}`,
   /** The stake Snap has proposed and the user has not answered yet. */
   offer: 'offer',
   workout: (hkUuid: string) => `workout:${hkUuid}`,
@@ -488,6 +502,145 @@ export class UserAgent extends DurableObject<Env> {
     const agent = await this.runAgent(`the user just texted you: "${text}". decide what to do.`, true);
     if (!agent.ok) return agent;
     return ok({ optedOut: false, ran: agent.value.ran });
+  }
+
+  // --- competitions ---------------------------------------------------------
+
+  /**
+   * Everything a competition needs to judge this entrant: who they are, what
+   * clock they are on, and the workouts in the window.
+   *
+   * The competition does the counting rather than being handed a number, so
+   * the rule lives in exactly one place no matter how many entrants there are.
+   */
+  async competitionData(
+    windowStart: number,
+    windowEnd: number,
+  ): Promise<DoResult<{ name: string; timezone: string; workouts: StoredWorkout[] }>> {
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return fail(404, 'not_found', 'no such user');
+
+    const workouts = (await this.loadWorkouts()).filter((workout) => {
+      const start = parseIso(workout.start);
+      return start !== null && start >= windowStart && start <= windowEnd;
+    });
+    return ok({ name: profile.name, timezone: profile.timezone, workouts });
+  }
+
+  /** Every competition this user has entered, newest first. */
+  async listCompetitions(token: string): Promise<DoResult<{ competitions: CompetitionEntry[] }>> {
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+    const entries = [
+      ...(await this.ctx.storage.list<CompetitionEntry>({ prefix: 'competition:' })).values(),
+    ];
+    entries.sort((a, b) => (b.joinedAt ?? '').localeCompare(a.joinedAt ?? ''));
+    return ok({ competitions: entries });
+  }
+
+  /** Locks an entry stake into the same escrow the commitment loop uses. */
+  async enterCompetition(
+    competitionId: string,
+    name: string,
+    lamports: number,
+  ): Promise<DoResult<{ name: string; txSig: string | null }>> {
+    await this.loadClock();
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return fail(404, 'not_found', 'no such user');
+
+    await this.ctx.storage.put(KEY.competition(competitionId), {
+      id: competitionId,
+      name,
+      stakeLamports: lamports,
+      joinedAt: this.nowIso(),
+      status: 'entered',
+    } satisfies CompetitionEntry);
+
+    await this.appendTraces([
+      {
+        kind: 'stake_held',
+        summary: `${solText(lamports)} into "${name}"`,
+        data: { competitionId },
+      },
+    ]);
+
+    const txSig = await this.onChain('competition entry', async () => {
+      const wallet = await this.userWallet();
+      const user = await walletFromSeed(wallet.seed);
+      const escrowSeed = this.env.SNAP_ESCROW_SEED;
+      if (!escrowSeed) throw new Error('no escrow configured');
+      const escrow = await walletFromSeed(escrowSeed);
+      return transferSol(this.rpc(), user, escrow.address, lamports);
+    });
+
+    return ok({ name: profile.name, txSig });
+  }
+
+  /**
+   * Pays an entrant what the competition decided, and tells them.
+   *
+   * A payout of zero is still a settlement: they staked, they did not make it,
+   * and hearing about it is the whole point of having staked.
+   */
+  async settleCompetitionEntry(
+    competitionId: string,
+    name: string,
+    payoutLamports: number,
+    met: boolean,
+    progress: number,
+    goal: { type: string; target: number },
+    entrants: number,
+  ): Promise<DoResult<{ txSig: string | null }>> {
+    await this.loadClock();
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return fail(404, 'not_found', 'no such user');
+
+    const stored = await this.ctx.storage.get<CompetitionEntry>(KEY.competition(competitionId));
+    const staked = stored?.stakeLamports ?? 0;
+
+    await this.ctx.storage.put(KEY.competition(competitionId), {
+      id: competitionId,
+      name,
+      stakeLamports: staked,
+      joinedAt: stored?.joinedAt ?? this.nowIso(),
+      status: 'settled',
+      met,
+      progress,
+      payoutLamports,
+      settledAt: this.nowIso(),
+    } satisfies CompetitionEntry);
+
+    let txSig: string | null = null;
+    if (payoutLamports > 0) {
+      txSig = await this.onChain('competition payout', async () => {
+        const wallet = await this.userWallet();
+        const user = await walletFromSeed(wallet.seed);
+        const escrowSeed = this.env.SNAP_ESCROW_SEED;
+        if (!escrowSeed) throw new Error('no escrow configured');
+        const escrow = await walletFromSeed(escrowSeed);
+        return transferSol(this.rpc(), escrow, user.address, payoutLamports);
+      });
+    }
+
+    const won = payoutLamports > staked;
+    await this.appendTraces([
+      {
+        kind: met ? 'stake_released' : 'stake_slashed',
+        summary: met
+          ? `"${name}" — ${progress}/${goal.target}, ${solText(payoutLamports)} back${won ? ' (won the pot)' : ''}`
+          : `"${name}" — ${progress}/${goal.target}, ${solText(staked)} gone`,
+        data: { competitionId, payoutLamports, met, progress, txSig },
+      },
+    ]);
+
+    await this.announce(
+      profile,
+      met
+        ? `the competition "${name}" just ended. they hit ${progress} of ${goal.target} and you sent them ${solText(payoutLamports)}${won ? ' — they took a share of the pot off the people who skipped' : ' — their stake back'}. ${entrants} people were in it. tell them.`
+        : `the competition "${name}" just ended. they only managed ${progress} of ${goal.target}, so their ${solText(staked)} went into the pot for the people who did. ${entrants} people were in it. tell them straight, no lecture.`,
+    );
+
+    return ok({ txSig });
   }
 
   /**

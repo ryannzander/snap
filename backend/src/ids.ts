@@ -51,6 +51,18 @@ export function newLinkCode(): string {
 }
 
 /** Constant-time string comparison, so token checks do not leak length/prefix. */
+/**
+ * A shareable competition code: six characters, no vowels and no 0/1/I/O, so
+ * it survives being read aloud in a gym or typed from a screenshot.
+ */
+export function newJoinCode(): string {
+  const alphabet = '23456789BCDFGHJKLMNPQRSTVWXYZ';
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  let code = '';
+  for (const byte of bytes) code += alphabet[byte % alphabet.length];
+  return code;
+}
+
 export function secureEquals(a: string, b: string): boolean {
   const encoder = new TextEncoder();
   const left = encoder.encode(a);
