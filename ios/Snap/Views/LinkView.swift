@@ -7,6 +7,7 @@ struct LinkView: View {
     @Environment(AppModel.self) private var model
     @State private var pulse = false
     @State private var copied = false
+    @State private var showDebug = false
 
     var body: some View {
         ZStack {
@@ -15,12 +16,18 @@ struct LinkView: View {
             VStack(alignment: .leading, spacing: Theme.Space.m) {
                 Spacer()
 
-                BubbleMark(size: 76)
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    BubbleMark(size: 76)
 
-                Text("last thing.\ntext snap.")
-                    .font(Theme.display(40))
-                    .foregroundStyle(Theme.ink)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text("last thing.\ntext snap.")
+                        .font(Theme.display(40))
+                        .foregroundStyle(Theme.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .contentShape(.rect)
+                // The only way out if linking is broken — otherwise the debug panel is
+                // unreachable, because it normally lives behind the brain screen.
+                .onLongPressGesture(minimumDuration: 0.7) { showDebug = true }
 
                 Text("he can't text you until you text him first. send exactly this:")
                     .font(Theme.body(16))
@@ -54,6 +61,7 @@ struct LinkView: View {
             }
             .padding(.horizontal, Theme.screenPad)
         }
+        .sheet(isPresented: $showDebug) { DebugPanel() }
     }
 
     private var codeCard: some View {
