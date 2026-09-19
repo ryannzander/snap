@@ -42,6 +42,10 @@ export interface WorkoutInput {
   end: string | null;
   durationSec: number;
   activeKcal: number | null;
+  /** Bundle id of whatever wrote the sample: a Watch, Strava, Hevy, Snap. */
+  source: string | null;
+  /** True when a human typed it into the Health app instead of recording it. */
+  wasUserEntered: boolean;
 }
 
 export interface WorkoutsRequest {

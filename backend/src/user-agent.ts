@@ -25,6 +25,14 @@ import { LinqChannel } from './channels/linq';
 import { TraceChannel } from './channels/trace';
 import { fail, ok, type DoResult } from './http';
 import { isOptOut } from './optout';
+import {
+  explorerUrl,
+  getBalanceLamports,
+  newSeed,
+  rpcFor,
+  transferSol,
+  walletFromSeed,
+} from './solana/wallet';
 import { issueToken, secureEquals } from './ids';
 import { endOfLocalDay, localTimeToInstant, parseIso, startOfWeek } from './time';
 import type {
@@ -50,6 +58,7 @@ const KEY = {
    *  lexicographic range that getTrace() scans. */
   traceSeq: 'traceSeq',
   clockOffset: 'clockOffset',
+  wallet: 'wallet',
   workout: (hkUuid: string) => `workout:${hkUuid}`,
   /** Sorts by fire time, so a range scan finds everything due. */
   alarm: (at: number, suffix: string) => `alarm:${String(at).padStart(14, '0')}:${suffix}`,
@@ -91,6 +100,20 @@ interface Link {
   /** Set by an inbound STOP. Nothing is ever sent again while true. */
   optedOut: boolean;
 }
+
+/**
+ * The user's devnet wallet. Custodial — the backend holds the key, and we say
+ * so to the Solana judges. Only the 32-byte seed is stored; the keypair is
+ * derived on demand.
+ */
+interface StoredWallet {
+  seed: string;
+  address: string;
+  funded: boolean;
+}
+
+/** Enough to cover a 0.05 SOL stake and the fees around it. */
+const USER_FUNDING_LAMPORTS = 100_000_000;
 
 interface StoredWorkout extends WorkoutInput {
   firstSeenAt: string;
@@ -227,6 +250,12 @@ export class UserAgent extends DurableObject<Env> {
     // Snap asks first. Same alarm mechanism as everything else.
     await this.scheduleMorning(profile, 0);
 
+    // The wallet exists immediately; funding it takes a few seconds on devnet
+    // and the app is waiting on this response, so it finishes in the
+    // background. Linking has to happen before anyone can stake anyway.
+    await this.userWallet();
+    this.ctx.waitUntil(this.fundUserWallet());
+
     return ok({ token });
   }
 
@@ -268,6 +297,10 @@ export class UserAgent extends DurableObject<Env> {
           end: workout.end ?? prior?.end ?? null,
           durationSec: Math.max(workout.durationSec, prior?.durationSec ?? 0),
           activeKcal: workout.activeKcal ?? prior?.activeKcal ?? null,
+          source: workout.source ?? prior?.source ?? null,
+          // Sticky: once a sample is known to be hand-typed, a later resend
+          // claiming otherwise must not turn it into a stake-releasing one.
+          wasUserEntered: workout.wasUserEntered || (prior?.wasUserEntered ?? false),
           firstSeenAt: prior?.firstSeenAt ?? seenAt,
           updatedAt: seenAt,
         };
@@ -280,8 +313,10 @@ export class UserAgent extends DurableObject<Env> {
         if (!prior) {
           traces.push({
             kind: 'workout_detected',
-            summary: describeWorkout(merged),
-            data: { hkUuid: merged.hkUuid },
+            summary: merged.wasUserEntered
+              ? `${humanizeType(merged.type)} · typed in by hand · doesn't count`
+              : describeWorkout(merged),
+            data: { hkUuid: merged.hkUuid, wasUserEntered: merged.wasUserEntered, source: merged.source },
           });
         } else if (!prior.end && merged.end) {
           traces.push({
@@ -487,6 +522,9 @@ export class UserAgent extends DurableObject<Env> {
         end: new Date(at + shape.durationSec * 1000).toISOString(),
         durationSec: shape.durationSec,
         activeKcal: shape.activeKcal,
+        // Seeded history stands in for a real Watch, so it must count.
+        source: 'com.apple.health.seed',
+        wasUserEntered: false,
         firstSeenAt: new Date(at).toISOString(),
         updatedAt: new Date(at).toISOString(),
       };
@@ -542,6 +580,120 @@ export class UserAgent extends DurableObject<Env> {
     }
     writes[KEY.traceSeq] = seq;
     await this.ctx.storage.put(writes);
+  }
+
+  // --- solana ---------------------------------------------------------------
+
+  /**
+   * Every chain call goes through here. Devnet being slow, rate-limited or
+   * down must never stop a commitment being made or a text being sent — the
+   * signature simply arrives late, or not at all, and API.md already says
+   * txSig is null until the transaction lands.
+   */
+  private async onChain<T>(what: string, run: () => Promise<T>): Promise<T | null> {
+    try {
+      return await run();
+    } catch (error) {
+      console.error(`solana ${what} failed`, error);
+      await this.appendTraces([
+        { kind: 'decision', summary: `chain ${what} failed — the loop continues without it`, data: { error: String(error) } },
+      ]);
+      return null;
+    }
+  }
+
+  private rpc() {
+    return rpcFor(this.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com');
+  }
+
+  /** The user's wallet, created on first use. */
+  private async userWallet(): Promise<StoredWallet> {
+    const existing = await this.ctx.storage.get<StoredWallet>(KEY.wallet);
+    if (existing) return existing;
+
+    const seed = newSeed();
+    const { address } = await walletFromSeed(seed);
+    const wallet: StoredWallet = { seed, address, funded: false };
+    await this.ctx.storage.put(KEY.wallet, wallet);
+    return wallet;
+  }
+
+  /**
+   * Tops the user up from the treasury. Deliberately not the devnet faucet:
+   * it rate-limits hard (it refused this backend outright while this was
+   * being built), and a demo that needs the faucet to cooperate on stage is a
+   * demo that fails on stage.
+   */
+  private async fundUserWallet(): Promise<void> {
+    const treasurySeed = this.env.SNAP_TREASURY_SEED;
+    if (!treasurySeed) return;
+
+    const wallet = await this.userWallet();
+    await this.onChain('funding', async () => {
+      const rpc = this.rpc();
+      const balance = await getBalanceLamports(rpc, wallet.address as never);
+      if (balance >= USER_FUNDING_LAMPORTS) {
+        await this.ctx.storage.put(KEY.wallet, { ...wallet, funded: true });
+        return;
+      }
+      const treasury = await walletFromSeed(treasurySeed);
+      await transferSol(rpc, treasury, wallet.address as never, USER_FUNDING_LAMPORTS - balance);
+      await this.ctx.storage.put(KEY.wallet, { ...wallet, funded: true });
+    });
+  }
+
+  /**
+   * Moves a stake and records the signature on the commitment.
+   *
+   * `stake` is signed by the user's own wallet; `release` and `slash` are
+   * signed by the escrow, which is the oracle role the Anchor program will
+   * take over in step 6.
+   */
+  private async moveStake(
+    commitmentId: string,
+    direction: 'stake' | 'release' | 'slash',
+  ): Promise<void> {
+    const escrowSeed = this.env.SNAP_ESCROW_SEED;
+    const treasurySeed = this.env.SNAP_TREASURY_SEED;
+    if (!escrowSeed || !treasurySeed) return;
+
+    const commitment = await this.commitment(commitmentId);
+    if (!commitment) return;
+
+    const signature = await this.onChain(direction, async () => {
+      const rpc = this.rpc();
+      const wallet = await this.userWallet();
+      const user = await walletFromSeed(wallet.seed);
+      const escrow = await walletFromSeed(escrowSeed);
+      const treasury = await walletFromSeed(treasurySeed);
+      const amount = commitment.stake.lamports;
+
+      if (direction === 'stake') {
+        return transferSol(rpc, user, escrow.address, amount);
+      }
+      if (direction === 'release') {
+        return transferSol(rpc, escrow, user.address, amount);
+      }
+      return transferSol(rpc, escrow, treasury.address, amount);
+    });
+
+    if (!signature) return;
+
+    // Re-read: the agent may have moved on while the chain was confirming.
+    const current = await this.commitment(commitmentId);
+    if (!current) return;
+    await this.ctx.storage.put(KEY.commitment(commitmentId), {
+      ...current,
+      stake: { ...current.stake, txSig: signature },
+    } satisfies StoredCommitment);
+
+    await this.appendTraces([
+      {
+        kind: direction === 'stake' ? 'stake_held' : direction === 'release' ? 'stake_released' : 'stake_slashed',
+        summary: `on devnet · ${signature.slice(0, 8)}…`,
+        data: { txSig: signature, explorer: explorerUrl(signature) },
+      },
+    ]);
   }
 
   // --- alarms -------------------------------------------------------------
@@ -902,9 +1054,12 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
             summary: `${commitment.text} · ${solText(commitment.stake.lamports)} on it`,
             data: { id: commitment.id, dueAt: commitment.dueAt },
           },
-          // No chain transaction until step 6, so txSig stays null.
           { kind: 'stake_held', summary: `${solText(commitment.stake.lamports)} locked`, data: { id: commitment.id } },
         ]);
+
+        // Confirming on devnet takes seconds. The commitment is already real
+        // and Snap can already text about it; the signature catches up.
+        this.ctx.waitUntil(this.moveStake(commitment.id, 'stake'));
         return true;
       }
 
@@ -1016,6 +1171,8 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
         data: { id: commitment.id },
       },
     ]);
+
+    this.ctx.waitUntil(this.moveStake(commitment.id, stake === 'released' ? 'release' : 'slash'));
   }
 
   /**

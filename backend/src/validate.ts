@@ -91,7 +91,23 @@ function parseWorkout(value: unknown, at: string): WorkoutInput {
     }
   }
 
-  return { hkUuid, type, start, end, durationSec, activeKcal };
+  let source: string | null = null;
+  if (input.source !== null && input.source !== undefined) {
+    source = asString(input.source, `${at}.source`).trim() || null;
+    if (source && source.length > 200) throw badRequest(`${at}.source is too long`);
+  }
+
+  // Absent means "recorded", which keeps a client that predates the field
+  // working. The app sends it explicitly for anything typed in by hand.
+  let wasUserEntered = false;
+  if (input.wasUserEntered !== null && input.wasUserEntered !== undefined) {
+    if (typeof input.wasUserEntered !== 'boolean') {
+      throw badRequest(`${at}.wasUserEntered must be a boolean`);
+    }
+    wasUserEntered = input.wasUserEntered;
+  }
+
+  return { hkUuid, type, start, end, durationSec, activeKcal, source, wasUserEntered };
 }
 
 /** `?since=<eventId>` — absent means "from the beginning". */

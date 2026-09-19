@@ -14,3 +14,9 @@ OPENAI_API_KEY=""
 
 # Guards POST /debug/*. Any long random string; the iOS debug panel needs it too.
 DEBUG_KEY=""
+
+# Devnet wallet seeds, 32 bytes base64. Set in production with
+# `wrangler secret put`. The treasury funds each user wallet at onboard; the
+# escrow holds staked SOL between stake and release/slash.
+SNAP_TREASURY_SEED=""
+SNAP_ESCROW_SEED=""

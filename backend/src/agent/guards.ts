@@ -60,6 +60,7 @@ export interface WorkoutWindow {
   end: string | null;
   durationSec: number;
   type: string;
+  wasUserEntered?: boolean;
 }
 
 export interface CreateArgs {
@@ -199,6 +200,11 @@ export function findCoveringWorkout(
   windowEnd: number,
 ): WorkoutWindow | null {
   for (const workout of workouts) {
+    // API.md: a workout typed into the Health app must never release a stake.
+    // Anyone can open Health -> Workouts -> Add Data and invent one, and
+    // "Snap knows rather than asks" has to survive a judge trying exactly
+    // that. Stored either way, so the trace can say why it was ignored.
+    if (workout.wasUserEntered) continue;
     if (workout.durationSec < MIN_WORKOUT_SEC) continue;
     if (ACCEPTED_WORKOUT_TYPES && !ACCEPTED_WORKOUT_TYPES.includes(workout.type)) continue;
 
