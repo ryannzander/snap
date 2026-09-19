@@ -66,7 +66,15 @@ struct Stake: Decodable {
     let status: Status
     let txSig: String?
 
+    /// Present only on `slashed`, and they always sum to `lamports`. A miss returns half
+    /// and forfeits half, so `slashed` no longer means the whole stake is gone — read
+    /// these rather than assuming.
+    let refundedLamports: Int?
+    let forfeitedLamports: Int?
+
     var sol: Double { Double(lamports) / 1_000_000_000 }
+    var refundedSol: Double? { refundedLamports.map { Double($0) / 1_000_000_000 } }
+    var forfeitedSol: Double? { forfeitedLamports.map { Double($0) / 1_000_000_000 } }
 }
 
 struct TraceEvent: Decodable, Identifiable, Equatable {
