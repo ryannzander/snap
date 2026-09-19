@@ -37,6 +37,14 @@ struct DebugPanel: View {
                     Button("reset clock") { Task { await model.resetClock() } }
                     Button("seed demo history") { Task { await model.seedDemo() } }
                     Button("save simulated workout") { Task { await model.saveSimulatedWorkout() } }
+                    // The session clock, 31 minutes further along than it is. Starts one
+                    // if none is running; then "done" on the plan card releases the stake.
+                    Button(model.sessionStartedAt == nil
+                           ? "time-warp session (start 31 min ago)"
+                           : "time-warp session (+31 min)") {
+                        model.warpSession()
+                        dismiss()
+                    }
                 }
 
                 Section("danger") {

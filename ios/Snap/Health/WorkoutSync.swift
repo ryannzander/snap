@@ -221,6 +221,15 @@ final class WorkoutSync {
         Self.sessionStartedAt = nil
     }
 
+    /// Demo only: moves the session's start back by `seconds` so "done" produces a
+    /// workout past the backend's 30-minute floor without waiting it out. Starts a
+    /// session first if none is running. The workout that results is still written
+    /// through the builder, so it releases a stake exactly like a real one.
+    func warpSession(back seconds: TimeInterval) {
+        let start = Self.sessionStartedAt ?? Date()
+        Self.sessionStartedAt = start.addingTimeInterval(-seconds)
+    }
+
     private func saveStrengthTraining(from start: Date, to end: Date) async throws -> HKWorkout? {
         let configuration = HKWorkoutConfiguration()
         configuration.activityType = .traditionalStrengthTraining

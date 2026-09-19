@@ -137,7 +137,7 @@ The live app: two screens and a bottom bar — **today · + · brain**. The `+` 
 
 ### `Views/DebugPanel.swift`
 
-Sheet from the long-press. Server URL and debug key fields (save → `reloadAPI()`), then: **Time-warp to check time** (`timewarp(to: checkAt + 60 s)`), **Reset clock** (`timewarp(to: nil)`), **Seed demo history**, **Save simulated workout**, **Reset app**. Last error string at the bottom.
+Sheet from the long-press. Server URL and debug key fields (save → `reloadAPI()`), then: **Time-warp to check time** (`timewarp(to: checkAt + 60 s)`), **Reset clock** (`timewarp(to: nil)`), **Seed demo history**, **Save simulated workout**, **Time-warp session** (moves the in-app session's start back 31 minutes, starting one if none is running, so "done" on the plan card clears the 30-minute floor), **Reset app**. Last error string at the bottom.
 
 ## Look
 

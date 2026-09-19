@@ -324,6 +324,13 @@ final class AppModel {
         sessionStartedAt = nil
     }
 
+    /// Demo only: the session has been running 31 minutes longer than it has. Starts one
+    /// if none is running. Tap "done" on the plan card afterwards.
+    func warpSession() {
+        sync.warpSession(back: 31 * 60)
+        sessionStartedAt = WorkoutSync.sessionStartedAt
+    }
+
     // MARK: - Polling
 
     private func startPolling() {
