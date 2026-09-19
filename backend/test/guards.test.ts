@@ -15,6 +15,7 @@ import {
   findCoveringWorkout,
   disqualification,
   resolveLocalTime,
+  splitSlash,
   MIN_WORKOUT_SEC,
   type WorkoutWindow,
 } from '../src/agent/guards';
@@ -210,6 +211,26 @@ section('slash — the rule both models tried to break');
     'a stake already slashed',
     guardSlash(commitment({ stake: stake('slashed') }), EOD + 1000, EOD, null),
   );
+}
+
+section('a miss returns half the stake');
+{
+  eq('0.05 SOL splits evenly', splitSlash(50_000_000), { refunded: 25_000_000, forfeited: 25_000_000 });
+  eq('0.1 SOL splits evenly', splitSlash(100_000_000), { refunded: 50_000_000, forfeited: 50_000_000 });
+  eq('an odd lamport goes back to the user', splitSlash(7), { refunded: 4, forfeited: 3 });
+  eq('one lamport cannot be halved away', splitSlash(1), { refunded: 1, forfeited: 0 });
+
+  // Nothing may be stranded or invented: whatever was staked is exactly what
+  // comes back out. An odd lamport favours the user, because it is their
+  // money being divided.
+  const problems: string[] = [];
+  for (const staked of [1, 2, 3, 7, 999, 1_000_001, 50_000_000, 50_000_001, 123_456_789]) {
+    const { refunded, forfeited } = splitSlash(staked);
+    if (refunded + forfeited !== staked) problems.push(`${staked}: halves sum to ${refunded + forfeited}`);
+    else if (refunded < forfeited) problems.push(`${staked}: forfeited ${forfeited} exceeds refunded ${refunded}`);
+    else if (forfeited < 0) problems.push(`${staked}: negative forfeit`);
+  }
+  eq('the halves always add back up to the stake, favouring the user', problems, []);
 }
 
 done('guards');

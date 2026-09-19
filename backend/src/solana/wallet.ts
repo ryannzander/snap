@@ -10,7 +10,7 @@
  */
 
 import {
-  appendTransactionMessageInstruction,
+  appendTransactionMessageInstructions,
   createKeyPairFromPrivateKeyBytes,
   createSignerFromKeyPair,
   createSolanaRpc,
@@ -73,6 +73,25 @@ export async function transferSol(
   to: Address,
   amountLamports: number,
 ): Promise<string> {
+  return transferSolMany(rpc, from, [{ to, amountLamports }]);
+}
+
+/**
+ * Several transfers from one wallet, in a single transaction.
+ *
+ * A slash pays two places at once — half back to the user, half forfeited —
+ * and doing that as two transactions would mean two signatures for one stake,
+ * and a window where one landed and the other did not. One transaction with
+ * two instructions is atomic and leaves exactly one signature to show.
+ */
+export async function transferSolMany(
+  rpc: Rpc,
+  from: { signer: Awaited<ReturnType<typeof walletFromSeed>>['signer'] },
+  payouts: ReadonlyArray<{ to: Address; amountLamports: number }>,
+): Promise<string> {
+  const due = payouts.filter((payout) => payout.amountLamports > 0);
+  if (due.length === 0) throw new Error('nothing to transfer');
+
   const { value: blockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
 
   const message = pipe(
@@ -80,12 +99,14 @@ export async function transferSol(
     (m) => setTransactionMessageFeePayerSigner(from.signer, m),
     (m) => setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
     (m) =>
-      appendTransactionMessageInstruction(
-        getTransferSolInstruction({
-          source: from.signer,
-          destination: to,
-          amount: lamports(BigInt(amountLamports)),
-        }),
+      appendTransactionMessageInstructions(
+        due.map((payout) =>
+          getTransferSolInstruction({
+            source: from.signer,
+            destination: payout.to,
+            amount: lamports(BigInt(payout.amountLamports)),
+          }),
+        ),
         m,
       ),
   );

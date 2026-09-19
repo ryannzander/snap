@@ -224,6 +224,21 @@ export function guardMessages(
 }
 
 /**
+ * How a missed stake is divided: half back to the user, half forfeited.
+ *
+ * A total forfeit reads as a bet, and the first question a judge asks is
+ * whether this is gambling. Half back is the answer to that question, and it
+ * is also the kinder product — missing one session should sting, not punish.
+ *
+ * An odd lamport goes back to the user rather than being forfeited, so the two
+ * halves always add up to exactly what was staked and nothing is stranded.
+ */
+export function splitSlash(lamports: number): { refunded: number; forfeited: number } {
+  const forfeited = Math.floor(lamports / 2);
+  return { refunded: lamports - forfeited, forfeited };
+}
+
+/**
  * Why a workout cannot release a stake, or null if it can. Display-ready:
  * the trace shows this so a workout that does not count says so on the brain
  * screen instead of just being missing.

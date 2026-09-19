@@ -60,6 +60,12 @@ export interface WorkoutsResponse {
 export interface Stake {
   lamports: number;
   status: StakeStatus;
+  /**
+   * Set only on a slash. A miss returns half the stake and forfeits the rest,
+   * so `slashed` on its own no longer says how much actually moved where.
+   */
+  refundedLamports?: number;
+  forfeitedLamports?: number;
   txSig: string | null;
 }
 

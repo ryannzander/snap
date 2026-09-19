@@ -64,6 +64,22 @@ Everything the app needs to draw its one screen.
 `stake.status`: `none | held | released | slashed`
 `stake.txSig` is null until the chain transaction lands, and stays null while `stake.status` is `none`.
 
+**A miss returns half the stake.** When `status` is `slashed`, two extra fields say what actually moved:
+
+```json
+"stake": {
+  "lamports": 50000000,
+  "status": "slashed",
+  "refundedLamports": 25000000,
+  "forfeitedLamports": 25000000,
+  "txSig": "…"
+}
+```
+
+They are absent on every other status, and they always add up to `lamports` — an odd lamport goes back to the user. Both legs ride in one transaction, so there is still exactly one `txSig` and a refund can never land without its forfeit.
+
+`slashed` still means the commitment was missed; it no longer means the whole stake is gone. Read `refundedLamports` rather than assuming. The forfeited half goes to a **charity wallet on devnet — a wallet we generated, not a registered charity.** Worth wording carefully anywhere a user or judge reads it.
+
 `workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts only workouts that *qualify* — not every workout posted. A workout qualifies when it runs 30 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
 
 This is deliberately the same bar that releases a stake: if a 30-minute walk cannot release your money, it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`).

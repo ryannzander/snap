@@ -16,6 +16,7 @@ import {
   guardRelease,
   guardReschedule,
   guardSlash,
+  splitSlash,
 } from './agent/guards';
 import { DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
 import type { Brain, ToolCall } from './brain';
@@ -26,13 +27,16 @@ import { LinqChannel } from './channels/linq';
 import { TraceChannel } from './channels/trace';
 import { fail, ok, type DoResult } from './http';
 import { isOptOut } from './optout';
+import { solText } from './money';
 import { redact } from './redact';
+import type { Address } from '@solana/kit';
 import {
   explorerUrl,
   getBalanceLamports,
   newSeed,
   rpcFor,
   transferSol,
+  transferSolMany,
   walletFromSeed,
 } from './solana/wallet';
 import { issueToken, secureEquals } from './ids';
@@ -566,16 +570,23 @@ export class UserAgent extends DurableObject<Env> {
     });
     await this.ctx.storage.put(seeded);
 
-    // Yesterday: committed, skipped, money gone. This is what makes the agent
-    // able to say "you said that yesterday".
+    // Yesterday: committed, skipped, half the money gone. This is what makes
+    // the agent able to say "you said that yesterday".
     const yesterdayDue = localTimeToInstant(now, tz, 19, 0, -1);
+    const yesterdaySplit = splitSlash(50_000_000);
     const missed: StoredCommitment = {
       id: 'c_seed_yesterday',
       text: 'gym at 7',
       dueAt: new Date(yesterdayDue).toISOString(),
       graceMin: DEFAULT_GRACE_MIN,
       status: 'missed',
-      stake: { lamports: 50_000_000, status: 'slashed', txSig: null },
+      stake: {
+        lamports: 50_000_000,
+        status: 'slashed',
+        refundedLamports: yesterdaySplit.refunded,
+        forfeitedLamports: yesterdaySplit.forfeited,
+        txSig: null,
+      },
       createdAt: new Date(yesterdayDue - 6 * 3600_000).toISOString(),
       renegotiations: 0,
     };
@@ -592,7 +603,11 @@ export class UserAgent extends DurableObject<Env> {
       { at: yesterdayDue + 25 * 60_000, kind: 'message_sent', summary: '7:24 and no workout 😭' },
       { at: yesterdayDue + 40 * 60_000, kind: 'message_received', summary: 'cant today bro, too much work' },
       { at: yesterdayDue + 41 * 60_000, kind: 'message_sent', summary: 'thats the excuse every time' },
-      { at: endOfLocalDay(yesterdayDue, tz), kind: 'stake_slashed', summary: '0.05 SOL gone' },
+      {
+        at: endOfLocalDay(yesterdayDue, tz),
+        kind: 'stake_slashed',
+        summary: `${solText(yesterdaySplit.refunded)} back, ${solText(yesterdaySplit.forfeited)} forfeited`,
+      },
     ]);
 
     return ok({ workouts: workoutDays.length, commitments: 1 });
@@ -712,7 +727,21 @@ export class UserAgent extends DurableObject<Env> {
       if (direction === 'release') {
         return transferSol(rpc, escrow, user.address, amount);
       }
-      return transferSol(rpc, escrow, treasury.address, amount);
+
+      // A miss returns half and forfeits the rest. Both legs ride in one
+      // transaction: two would mean two signatures for one stake, and a
+      // window where the refund landed and the forfeit did not.
+      //
+      // With no charity address configured the forfeited half goes to the
+      // treasury instead. The user still gets their half either way, so the
+      // mechanic the app describes is true whether or not it is set.
+      const { refunded, forfeited } = splitSlash(amount);
+      const charity = this.env.SNAP_CHARITY_ADDRESS;
+      const forfeitTo = charity ? (charity as Address) : treasury.address;
+      return transferSolMany(rpc, escrow, [
+        { to: user.address, amountLamports: refunded },
+        { to: forfeitTo, amountLamports: forfeited },
+      ]);
     });
 
     if (!signature) return;
@@ -1188,10 +1217,16 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
     status: 'met' | 'missed',
     stake: 'released' | 'slashed',
   ): Promise<void> {
+    const split = stake === 'slashed' ? splitSlash(commitment.stake.lamports) : null;
+
     await this.ctx.storage.put(KEY.commitment(commitment.id), {
       ...commitment,
       status,
-      stake: { ...commitment.stake, status: stake },
+      stake: {
+        ...commitment.stake,
+        status: stake,
+        ...(split ? { refundedLamports: split.refunded, forfeitedLamports: split.forfeited } : {}),
+      },
     } satisfies StoredCommitment);
 
     // Settled: nothing left to wake up about.
@@ -1203,10 +1238,10 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
       {
         kind: stake === 'released' ? 'stake_released' : 'stake_slashed',
         summary:
-          stake === 'released'
+          split === null
             ? `${solText(commitment.stake.lamports)} back in your wallet`
-            : `${solText(commitment.stake.lamports)} gone`,
-        data: { id: commitment.id },
+            : `${solText(split.refunded)} back, ${solText(split.forfeited)} forfeited`,
+        data: { id: commitment.id, ...(split ?? {}) },
       },
     ]);
 
@@ -1340,6 +1375,14 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
     stake: {
       lamports: stored.stake.lamports,
       status: stored.stake.status,
+      // Only present on a slash, and the app needs them: `slashed` alone no
+      // longer says how much came back.
+      ...(stored.stake.refundedLamports === undefined
+        ? {}
+        : { refundedLamports: stored.stake.refundedLamports }),
+      ...(stored.stake.forfeitedLamports === undefined
+        ? {}
+        : { forfeitedLamports: stored.stake.forfeitedLamports }),
       txSig: stored.stake.txSig,
     },
   };
@@ -1376,10 +1419,6 @@ function localClock(instant: number, tz: string): string {
     minute: '2-digit',
     hourCycle: 'h23',
   }).format(new Date(instant));
-}
-
-function solText(lamports: number): string {
-  return `${(lamports / 1_000_000_000).toFixed(2)} SOL`;
 }
 
 function minutes(durationSec: number): number {
