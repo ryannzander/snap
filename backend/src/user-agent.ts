@@ -15,10 +15,13 @@ import {
   guardMessages,
   guardRelease,
   guardReschedule,
+  guardAccept,
+  guardOffer,
   guardSlash,
   splitSlash,
+  type StandingOffer,
 } from './agent/guards';
-import { DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
+import { ACCEPT_OFFER_TOOL, DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
 import type { Brain, ToolCall } from './brain';
 import { FallbackBrain } from './brains/fallback';
 import { OpenAIBrain } from './brains/openai';
@@ -66,6 +69,8 @@ const KEY = {
   traceSeq: 'traceSeq',
   clockOffset: 'clockOffset',
   wallet: 'wallet',
+  /** The stake Snap has proposed and the user has not answered yet. */
+  offer: 'offer',
   workout: (hkUuid: string) => `workout:${hkUuid}`,
   /** Sorts by fire time, so a range scan finds everything due. */
   alarm: (at: number, suffix: string) => `alarm:${String(at).padStart(14, '0')}:${suffix}`,
@@ -945,6 +950,8 @@ export class UserAgent extends DurableObject<Env> {
       return ok({ ran: false });
     }
 
+    const standingOffer = await this.standingOffer();
+
     const context = await this.buildContext(profile);
     await this.appendTraces([{ kind: 'context', summary: summarizeContext(context) }]);
 
@@ -978,20 +985,32 @@ export class UserAgent extends DurableObject<Env> {
       if (await this.dispatch(call, profile)) executed.push(call.name);
     }
 
-    // Choosing among six tools is where small models fall down. Measured
-    // against the deployed Worker, "7pm gym, $5 on it" produced a commitment
-    // 0 times out of 4, and "gym at 7" 2 out of 4 — both perfectly ordinary
-    // ways to text it. A missed commitment means no stake, no alarms and
-    // nothing to demo, so it gets a second look as a single yes/no question,
-    // which is a far easier call than picking a tool.
-    if (!executed.includes('create_commitment')) {
+    // With an offer on the table, the likeliest thing any reply means is yes
+    // or no — and "did they agree?" against two options is a far easier call
+    // than picking one of eight tools. This is the whole reason Snap offers
+    // rather than waiting to be told an amount.
+    if (standingOffer && !executed.includes('accept_offer') && !executed.includes('create_commitment')) {
+      if (await this.confirmAcceptance(brain, profile, instruction)) {
+        executed.push('accept_offer');
+      }
+    }
+
+    // Nothing on the table and nothing recorded: did they name a time we
+    // missed? Measured against the deployed Worker, "7pm gym, $5 on it"
+    // produced a commitment 0 times out of 4 on the Workers AI fallback, so
+    // this second look exists. It can only ever OFFER — the backup path must
+    // not be able to take money, only to ask.
+    if (
+      !standingOffer &&
+      !executed.includes('offer_stake') &&
+      !executed.includes('create_commitment') &&
+      !executed.includes('accept_offer')
+    ) {
       const open = (await this.loadCommitments()).filter(
         (c) => c.status === 'pending' || c.status === 'renegotiated',
       );
       if (open.length === 0) {
-        if (await this.confirmCommitment(brain, profile, instruction)) {
-          executed.push('create_commitment');
-        }
+        if (await this.confirmOffer(brain, profile, instruction)) executed.push('offer_stake');
       }
     }
 
@@ -1008,14 +1027,17 @@ export class UserAgent extends DurableObject<Env> {
   /**
    * "Did they name a time to train?" — one question, two tools. Declining is
    * a first-class answer: "ill hit the gym later" must not become a stake.
+   *
+   * This offers; it never creates. A backup pass that could take money would
+   * be a backup pass that takes money when it misreads someone.
    */
-  private async confirmCommitment(
+  private async confirmOffer(
     brain: Brain,
     profile: Profile,
     instruction: string,
   ): Promise<boolean> {
     const narrow = TOOLS.filter(
-      (tool) => tool.function.name === 'create_commitment' || tool.function.name === 'stay_quiet',
+      (tool) => tool.function.name === 'offer_stake' || tool.function.name === 'stay_quiet',
     );
 
     try {
@@ -1029,19 +1051,67 @@ answer one question and nothing else: did they just say they are training at a
 particular time? "7pm gym" and "gym at 7" and "workout at 6 tonight" all count —
 the hour is what matters, however they wrote it.
 
-if yes, call create_commitment with that hour on their clock.
+if yes, call offer_stake with that hour on their clock.
 if they named no time at all ("later", "tomorrow sometime", "i should go"),
-call stay_quiet — a vague intention is not a commitment and must not take money.`,
+call stay_quiet — a vague intention is not a session and is not worth offering on.`,
         tools: narrow,
       });
 
       for (const call of decision.toolCalls) {
-        if (call.name !== 'create_commitment') continue;
+        if (call.name !== 'offer_stake') continue;
         if (await this.dispatch(call, profile)) return true;
       }
     } catch (error) {
       await this.appendTraces([
         { kind: 'decision', summary: 'could not re-check for a commitment', data: { error: redact(String(error)) } },
+      ]);
+    }
+    return false;
+  }
+
+  /**
+   * "Did they just say yes?" — the easiest question the model is ever asked,
+   * and the one the money turns on.
+   *
+   * Only reached when an offer is actually standing, and the guard checks
+   * again that it is. A no is a first-class answer: hesitation is not
+   * agreement, and "idk maybe" must not take anyone's money.
+   */
+  private async confirmAcceptance(
+    brain: Brain,
+    profile: Profile,
+    instruction: string,
+  ): Promise<boolean> {
+    const quiet = TOOLS.filter((tool) => tool.function.name === 'stay_quiet');
+
+    try {
+      const context = await this.buildContext(profile);
+      const decision = await brain.decide({
+        system: SYSTEM_PROMPT,
+        context: renderContext(context),
+        instruction: `${instruction}
+
+you offered them a stake and this is their answer. one question, nothing else:
+did they agree to it?
+
+"deal", "bet", "ok", "yes", "lets go", "im in" — that is a yes, call accept_offer.
+"nah", "how much", "idk", "maybe later", or anything hesitant or asking a
+question — that is not a yes. call stay_quiet. their money only moves on a
+clear yes.`,
+        tools: [ACCEPT_OFFER_TOOL, ...quiet],
+      });
+
+      for (const call of decision.toolCalls) {
+        if (call.name !== 'accept_offer') continue;
+        if (await this.dispatch(call, profile)) return true;
+      }
+    } catch (error) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: 'could not check whether they agreed',
+          data: { error: redact(String(error)) },
+        },
       ]);
     }
     return false;
@@ -1075,6 +1145,48 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
     }
   }
 
+  /**
+   * Locks the money and starts the clock. Reached two ways — the user named
+   * an amount themselves, or they said yes to one Snap offered — and it has
+   * to be identical either way, because the stake is real from here on.
+   */
+  private async startCommitment(
+    proposal: { text: string; dueAt: string; lamports: number },
+    profile: Profile,
+    now: number,
+  ): Promise<StoredCommitment> {
+    const commitment: StoredCommitment = {
+      id: `c_${crypto.randomUUID().slice(0, 8)}`,
+      text: proposal.text,
+      dueAt: proposal.dueAt,
+      graceMin: DEFAULT_GRACE_MIN,
+      status: 'pending',
+      stake: { lamports: proposal.lamports, status: 'held', txSig: null },
+      createdAt: this.nowIso(),
+      renegotiations: 0,
+    };
+    await this.ctx.storage.put(KEY.commitment(commitment.id), commitment);
+
+    // Grace is the warning; end of day is when the money moves.
+    const dueAt = parseIso(commitment.dueAt) ?? now;
+    await this.schedule(dueAt + commitment.graceMin * 60_000, 'grace', commitment.id);
+    await this.schedule(this.endOfDayFor(commitment, profile), 'end_of_day', commitment.id);
+
+    await this.appendTraces([
+      {
+        kind: 'commitment_created',
+        summary: `${commitment.text} · ${solText(commitment.stake.lamports)} on it`,
+        data: { id: commitment.id, dueAt: commitment.dueAt },
+      },
+      { kind: 'stake_held', summary: `${solText(commitment.stake.lamports)} locked`, data: { id: commitment.id } },
+    ]);
+
+    // Confirming on devnet takes seconds. The commitment is already real and
+    // Snap can already text about it; the signature catches up.
+    this.ctx.waitUntil(this.moveStake(commitment.id, 'stake'));
+    return commitment;
+  }
+
   /** Runs one proposed tool call, or records why it was refused. */
   private async dispatch(call: ToolCall, profile: Profile): Promise<boolean> {
     const now = this.now();
@@ -1099,35 +1211,46 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
         const guard = guardCreate(call.arguments, now, profile.timezone, open.map(toWireCommitment));
         if (!guard.ok) return refuse(guard.reason);
 
-        const commitment: StoredCommitment = {
-          id: `c_${crypto.randomUUID().slice(0, 8)}`,
+        // Naming an amount outright is itself agreement, so nothing is being
+        // taken unasked — but any standing offer is now moot.
+        await this.ctx.storage.delete(KEY.offer);
+        await this.startCommitment(guard.value, profile, now);
+        return true;
+      }
+
+      case 'offer_stake': {
+        const guard = guardOffer(call.arguments, now, profile.timezone, open.map(toWireCommitment));
+        if (!guard.ok) return refuse(guard.reason);
+
+        // Nothing is locked and nothing moves. The only effect is that a yes
+        // now means something — which is the whole point of asking first.
+        const offer: StandingOffer = {
           text: guard.value.text,
           dueAt: guard.value.dueAt,
-          graceMin: DEFAULT_GRACE_MIN,
-          status: 'pending',
-          stake: { lamports: guard.value.lamports, status: 'held', txSig: null },
-          createdAt: this.nowIso(),
-          renegotiations: 0,
+          lamports: guard.value.lamports,
+          offeredAt: this.nowIso(),
         };
-        await this.ctx.storage.put(KEY.commitment(commitment.id), commitment);
-
-        // Grace is the warning; end of day is when the money moves.
-        const dueAt = parseIso(commitment.dueAt) ?? now;
-        await this.schedule(dueAt + commitment.graceMin * 60_000, 'grace', commitment.id);
-        await this.schedule(this.endOfDayFor(commitment, profile), 'end_of_day', commitment.id);
+        await this.ctx.storage.put(KEY.offer, offer);
 
         await this.appendTraces([
           {
-            kind: 'commitment_created',
-            summary: `${commitment.text} · ${solText(commitment.stake.lamports)} on it`,
-            data: { id: commitment.id, dueAt: commitment.dueAt },
+            kind: 'decision',
+            summary: `offered ${solText(offer.lamports)} on ${offer.text} — waiting on a yes`,
+            data: { dueAt: offer.dueAt, lamports: offer.lamports },
           },
-          { kind: 'stake_held', summary: `${solText(commitment.stake.lamports)} locked`, data: { id: commitment.id } },
         ]);
+        return true;
+      }
 
-        // Confirming on devnet takes seconds. The commitment is already real
-        // and Snap can already text about it; the signature catches up.
-        this.ctx.waitUntil(this.moveStake(commitment.id, 'stake'));
+      case 'accept_offer': {
+        const offer = (await this.ctx.storage.get<StandingOffer>(KEY.offer)) ?? null;
+        const guard = guardAccept(offer, now, open.map(toWireCommitment));
+        if (!guard.ok) return refuse(guard.reason);
+
+        // One offer, one acceptance: drop it before creating anything, so a
+        // repeated yes cannot stake twice.
+        await this.ctx.storage.delete(KEY.offer);
+        await this.startCommitment(guard.value, profile, now);
         return true;
       }
 
@@ -1281,8 +1404,22 @@ call stay_quiet — a vague intention is not a commitment and must not take mone
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
         .map(toWireCommitment),
+      standingOffer: await this.standingOffer(),
       recentMessages: recentMessages([...events.values()]),
     };
+  }
+
+  /**
+   * The offer on the table, if it is still answerable. A session whose time
+   * has passed is not something anyone can still say yes to, so it stops
+   * being shown rather than tempting the model to accept it.
+   */
+  private async standingOffer(): Promise<StandingOffer | null> {
+    const offer = (await this.ctx.storage.get<StandingOffer>(KEY.offer)) ?? null;
+    if (!offer) return null;
+    const dueAt = parseIso(offer.dueAt);
+    if (dueAt === null || dueAt <= this.now()) return null;
+    return offer;
   }
 
   /** An open commitment that a stored workout now covers, if any. */

@@ -16,6 +16,9 @@ import {
   disqualification,
   resolveLocalTime,
   splitSlash,
+  guardOffer,
+  guardAccept,
+  type StandingOffer,
   MIN_WORKOUT_SEC,
   type WorkoutWindow,
 } from '../src/agent/guards';
@@ -211,6 +214,47 @@ section('slash — the rule both models tried to break');
     'a stake already slashed',
     guardSlash(commitment({ stake: stake('slashed') }), EOD + 1000, EOD, null),
   );
+}
+
+section('offering a stake — the same rules as taking one, minus the taking');
+{
+  allows('a plain offer', guardOffer({ text: 'gym at 7', hour: 20 }, NOW, TZ, []));
+  denies('no time named', guardOffer({ text: 'gym' }, NOW, TZ, []));
+  denies('no text', guardOffer({ hour: 20 }, NOW, TZ, []));
+  denies('while a commitment is already open', guardOffer({ text: 'gym', hour: 20 }, NOW, TZ, [commitment()]));
+  denies('above the ceiling', guardOffer({ text: 'gym', hour: 20, sol: 99 }, NOW, TZ, []));
+
+  // An offer that could not be honoured must never be made, so it is
+  // validated exactly as creating one is.
+  const offered = guardOffer({ text: 'gym at 7', hour: 20, sol: 0.1 }, NOW, TZ, []);
+  eq('carries the named stake', offered.ok ? offered.value.lamports : null, 100_000_000);
+  const defaulted = guardOffer({ text: 'gym at 7', hour: 20 }, NOW, TZ, []);
+  eq('or the default', defaulted.ok ? defaulted.value.lamports : null, 50_000_000);
+}
+
+section('accepting an offer is the only way money moves unasked-for');
+{
+  const offer = (over: Partial<StandingOffer> = {}): StandingOffer => ({
+    text: 'gym at 7',
+    dueAt: '2026-09-20T01:00:00Z',
+    lamports: 50_000_000,
+    offeredAt: '2026-09-19T23:00:00Z',
+    ...over,
+  });
+
+  allows('a yes while the session is still ahead', guardAccept(offer(), NOW, []));
+  denies('when nothing was ever offered', guardAccept(null, NOW, []));
+  denies(
+    'agreeing to a session that has already passed',
+    guardAccept(offer({ dueAt: '2026-09-19T22:00:00Z' }), NOW, []),
+  );
+  denies('an unreadable deadline', guardAccept(offer({ dueAt: 'tonight' }), NOW, []));
+  denies('when a commitment is already open', guardAccept(offer(), NOW, [commitment()]));
+
+  // Right up to the wire is still a yes.
+  const dueAt = Date.parse('2026-09-20T01:00:00Z');
+  allows('one second before the deadline', guardAccept(offer(), dueAt - 1000, []));
+  denies('one second after it', guardAccept(offer(), dueAt + 1000, []));
 }
 
 section('a miss returns half the stake');

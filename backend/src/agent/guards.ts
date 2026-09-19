@@ -140,8 +140,32 @@ export function guardCreate(
   tz: string,
   openCommitments: Commitment[],
 ): Guard<CreatedCommitment> {
+  return guardProposal(args, now, tz, openCommitments, 'create_commitment');
+}
+
+/**
+ * Offering a stake has exactly the rules creating one does — the difference is
+ * only that nothing is taken yet. Validating it the same way means an offer
+ * can never be made that could not then be honoured.
+ */
+export function guardOffer(
+  args: Record<string, unknown>,
+  now: number,
+  tz: string,
+  openCommitments: Commitment[],
+): Guard<CreatedCommitment> {
+  return guardProposal(args, now, tz, openCommitments, 'offer_stake');
+}
+
+function guardProposal(
+  args: Record<string, unknown>,
+  now: number,
+  tz: string,
+  openCommitments: Commitment[],
+  tool: string,
+): Guard<CreatedCommitment> {
   const text = typeof args.text === 'string' ? args.text.trim() : '';
-  if (!text) return deny('create_commitment needs the commitment in the user\'s words');
+  if (!text) return deny(`${tool} needs the commitment in the user's words`);
   if (text.length > 200) return deny('commitment text is too long');
 
   const resolved = resolveLocalTime(args, now, tz);
@@ -279,6 +303,38 @@ export function findCoveringWorkout(
     if (end >= windowStart && start <= windowEnd) return workout;
   }
   return null;
+}
+
+/** A stake Snap has proposed and the user has not answered yet. */
+export interface StandingOffer {
+  text: string;
+  dueAt: string;
+  lamports: number;
+  offeredAt: string;
+}
+
+/**
+ * Turning "deal" into a held stake.
+ *
+ * An offer is answerable until the session it names has passed — say yes at
+ * 18:59 to a 19:00 session and it stands; say it the next morning and it does
+ * not, because agreeing to something already missed is not agreement.
+ */
+export function guardAccept(
+  offer: StandingOffer | null,
+  now: number,
+  openCommitments: Commitment[],
+): Guard<StandingOffer> {
+  if (!offer) return deny('there is no offer outstanding to accept');
+
+  const dueAt = parseIso(offer.dueAt);
+  if (dueAt === null) return deny('the offer has an unreadable deadline');
+  if (dueAt <= now) return deny('that session has already come and gone — offer a new one');
+
+  if (openCommitments.length > 0) {
+    return deny(`there is already an open commitment (${openCommitments[0]!.id})`);
+  }
+  return allow(offer);
 }
 
 export function guardRelease(

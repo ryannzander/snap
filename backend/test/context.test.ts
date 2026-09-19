@@ -128,6 +128,7 @@ section('what the model actually sees');
         stake: { lamports: 50_000_000, status: 'held', txSig: null },
       },
     ] as unknown as Commitment[],
+    standingOffer: null,
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
 
@@ -141,6 +142,42 @@ section('what the model actually sees');
   for (const needle of ['weekly goal: 4', 'done this week: 2', 'gym at 7', 'held', 'Ryan']) {
     isTrue(`carries "${needle}"`, rendered.includes(needle));
   }
+}
+
+section('an offer on the table is something the model must see');
+{
+  const base: AgentContext = {
+    now: '2026-09-19T14:00:00Z',
+    localTime: 'Saturday 10:00',
+    timezone: TZ,
+    name: 'Ryan',
+    weeklyGoal: 4,
+    workoutsThisWeek: 2,
+    lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
+    openCommitments: [],
+    standingOffer: null,
+    recentMessages: [],
+  };
+
+  isTrue('with none, the block says so', renderContext(base).includes('stake you have offered and they have not answered:\n- none'));
+
+  const offered: AgentContext = {
+    ...base,
+    standingOffer: { text: 'gym at 7', dueAt: '2026-09-19T23:00:00Z', lamports: 50_000_000 },
+  };
+  const rendered = renderContext(offered);
+  isTrue('the offer is rendered', rendered.includes('"gym at 7"'));
+  isTrue('with its deadline', rendered.includes('2026-09-19T23:00:00Z'));
+  isTrue('and that it is unanswered', rendered.includes('waiting on their yes'));
+
+  // The summary must not claim money is staked when it is only offered —
+  // nothing has moved until they say yes.
+  eq(
+    'the summary says offered, not staked',
+    summarizeContext(offered),
+    'no workout today · 2/4 this week · 0.05 SOL offered, no answer yet',
+  );
+  isTrue('and never the word staked', !summarizeContext(offered).includes('staked'));
 }
 
 done('context');

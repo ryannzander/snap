@@ -8,6 +8,7 @@
 
 import { startOfWeek, tzOffsetMs, parseIso } from '../time';
 import { disqualification } from './guards';
+import { solText } from '../money';
 import type { Commitment, TraceEvent } from '../types';
 
 export interface DayRecord {
@@ -28,6 +29,8 @@ export interface AgentContext {
   workoutsThisWeek: number;
   lastSevenDays: DayRecord[];
   openCommitments: Commitment[];
+  /** A stake Snap has proposed and the user has not answered yet. */
+  standingOffer: { text: string; dueAt: string; lamports: number } | null;
   recentMessages: Array<{ from: 'snap' | 'user'; text: string }>;
 }
 
@@ -145,6 +148,11 @@ export function renderContext(context: AgentContext): string {
     'open commitments:',
     commitments,
     '',
+    'stake you have offered and they have not answered:',
+    context.standingOffer
+      ? `- "${context.standingOffer.text}" due ${context.standingOffer.dueAt} · ${context.standingOffer.lamports} lamports · waiting on their yes`
+      : '- none',
+    '',
     'recent conversation:',
     conversation,
   ].join('\n');
@@ -164,7 +172,8 @@ export function summarizeContext(context: AgentContext): string {
   const staked = context.openCommitments
     .filter((c) => c.stake.status === 'held')
     .reduce((sum, c) => sum + c.stake.lamports, 0);
-  if (staked > 0) parts.push(`${(staked / 1_000_000_000).toFixed(2)} SOL staked`);
+  if (staked > 0) parts.push(`${solText(staked)} staked`);
+  else if (context.standingOffer) parts.push(`${solText(context.standingOffer.lamports)} offered, no answer yet`);
 
   return parts.join(' · ');
 }

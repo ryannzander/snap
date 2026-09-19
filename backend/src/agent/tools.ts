@@ -36,7 +36,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'create_commitment',
       description:
-        'Record a new workout commitment the user just made, and lock their stake. Use this the moment they say when they will train.',
+        'Record a workout commitment AND lock their money immediately. Only use this when the user has already named an amount to stake, or has already agreed to one — it takes their money without asking. If they named a time but no amount, use offer_stake instead.',
       parameters: object(
         {
           text: {
@@ -60,6 +60,36 @@ export const TOOLS: ToolDefinition[] = [
             type: 'number',
             description:
               'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is used.',
+          },
+        },
+        ['text', 'hour'],
+      ),
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'offer_stake',
+      description:
+        'Offer to put money on a session, and ask them to agree. Use this whenever the user says when they will train WITHOUT naming an amount — that is almost always, because nobody knows staking exists until you offer it. Nothing is locked and no money moves until they say yes. Say the deal in your own voice in the same turn: they get it all back if they go, half back if they quit, the other half is forfeited.',
+      parameters: object(
+        {
+          text: {
+            type: 'string',
+            description: 'The session in the user\'s own words, e.g. "gym at 7".',
+          },
+          hour: {
+            type: 'integer',
+            description:
+              'Hour they said, 0-23, in THEIR local time. "gym at 7" in the evening is 19. Never convert to UTC — the backend does that.',
+            minimum: 0,
+            maximum: 23,
+          },
+          minute: { type: 'integer', description: 'Minutes past the hour, 0-59. Omit for 0.', minimum: 0, maximum: 59 },
+          sol: {
+            type: 'number',
+            description:
+              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is offered.',
           },
         },
         ['text', 'hour'],
@@ -143,6 +173,28 @@ export const TOOLS: ToolDefinition[] = [
   },
 ];
 
+/**
+ * Deliberately not in TOOLS.
+ *
+ * Accepting is only ever asked as a narrow yes/no question when an offer is
+ * actually standing — "did they just agree?" against two options is a far
+ * easier call than picking one of eight tools, and it is the whole reason
+ * offering beats waiting for the user to name an amount themselves.
+ *
+ * Keeping it out of the main list also means the money can never be taken by
+ * a model that wandered into the wrong tool. There must be a standing offer,
+ * and the user must have answered it.
+ */
+export const ACCEPT_OFFER_TOOL: ToolDefinition = {
+  type: 'function',
+  function: {
+    name: 'accept_offer',
+    description:
+      'The user just agreed to the stake you offered. Locks their money and starts the commitment. Only call this if they actually said yes — "deal", "bet", "ok", "lets do it". Anything hesitant is not a yes.',
+    parameters: object({}, []),
+  },
+};
+
 export const TOOL_NAMES = TOOLS.map((tool) => tool.function.name);
 
 /** Snap's persona. DESIGN.md → "Voice", and BACKEND_TASKS → "The voice". */
@@ -157,6 +209,11 @@ voice:
 
 how you work:
 - the user's money is on the line. that is the whole point. reference it.
+- when they tell you when they are training and say nothing about money, YOU offer
+  the stake. they do not know it exists until you bring it up. something like:
+  "before u get demotivated — put 5 bucks of sol on this. go and u get it all back.
+  quit on me and u only get half, the rest is gone. deal?"
+- never take money without a yes. offer first, then wait for it.
 - you know whether they trained because their watch tells you. never ask if they worked out.
 - one reschedule per commitment, ever. if they already used it, no is the answer.
 - at the grace mark you warn and carry the countdown. you do not take the money yet.
