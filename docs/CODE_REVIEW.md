@@ -20,11 +20,11 @@ An iOS SwiftUI app with three jobs: onboarding, HealthKit → backend workout sy
 | Tests | 32 unit tests, all compile against the source by hand-check; a few were tautological or vacuous. Coverage gaps remain around `LiveAPI`, `AppModel` and the anchor-on-failure path (no injection seams). Seven tests added, one vacuous test fixed. |
 | Project config | The committed `project.pbxproj` carried three settings `project.yml` didn't (team id, app-icon name, a legacy signing identity), so regenerating with XcodeGen would have dropped signing and the icon. The shared scheme ran the HealthKit UI test by default despite its own docstring. An unused `processing` background mode was an App Review flag. Fixed. |
 | Docs | Materially stale: `backend/` claims, an "not written yet" table listing files that exist, and `API.md` missing four things the app now depends on (error envelope, `since` exclusivity, page size, the slashed-stake split). Updated. |
-| Backend / Solana / agent | **Could not be verified from this environment.** Every outbound HTTPS request is refused by the session's egress policy (403 on the Worker, on `api.devnet.solana.com`, and on control hosts). No probe reached the backend and no devnet RPC call succeeded. See the section below for what the repo itself says and a ready-to-run probe script. |
+| Backend / Solana / agent | **Could not be verified from this environment.** Every outbound HTTPS request is refused by the session's egress policy (403 on the Worker, on `api.devnet.solana.com`, and on control hosts). No probe reached the backend and no devnet RPC call succeeded. See the section below for what the repo itself says and the ready-to-run probe script `docs/verify-backend.sh`. |
 
 ## Backend, Solana staking and the agent: what could and could not be checked
 
-**Nothing live was verified.** The probes were written and attempted; the network refused all of them. The scratch probe script (`probe.sh`, described at the end of this section) runs the whole check in about a minute from any machine with internet access.
+**Nothing live was verified.** The probes were written and attempted; the network refused all of them. `docs/verify-backend.sh` runs the whole check in about a minute from any machine with internet access: it creates exactly one clearly named test user, never touches `/debug/*`, and prints every request and response.
 
 What the repository establishes on its own:
 
@@ -41,7 +41,7 @@ What the repository establishes on its own:
 4. `POST /workouts` with an omitted `activeKcal` (every simulated workout) — the app omits absent optionals rather than sending `null`. If the Worker's schema is `.nullable()` rather than `.nullish()`, the no-Watch fallback 400s. One probe line settles it; `API.md` now documents the app's behaviour.
 5. `WorkoutQualifyingTests` pins the accepted workout types and the 30-minute floor against a hand copy of a backend file that isn't here. It can go green while the backend drifts.
 
-**To run the verification** (from any machine with network access): the probe script created during this review lives outside the repo; the equivalent is three `curl` calls — `POST /onboard` with a clearly named test user, `GET /state` and `GET /trace` with the returned bearer token, and `POST /workouts` twice with the same `hkUuid` to check idempotency — then, for any `txSig` in the response, `getTransaction` against `https://api.devnet.solana.com` to see whether it is an Anchor program call or a plain transfer, and whether it succeeded.
+**To run the verification** (from any machine with network access): `bash docs/verify-backend.sh`. It probes reachability and the error envelope, onboards one test user, reads `/state` and `/trace`, posts the same workout twice to check idempotency, posts a hand-entered one, and exercises the date and optional-field shapes. For any `txSig` or wallet it prints, the commented `getTransaction` / `getBalance` / `getAccountInfo` calls at the bottom of the script show on devnet whether the stake is an Anchor program call or a plain transfer, and whether it succeeded.
 
 ## What changed in this pass
 
