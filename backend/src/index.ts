@@ -10,18 +10,22 @@
 
 import type { ChannelName } from './channel';
 import { normalizeInbound, verifySignature } from './channels/linq';
+import { competitionStub } from './competitions/competition';
+import { MAX_ENTRY_LAMPORTS, MIN_ENTRY_LAMPORTS } from './competitions/rules';
 import { directoryStub } from './directory';
 import { HttpError, errorResponse, json, toResponse } from './http';
 import { newUserId, userIdFromToken } from './ids';
 import type { OnboardResponse } from './types';
 import type { UserAgent } from './user-agent';
 import {
+  parseCompetitionRequest,
   parseOnboardRequest,
   parseSince,
   parseWorkoutsRequest,
   readJsonBody,
 } from './validate';
 
+export { Competition } from './competitions/competition';
 export { Directory } from './directory';
 export { UserAgent } from './user-agent';
 
@@ -74,15 +78,137 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'POST');
       return linqWebhook(request, env, ctx);
 
+    case '/competitions':
+      if (request.method === 'GET') return listCompetitions(request, env);
+      requireMethod(request, 'POST');
+      return createCompetition(request, env);
+
+    case '/competitions/join':
+      requireMethod(request, 'POST');
+      return joinCompetition(request, env);
+
     default:
+      // /competitions/<id> and /competitions/<id>/settle
+      if (path.startsWith('/competitions/')) return competitionById(request, env, path);
+
       return errorResponse(404, 'not_found', `no route for ${request.method} ${path}`);
   }
+}
+
+// --- competitions ----------------------------------------------------------
+
+/**
+ * ROADMAP.md → "Competitions": a pot, a rule, a set of entrants and an oracle.
+ * The creator is the first entrant, so making one stakes you into it — an
+ * empty competition nobody has joined is not a thing worth having.
+ */
+async function createCompetition(request: Request, env: Env): Promise<Response> {
+  const { token, stub, userId } = authenticate(request, env);
+  const input = parseCompetitionRequest(await readJsonBody(request));
+
+  const entryLamports =
+    input.sol === undefined ? DEFAULT_ENTRY_LAMPORTS : Math.round(input.sol * 1_000_000_000);
+  if (entryLamports < MIN_ENTRY_LAMPORTS) {
+    throw new HttpError(400, 'bad_request', 'that entry is too small to be worth locking');
+  }
+  if (entryLamports > MAX_ENTRY_LAMPORTS) {
+    throw new HttpError(400, 'bad_request', 'entry is above the 1 SOL ceiling');
+  }
+
+  // The token has to be good before anything is reserved or any money moves.
+  const state = await stub.getState(token);
+  if (!state.ok) return toResponse(state);
+
+  const id = `comp_${crypto.randomUUID().slice(0, 8)}`;
+  const joinCode = await directoryStub(env).claimJoinCode(id);
+  const now = Date.now();
+
+  const created = await competitionStub(env, id).create({
+    id,
+    kind: input.kind,
+    name: input.name,
+    goal: input.goal,
+    entryLamports,
+    joinCode,
+    startsAt: new Date(now).toISOString(),
+    endsAt: new Date(now + input.days * 86_400_000).toISOString(),
+    createdBy: userId,
+  });
+  if (!created.ok) return toResponse(created);
+
+  return toResponse(await competitionStub(env, id).join(userId));
+}
+
+/** `{ "joinCode": "K7MBQ2" }` — stakes you in and puts you on the board. */
+async function joinCompetition(request: Request, env: Env): Promise<Response> {
+  const { token, stub, userId } = authenticate(request, env);
+  const body = await readJsonBody(request);
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+  }
+  const code = (body as Record<string, unknown>).joinCode;
+  if (typeof code !== 'string' || !code.trim()) {
+    throw new HttpError(400, 'bad_request', 'joinCode is required');
+  }
+
+  const state = await stub.getState(token);
+  if (!state.ok) return toResponse(state);
+
+  const id = await directoryStub(env).lookupJoinCode(code);
+  if (!id) return errorResponse(404, 'not_found', 'no competition with that code');
+
+  return toResponse(await competitionStub(env, id).join(userId));
+}
+
+/** Every competition this user is in, each with live standings. */
+async function listCompetitions(request: Request, env: Env): Promise<Response> {
+  const { token, stub } = authenticate(request, env);
+  const mine = await stub.listCompetitions(token);
+  if (!mine.ok) return toResponse(mine);
+
+  const entries = mine.value.competitions;
+  const views = await Promise.all(
+    entries.map(async (entry) => {
+      const view = await competitionStub(env, entry.id).view();
+      return view.ok ? view.value : null;
+    }),
+  );
+  return json({ competitions: views.filter((view) => view !== null) });
+}
+
+/** GET /competitions/<id>, and POST /competitions/<id>/settle. */
+async function competitionById(request: Request, env: Env, path: string): Promise<Response> {
+  const rest = path.slice('/competitions/'.length);
+  const [id, action] = rest.split('/');
+  if (!id) return errorResponse(404, 'not_found', `no route for ${request.method} ${path}`);
+
+  const { token, stub } = authenticate(request, env);
+  const state = await stub.getState(token);
+  if (!state.ok) return toResponse(state);
+
+  if (action === 'settle') {
+    requireMethod(request, 'POST');
+    // Settling early moves real money, so it carries the debug gate as well as
+    // the bearer token — on the day it is a button, not something a user does.
+    if (!env.DEBUG_KEY) return errorResponse(404, 'not_found', `no route for POST ${path}`);
+    if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+      return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+    }
+    return toResponse(await competitionStub(env, id).settle());
+  }
+
+  if (action !== undefined) return errorResponse(404, 'not_found', `no route for ${request.method} ${path}`);
+  requireMethod(request, 'GET');
+  return toResponse(await competitionStub(env, id).view());
 }
 
 // --- handlers --------------------------------------------------------------
 
 /** Longest inbound text /debug/message will accept — an SMS, not an essay. */
 const MAX_INBOUND_TEXT = 1000;
+
+/** DESIGN.md's default stake, reused as the default competition entry. */
+const DEFAULT_ENTRY_LAMPORTS = 50_000_000;
 
 async function onboard(request: Request, env: Env): Promise<Response> {
   const input = parseOnboardRequest(await readJsonBody(request));
@@ -314,7 +440,7 @@ function userStub(env: Env, userId: string): DurableObjectStub<UserAgent> {
 function authenticate(
   request: Request,
   env: Env,
-): { token: string; stub: DurableObjectStub<UserAgent> } {
+): { token: string; userId: string; stub: DurableObjectStub<UserAgent> } {
   const header = request.headers.get('authorization') ?? '';
   const match = /^Bearer\s+(.+)$/i.exec(header.trim());
   const token = match?.[1]?.trim();
@@ -323,5 +449,5 @@ function authenticate(
   if (!token || !userId) {
     throw new HttpError(401, 'unauthorized', 'missing or invalid bearer token');
   }
-  return { token, stub: userStub(env, userId) };
+  return { token, userId, stub: userStub(env, userId) };
 }

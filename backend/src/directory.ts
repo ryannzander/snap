@@ -1,6 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 
-import { newLinkCode } from './ids';
+import { newJoinCode, newLinkCode } from './ids';
 
 /**
  * A single global Durable Object holding the link-code index.
@@ -39,6 +39,23 @@ export class Directory extends DurableObject<Env> {
 
   async lookupChat(channel: string, chatId: string): Promise<string | null> {
     return (await this.ctx.storage.get<string>(`chat:${channel}:${chatId}`)) ?? null;
+  }
+
+  /** Reserves an unused join code for a competition and returns it. */
+  async claimJoinCode(competitionId: string): Promise<string> {
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const code = newJoinCode();
+      const key = `join:${code}`;
+      if (await this.ctx.storage.get<string>(key)) continue;
+      await this.ctx.storage.put(key, competitionId);
+      return code;
+    }
+    throw new Error('could not allocate an unused join code');
+  }
+
+  /** Resolves a shared join code to a competition. */
+  async lookupJoinCode(code: string): Promise<string | null> {
+    return (await this.ctx.storage.get<string>(`join:${code.trim().toUpperCase()}`)) ?? null;
   }
 
   /**

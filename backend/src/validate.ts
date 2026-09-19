@@ -140,3 +140,55 @@ function asNumber(value: unknown, at: string): number {
   }
   return value;
 }
+
+/** POST /competitions — creating one. */
+export function parseCompetitionRequest(body: unknown): {
+  kind: 'solo' | 'h2h' | 'group';
+  name: string;
+  goal: { type: 'workouts' | 'activeHours' | 'activeDays'; target: number };
+  sol?: number;
+  days: number;
+} {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+  }
+  const raw = body as Record<string, unknown>;
+
+  const kind = raw.kind === undefined ? 'group' : raw.kind;
+  if (kind !== 'solo' && kind !== 'h2h' && kind !== 'group') {
+    throw new HttpError(400, 'bad_request', 'kind must be solo, h2h or group');
+  }
+
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  if (!name) throw new HttpError(400, 'bad_request', 'name is required');
+  if (name.length > 80) throw new HttpError(400, 'bad_request', 'name must be at most 80 characters');
+
+  const goalRaw = raw.goal;
+  if (typeof goalRaw !== 'object' || goalRaw === null || Array.isArray(goalRaw)) {
+    throw new HttpError(400, 'bad_request', 'goal must be an object');
+  }
+  const goal = goalRaw as Record<string, unknown>;
+  const type = goal.type;
+  if (type !== 'workouts' && type !== 'activeHours' && type !== 'activeDays') {
+    throw new HttpError(400, 'bad_request', 'goal.type must be workouts, activeHours or activeDays');
+  }
+  const target = goal.target;
+  if (typeof target !== 'number' || !Number.isFinite(target) || target <= 0 || target > 1000) {
+    throw new HttpError(400, 'bad_request', 'goal.target must be a positive number');
+  }
+
+  let sol: number | undefined;
+  if (raw.sol !== undefined && raw.sol !== null) {
+    if (typeof raw.sol !== 'number' || !Number.isFinite(raw.sol)) {
+      throw new HttpError(400, 'bad_request', 'sol must be a number');
+    }
+    sol = raw.sol;
+  }
+
+  const days = raw.days === undefined ? 7 : raw.days;
+  if (typeof days !== 'number' || !Number.isInteger(days) || days < 1 || days > 90) {
+    throw new HttpError(400, 'bad_request', 'days must be a whole number between 1 and 90');
+  }
+
+  return { kind, name, goal: { type, target }, sol, days };
+}

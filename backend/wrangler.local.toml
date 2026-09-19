@@ -38,10 +38,18 @@ class_name = "UserAgent"
 name = "DIRECTORY"
 class_name = "Directory"
 
+[[durable_objects.bindings]]
+name = "COMPETITION"
+class_name = "Competition"
+
 [[migrations]]
 tag = "v1"
 # SQLite-backed Durable Objects — required on the free plan.
 new_sqlite_classes = ["UserAgent", "Directory"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Competition"]
 
 # Where /onboard tells the app to text Snap. Placeholders until the Telegram
 # bot and the Linq sandbox number exist; not secrets, so they live here.

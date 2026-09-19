@@ -58,6 +58,19 @@ import type {
  * the same object — its storage is the user's whole world.
  */
 
+/** What a user keeps about a competition they entered. */
+export interface CompetitionEntry {
+  id: string;
+  name: string;
+  stakeLamports: number;
+  joinedAt: string;
+  status: 'entered' | 'settled';
+  met?: boolean;
+  progress?: number;
+  payoutLamports?: number;
+  settledAt?: string;
+}
+
 const KEY = {
   profile: 'profile',
   token: 'token',
@@ -67,6 +80,7 @@ const KEY = {
   traceSeq: 'traceSeq',
   clockOffset: 'clockOffset',
   wallet: 'wallet',
+  competition: (id: string) => `competition:${id}`,
   /** The stake Snap has proposed and the user has not answered yet. */
   offer: 'offer',
   workout: (hkUuid: string) => `workout:${hkUuid}`,
@@ -354,10 +368,19 @@ export class UserAgent extends DurableObject<Env> {
     if (traces.length > 0) {
       const closing = await this.coveredCommitment(auth.value);
       if (closing) {
+        const profile = auth.value;
         this.ctx.waitUntil(
-          this.runAgent(
-            `a workout just showed up on their watch and it covers "${closing.text}". that is the commitment met — give them their ${solText(closing.stake.lamports)} back and hype them up.`,
-          ) as unknown as Promise<unknown>,
+          (async () => {
+            // Settle first, in code. Whether a workout covers a commitment is
+            // something HealthKit answered, not something to ask a model — and
+            // a turn where it simply forgets to call release_stake leaves the
+            // stake held forever with the loop looking finished.
+            await this.settle(closing, 'met', 'released');
+            await this.announce(
+              profile,
+              `a workout just showed up on their watch and it covers "${closing.text}". you already gave them their ${solText(closing.stake.lamports)} back. tell them, and hype them up.`,
+            );
+          })() as unknown as Promise<unknown>,
         );
       }
     }
@@ -528,6 +551,145 @@ export class UserAgent extends DurableObject<Env> {
     const agent = await this.runInboundTurn(text, imageUrls);
     if (!agent.ok) return agent;
     return ok({ optedOut: false, ran: agent.value.ran });
+  }
+
+  // --- competitions ---------------------------------------------------------
+
+  /**
+   * Everything a competition needs to judge this entrant: who they are, what
+   * clock they are on, and the workouts in the window.
+   *
+   * The competition does the counting rather than being handed a number, so
+   * the rule lives in exactly one place no matter how many entrants there are.
+   */
+  async competitionData(
+    windowStart: number,
+    windowEnd: number,
+  ): Promise<DoResult<{ name: string; timezone: string; workouts: StoredWorkout[] }>> {
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return fail(404, 'not_found', 'no such user');
+
+    const workouts = (await this.loadWorkouts()).filter((workout) => {
+      const start = parseIso(workout.start);
+      return start !== null && start >= windowStart && start <= windowEnd;
+    });
+    return ok({ name: profile.name, timezone: profile.timezone, workouts });
+  }
+
+  /** Every competition this user has entered, newest first. */
+  async listCompetitions(token: string): Promise<DoResult<{ competitions: CompetitionEntry[] }>> {
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+    const entries = [
+      ...(await this.ctx.storage.list<CompetitionEntry>({ prefix: 'competition:' })).values(),
+    ];
+    entries.sort((a, b) => (b.joinedAt ?? '').localeCompare(a.joinedAt ?? ''));
+    return ok({ competitions: entries });
+  }
+
+  /** Locks an entry stake into the same escrow the commitment loop uses. */
+  async enterCompetition(
+    competitionId: string,
+    name: string,
+    lamports: number,
+  ): Promise<DoResult<{ name: string; txSig: string | null }>> {
+    await this.loadClock();
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return fail(404, 'not_found', 'no such user');
+
+    await this.ctx.storage.put(KEY.competition(competitionId), {
+      id: competitionId,
+      name,
+      stakeLamports: lamports,
+      joinedAt: this.nowIso(),
+      status: 'entered',
+    } satisfies CompetitionEntry);
+
+    await this.appendTraces([
+      {
+        kind: 'stake_held',
+        summary: `${solText(lamports)} into "${name}"`,
+        data: { competitionId },
+      },
+    ]);
+
+    const txSig = await this.onChain('competition entry', async () => {
+      const wallet = await this.userWallet();
+      const user = await walletFromSeed(wallet.seed);
+      const escrowSeed = this.env.SNAP_ESCROW_SEED;
+      if (!escrowSeed) throw new Error('no escrow configured');
+      const escrow = await walletFromSeed(escrowSeed);
+      return transferSol(this.rpc(), user, escrow.address, lamports);
+    });
+
+    return ok({ name: profile.name, txSig });
+  }
+
+  /**
+   * Pays an entrant what the competition decided, and tells them.
+   *
+   * A payout of zero is still a settlement: they staked, they did not make it,
+   * and hearing about it is the whole point of having staked.
+   */
+  async settleCompetitionEntry(
+    competitionId: string,
+    name: string,
+    payoutLamports: number,
+    met: boolean,
+    progress: number,
+    goal: { type: string; target: number },
+    entrants: number,
+  ): Promise<DoResult<{ txSig: string | null }>> {
+    await this.loadClock();
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return fail(404, 'not_found', 'no such user');
+
+    const stored = await this.ctx.storage.get<CompetitionEntry>(KEY.competition(competitionId));
+    const staked = stored?.stakeLamports ?? 0;
+
+    await this.ctx.storage.put(KEY.competition(competitionId), {
+      id: competitionId,
+      name,
+      stakeLamports: staked,
+      joinedAt: stored?.joinedAt ?? this.nowIso(),
+      status: 'settled',
+      met,
+      progress,
+      payoutLamports,
+      settledAt: this.nowIso(),
+    } satisfies CompetitionEntry);
+
+    let txSig: string | null = null;
+    if (payoutLamports > 0) {
+      txSig = await this.onChain('competition payout', async () => {
+        const wallet = await this.userWallet();
+        const user = await walletFromSeed(wallet.seed);
+        const escrowSeed = this.env.SNAP_ESCROW_SEED;
+        if (!escrowSeed) throw new Error('no escrow configured');
+        const escrow = await walletFromSeed(escrowSeed);
+        return transferSol(this.rpc(), escrow, user.address, payoutLamports);
+      });
+    }
+
+    const won = payoutLamports > staked;
+    await this.appendTraces([
+      {
+        kind: met ? 'stake_released' : 'stake_slashed',
+        summary: met
+          ? `"${name}" — ${progress}/${goal.target}, ${solText(payoutLamports)} back${won ? ' (won the pot)' : ''}`
+          : `"${name}" — ${progress}/${goal.target}, ${solText(staked)} gone`,
+        data: { competitionId, payoutLamports, met, progress, txSig },
+      },
+    ]);
+
+    await this.announce(
+      profile,
+      met
+        ? `the competition "${name}" just ended. they hit ${progress} of ${goal.target} and you sent them ${solText(payoutLamports)}${won ? ' — they took a share of the pot off the people who skipped' : ' — their stake back'}. ${entrants} people were in it. tell them.`
+        : `the competition "${name}" just ended. they only managed ${progress} of ${goal.target}, so their ${solText(staked)} went into the pot for the people who did. ${entrants} people were in it. tell them straight, no lecture.`,
+    );
+
+    return ok({ txSig });
   }
 
   /**
@@ -872,11 +1034,22 @@ export class UserAgent extends DurableObject<Env> {
             data: { commitmentId: commitment.id, kind: 'end_of_day' },
           },
         ]);
-        await this.runAgent(
-          covering
-            ? `end of day. "${commitment.text}" got done. release their ${solText(commitment.stake.lamports)} and hype them up.`
-            : `end of day. "${commitment.text}" never happened and no workout covers it. their ${solText(commitment.stake.lamports)} is yours to take now. decide.`,
-        );
+        // The clock and HealthKit decide this, not the model. It used to be
+        // asked to "decide", which meant a turn that chose the wrong tool left
+        // a missed commitment sitting held and the demo's last beat missing.
+        if (covering) {
+          await this.settle(commitment, 'met', 'released');
+          await this.announce(
+            profile,
+            `end of day. "${commitment.text}" got done and you already gave them their ${solText(commitment.stake.lamports)} back. tell them.`,
+          );
+        } else {
+          await this.settle(commitment, 'missed', 'slashed');
+          await this.announce(
+            profile,
+            `end of day. "${commitment.text}" never happened, so you just took their ${solText(commitment.stake.lamports)}. tell them straight — no lecture.`,
+          );
+        }
         return;
       }
 
@@ -910,14 +1083,29 @@ export class UserAgent extends DurableObject<Env> {
 
   /** Points the object's single alarm at whichever wake-up comes first. */
   private async rearm(): Promise<void> {
+    await this.loadClock();
     const next = await this.ctx.storage.list<ScheduledAlarm>({
       start: ALARM_RANGE_START,
       end: 'alarm:~',
       limit: 1,
     });
     const first = [...next.values()][0];
-    if (first) await this.ctx.storage.setAlarm(first.at);
-    else await this.ctx.storage.deleteAlarm();
+    if (!first) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    // Wake-ups are stored on the agent's clock, which /debug/timewarp moves.
+    // setAlarm takes real wall-clock time, and the two are the same thing only
+    // while the offset is zero.
+    //
+    // The floor matters more than the conversion: an alarm set in the real
+    // past fires immediately, finds nothing due on the warped clock, rearms to
+    // the same past instant and fires again — a hot loop that never advances.
+    // A backward warp is the obvious way in, and a demo operator resetting the
+    // clock is exactly who would find it.
+    const realAt = first.at - this.clockOffsetMs;
+    await this.ctx.storage.setAlarm(Math.max(realAt, Date.now() + 1_000));
   }
 
   private async schedule(at: number, kind: AlarmKind, commitmentId?: string): Promise<void> {
@@ -1244,6 +1432,19 @@ not a system rejecting them.`,
         },
       ]);
     }
+  }
+
+  /**
+   * The money has already moved. Say so.
+   *
+   * Settling is a fact — HealthKit saw the workout, or the day ended — not a
+   * judgement, so it is not the model's to make. It only gets to do the
+   * talking, and it does not get to stay quiet about someone's stake.
+   */
+  private async announce(profile: Profile, instruction: string): Promise<void> {
+    const brain = this.brain();
+    if (!brain) return;
+    await this.followUp(brain, profile, instruction, [], true);
   }
 
   /** Second pass: you acted, now say something — or justify not saying it. */
