@@ -34,3 +34,7 @@ SNAP_IMESSAGE = "+10000000000"
 # 100-messages-a-day budget for real end-to-end tests and the demo.
 # Set to "linq" to deliver for real.
 SNAP_CHANNEL = "trace"
+
+# Workers AI — fallback brain while there is no OpenAI key.
+[ai]
+binding = "AI"
