@@ -47,12 +47,14 @@ const MAX_TEXT_LENGTH = 300;
 /**
  * How long a workout must run to count, and which HealthKit types qualify.
  *
- * ASSUMPTION, pending Hugo's call: 15 minutes, any type. ROADMAP.md refers to
- * "the same duration floor and workout-type filter as the core loop" as if
- * these were already decided; they are not. A 3-minute walk releasing a gym
- * stake is the first thing a judge would try.
+ * 30 minutes is Ryan's call. The floor is inclusive: a workout of exactly 30
+ * minutes counts, so the seeded 30-minute run still does.
+ *
+ * The type filter is still open — any type qualifies, so a 30-minute walk
+ * closes a gym commitment. Set ACCEPTED_WORKOUT_TYPES to a list of
+ * HKWorkoutActivityType case names to narrow it.
  */
-export const MIN_WORKOUT_SEC = 15 * 60;
+export const MIN_WORKOUT_SEC = 30 * 60;
 export const ACCEPTED_WORKOUT_TYPES: readonly string[] | null = null; // null = any
 
 export interface WorkoutWindow {
