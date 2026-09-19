@@ -20,6 +20,9 @@ dist/
 .wrangler/
 .dev.vars
 
+# Compiled output of `npm test` in backend/ (see backend/test/run.sh).
+.test-out/
+
 # Solana / Anchor
 target/
 .anchor/

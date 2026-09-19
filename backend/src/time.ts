@@ -4,6 +4,9 @@
  */
 
 /** True if `tz` is an IANA zone this runtime knows. */
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+
 export function isValidTimezone(tz: string): boolean {
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: tz });
@@ -66,6 +69,12 @@ export function parseIso(value: string): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
+/** The local calendar day an instant falls on, as a comparable number. */
+function localDayNumber(instant: number, tz: string): number {
+  const local = new Date(instant + tzOffsetMs(instant, tz));
+  return Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate());
+}
+
 /**
  * UTC instant of the next local midnight in `tz` — the moment "end of day"
  * passes, which is when a stake may be slashed (DESIGN.md → Stake rules).
@@ -78,7 +87,22 @@ export function endOfLocalDay(instant: number, tz: string): number {
     local.getUTCDate() + 1,
   );
   const firstGuess = nextMidnight - tzOffsetMs(instant, tz);
-  return nextMidnight - tzOffsetMs(firstGuess, tz);
+  const resolved = nextMidnight - tzOffsetMs(firstGuess, tz);
+
+  // A few zones begin DST exactly at midnight — Egypt does, on the last
+  // Friday in April, where the local clock reads 23:59 and then 01:00. The
+  // midnight resolved above never happens there, and taking it at face value
+  // ends the day an hour early. End of day is when money moves, so that is an
+  // hour of someone's stake taken while it is still today for them.
+  //
+  // Only reached on the handful of nights a year this is true of.
+  if (localDayNumber(resolved, tz) === localDayNumber(instant, tz)) {
+    const today = localDayNumber(instant, tz);
+    for (let t = resolved + MINUTE_MS; t <= resolved + 3 * HOUR_MS; t += MINUTE_MS) {
+      if (localDayNumber(t, tz) !== today) return t;
+    }
+  }
+  return resolved;
 }
 
 /**

@@ -6,9 +6,11 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
-    "postinstall": "wrangler types"
+    "postinstall": "wrangler types",
+    "test": "bash test/run.sh"
   },
   "devDependencies": {
+    "@types/node": "^26.6.2",
     "typescript": "^7.0.2",
     "wrangler": "^4.135.0"
   },
