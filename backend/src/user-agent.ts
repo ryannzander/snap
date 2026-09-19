@@ -758,6 +758,23 @@ export class UserAgent extends DurableObject<Env> {
       if (await this.dispatch(call, profile)) executed.push(call.name);
     }
 
+    // Choosing among six tools is where small models fall down. Measured
+    // against the deployed Worker, "7pm gym, $5 on it" produced a commitment
+    // 0 times out of 4, and "gym at 7" 2 out of 4 — both perfectly ordinary
+    // ways to text it. A missed commitment means no stake, no alarms and
+    // nothing to demo, so it gets a second look as a single yes/no question,
+    // which is a far easier call than picking a tool.
+    if (!executed.includes('create_commitment')) {
+      const open = (await this.loadCommitments()).filter(
+        (c) => c.status === 'pending' || c.status === 'renegotiated',
+      );
+      if (open.length === 0) {
+        if (await this.confirmCommitment(brain, profile, instruction)) {
+          executed.push('create_commitment');
+        }
+      }
+    }
+
     // Some models emit one tool call per turn, so a commitment gets recorded
     // and the user hears nothing — which is the product failing silently.
     // Ask once more, with only the two talking tools available.
@@ -766,6 +783,48 @@ export class UserAgent extends DurableObject<Env> {
     }
 
     return ok({ ran: true });
+  }
+
+  /**
+   * "Did they name a time to train?" — one question, two tools. Declining is
+   * a first-class answer: "ill hit the gym later" must not become a stake.
+   */
+  private async confirmCommitment(
+    brain: Brain,
+    profile: Profile,
+    instruction: string,
+  ): Promise<boolean> {
+    const narrow = TOOLS.filter(
+      (tool) => tool.function.name === 'create_commitment' || tool.function.name === 'stay_quiet',
+    );
+
+    try {
+      const context = await this.buildContext(profile);
+      const decision = await brain.decide({
+        system: SYSTEM_PROMPT,
+        context: renderContext(context),
+        instruction: `${instruction}
+
+answer one question and nothing else: did they just say they are training at a
+particular time? "7pm gym" and "gym at 7" and "workout at 6 tonight" all count —
+the hour is what matters, however they wrote it.
+
+if yes, call create_commitment with that hour on their clock.
+if they named no time at all ("later", "tomorrow sometime", "i should go"),
+call stay_quiet — a vague intention is not a commitment and must not take money.`,
+        tools: narrow,
+      });
+
+      for (const call of decision.toolCalls) {
+        if (call.name !== 'create_commitment') continue;
+        if (await this.dispatch(call, profile)) return true;
+      }
+    } catch (error) {
+      await this.appendTraces([
+        { kind: 'decision', summary: 'could not re-check for a commitment', data: { error: String(error) } },
+      ]);
+    }
+    return false;
   }
 
   /** Second pass: you acted, now say something — or justify not saying it. */
