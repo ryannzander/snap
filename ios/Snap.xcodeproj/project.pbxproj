@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		0998DF72EA298463CCA859D9 /* SnapAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = ACADC6371B434BA470CAF53E /* SnapAPI.swift */; };
 		135B51962923B12A6742BF6E /* SnapApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 608EA0A92A38DB63F2312815 /* SnapApp.swift */; };
+		2BAEC63B9B9C3F957ED69914 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CB6B13FD4063EDE546687149 /* Assets.xcassets */; };
 		321935F95017B9E31C92701E /* MockAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2DE886329DA39B21FFF7B7 /* MockAPI.swift */; };
 		4205928D5296FBDA8681908B /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 809DCBFBB3BE67F8EF47E375 /* AppModel.swift */; };
 		46B1523343BF27D5B1451BBF /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F5B5A4EE4E1092A1D027DE /* Config.swift */; };
@@ -29,6 +30,7 @@
 		608EA0A92A38DB63F2312815 /* SnapApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapApp.swift; sourceTree = "<group>"; };
 		809DCBFBB3BE67F8EF47E375 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		ACADC6371B434BA470CAF53E /* SnapAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapAPI.swift; sourceTree = "<group>"; };
+		CB6B13FD4063EDE546687149 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		EA043FCE89B3FA2426279335 /* WorkoutSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutSync.swift; sourceTree = "<group>"; };
 		F4AB2EB975627D538D2ECED5 /* Snap.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Snap.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -81,6 +83,7 @@
 		E185436592635B1DD59E4225 /* Snap */ = {
 			isa = PBXGroup;
 			children = (
+				CB6B13FD4063EDE546687149 /* Assets.xcassets */,
 				07F5B5A4EE4E1092A1D027DE /* Config.swift */,
 				2DC78CB4B4EBA3F5C39C54D3 /* Info.plist */,
 				F4AB2EB975627D538D2ECED5 /* Snap.entitlements */,
@@ -100,6 +103,7 @@
 			buildConfigurationList = 64BE66C045DC003C9BAF073A /* Build configuration list for PBXNativeTarget "Snap" */;
 			buildPhases = (
 				D5F4D9DA57052BFA792855B0 /* Sources */,
+				D6DA2E928948DD78EBC45DC8 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -144,6 +148,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D6DA2E928948DD78EBC45DC8 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2BAEC63B9B9C3F957ED69914 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		D5F4D9DA57052BFA792855B0 /* Sources */ = {
