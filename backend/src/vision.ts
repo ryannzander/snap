@@ -79,14 +79,23 @@ interface FetchedImage {
   mime: string;
 }
 
+/**
+ * A Worker subrequest sends no User-Agent, and some hosts (Wikimedia, for
+ * one) answer that with a 403. Name ourselves on every photo fetch.
+ */
+const FETCH_HEADERS = {
+  'user-agent': 'snap/1.0 (+https://github.com/ryannzander/snap)',
+  accept: 'image/*,*/*;q=0.5',
+};
+
 async function fetchImage(url: string, linqApiKey: string | undefined): Promise<FetchedImage> {
-  let response = await fetch(url);
+  let response = await fetch(url, { headers: FETCH_HEADERS });
   // Linq's media URLs may be behind the partner key; try plain first so a
   // public CDN link never sees the key.
   if ((response.status === 401 || response.status === 403) && linqApiKey) {
-    response = await fetch(url, { headers: { authorization: `Bearer ${linqApiKey}` } });
+    response = await fetch(url, { headers: { ...FETCH_HEADERS, authorization: `Bearer ${linqApiKey}` } });
   }
-  if (!response.ok) throw new Error(`photo fetch failed: ${response.status}`);
+  if (!response.ok) throw new Error(`photo fetch failed: ${response.status} from ${new URL(url).host}`);
 
   const declared = Number(response.headers.get('content-length') ?? '0');
   if (declared > MAX_IMAGE_BYTES) throw new Error(`photo too large: ${declared} bytes`);
