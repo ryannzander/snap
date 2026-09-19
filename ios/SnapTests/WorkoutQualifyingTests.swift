@@ -98,3 +98,20 @@ final class WorkoutQualifyingTests: XCTestCase {
         XCTAssertEqual(json["source"] as? String, "com.apple.Health")
     }
 }
+
+/// The on-chain receipt shown on the commitment card.
+final class ExplorerLinkTests: XCTestCase {
+
+    /// A real signature is 88 characters and unreadable in full on a phone.
+    /// Both ends must survive so it can be checked against the explorer by eye.
+    func testShortensARealSignatureKeepingBothEnds() {
+        let signature = "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCFFzVRtQJC5Zt8F2nWYdKEtmSTfCFnLcqLp1hZmCQtGmZ9tZ8Ab"
+        XCTAssertEqual(BrainView.shorten(signature), "5VERv8…9tZ8Ab")
+    }
+
+    /// Anything already short is left alone rather than mangled into ellipses.
+    func testLeavesShortStringsAlone() {
+        XCTAssertEqual(BrainView.shorten("4xK9fQ"), "4xK9fQ")
+        XCTAssertEqual(BrainView.shorten(""), "")
+    }
+}

@@ -12,6 +12,7 @@
 		19C0B3D58BBBED7695953E49 /* ContractTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B74DC30350D64FDB86D6E235 /* ContractTests.swift */; };
 		2BAEC63B9B9C3F957ED69914 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = CB6B13FD4063EDE546687149 /* Assets.xcassets */; };
 		321935F95017B9E31C92701E /* MockAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E2DE886329DA39B21FFF7B7 /* MockAPI.swift */; };
+		3A76B1025A3D2E24EA90146C /* WorkoutQualifyingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B63B2A11679D67411798262F /* WorkoutQualifyingTests.swift */; };
 		4205928D5296FBDA8681908B /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 809DCBFBB3BE67F8EF47E375 /* AppModel.swift */; };
 		46B1523343BF27D5B1451BBF /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F5B5A4EE4E1092A1D027DE /* Config.swift */; };
 		50CCB234BA4CC8FF663F2848 /* LiveAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41E5E13833DFAF6D60011273 /* LiveAPI.swift */; };
@@ -41,7 +42,7 @@
 		22972189FC4D4040CF999084 /* LinkView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkView.swift; sourceTree = "<group>"; };
 		256B24AD58DBE7513428AE8F /* SnapTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SnapTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		2DC78CB4B4EBA3F5C39C54D3 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		3BC5BC322A05E4F0343BA8C9 /* Snap.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Snap.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3BC5BC322A05E4F0343BA8C9 /* Snap.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Snap.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		40A64A598EA3B760A72442D7 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		41E5E13833DFAF6D60011273 /* LiveAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveAPI.swift; sourceTree = "<group>"; };
 		49D0941FB8799FE9DD90B9BF /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
@@ -51,6 +52,7 @@
 		800549F12472325BB0793722 /* BrainView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrainView.swift; sourceTree = "<group>"; };
 		809DCBFBB3BE67F8EF47E375 /* AppModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppModel.swift; sourceTree = "<group>"; };
 		ACADC6371B434BA470CAF53E /* SnapAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapAPI.swift; sourceTree = "<group>"; };
+		B63B2A11679D67411798262F /* WorkoutQualifyingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutQualifyingTests.swift; sourceTree = "<group>"; };
 		B74DC30350D64FDB86D6E235 /* ContractTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContractTests.swift; sourceTree = "<group>"; };
 		C065A2DFBB2D2FF21C2106EF /* DebugPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugPanel.swift; sourceTree = "<group>"; };
 		CB6B13FD4063EDE546687149 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -84,6 +86,7 @@
 			children = (
 				B74DC30350D64FDB86D6E235 /* ContractTests.swift */,
 				7EA76D9BB933D8F7A3AFEBF9 /* ErrorAndMockTests.swift */,
+				B63B2A11679D67411798262F /* WorkoutQualifyingTests.swift */,
 			);
 			path = SnapTests;
 			sourceTree = "<group>";
@@ -235,6 +238,7 @@
 			files = (
 				19C0B3D58BBBED7695953E49 /* ContractTests.swift in Sources */,
 				B9234C45363CBEBC905A9C4F /* ErrorAndMockTests.swift in Sources */,
+				3A76B1025A3D2E24EA90146C /* WorkoutQualifyingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -343,7 +347,6 @@
 				CODE_SIGN_ENTITLEMENTS = Snap/Snap.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = TP6Q77MJ35;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Snap/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -398,7 +401,6 @@
 				CODE_SIGN_ENTITLEMENTS = Snap/Snap.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = TP6Q77MJ35;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Snap/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

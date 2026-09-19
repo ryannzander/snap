@@ -70,6 +70,9 @@ struct BrainView: View {
                     }
                 }
                 timeline(for: commitment)
+                if let signature = commitment.stake?.txSig {
+                    explorerLink(signature)
+                }
             }
             .padding(Theme.Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -128,6 +131,31 @@ struct BrainView: View {
             }
             .animation(.snappy, value: late)
         }
+    }
+
+    /// The on-chain receipt. Only drawn when the backend actually got a signature —
+    /// with no signature there is no claim to make, so the row simply isn't there.
+    @ViewBuilder
+    private func explorerLink(_ signature: String) -> some View {
+        let url = URL(string: "https://explorer.solana.com/tx/\(signature)?cluster=devnet")
+        Link(destination: url ?? URL(string: "https://explorer.solana.com")!) {
+            HStack(spacing: 6) {
+                Image(systemName: "link")
+                Text(Self.shorten(signature))
+                Text("devnet")
+                    .foregroundStyle(Theme.inkDim.opacity(0.7))
+            }
+            .font(Theme.mono(11))
+            .foregroundStyle(Theme.inkDim)
+        }
+        .accessibilityLabel("View this transaction on Solana Explorer")
+    }
+
+    /// Signatures are 88 characters. Show enough of both ends to check it against
+    /// the explorer by eye, which is the only thing anyone does with one on stage.
+    static func shorten(_ signature: String) -> String {
+        guard signature.count > 16 else { return signature }
+        return "\(signature.prefix(6))…\(signature.suffix(6))"
     }
 
     private func stakePill(_ stake: Stake) -> some View {
