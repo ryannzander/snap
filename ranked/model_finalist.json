@@ -1,0 +1,54 @@
+{
+ "target": "finalist",
+ "features": [
+  "words",
+  "team",
+  "tags",
+  "links",
+  "sections",
+  "deep",
+  "phys",
+  "proof",
+  "social",
+  "ai",
+  "nums",
+  "repos",
+  "vocab"
+ ],
+ "coef": {
+  "words": -0.2542,
+  "team": 0.5214,
+  "tags": 0.2254,
+  "links": 0.6575,
+  "sections": -0.1443,
+  "deep": -0.0959,
+  "phys": 0.8448,
+  "proof": 0.0458,
+  "social": -0.5327,
+  "ai": 0.5641,
+  "nums": -0.0328,
+  "repos": -0.0187,
+  "vocab": -0.261
+ },
+ "intercept": -0.6626,
+ "note": "Features are z-scored within a year before scoring. Excludes video and gallery images: both are strong historically but near-empty in the live gallery before the deadline, so they cannot be used to score a live field. Excludes likes/comments outright \u2014 those accrue after results and leak.",
+ "validation": {
+  "scheme": "leave-one-year-out over HTN 2023/2024/2025",
+  "auc_oos": 0.744,
+  "folds": [
+   0.698,
+   0.733,
+   0.802
+  ],
+  "ci95": [
+   0.672,
+   0.814
+  ],
+  "p_gt_0_70": 0.92,
+  "permutation_null": 0.509,
+  "permutation_p": 0.0,
+  "n": 741,
+  "positives": 36,
+  "shipped_handtuned_auc": 0.61
+ }
+}
