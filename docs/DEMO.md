@@ -234,6 +234,37 @@ It refuses while a stake is still held, so it can never strand a live commitment
 
 ---
 
+---
+
+## Verified state at freeze
+
+A full rehearsal against the deployed Worker, Sunday ~06:30 UTC. Every step run, not assumed.
+
+| step | result |
+|---|---|
+| Onboard, medium | ✅ |
+| Link with `yo <code>` through the real inbound path | ✅ `linked: true` |
+| Wallet funded | ✅ 0.115 SOL, `funded: true` |
+| Seeded week | ✅ 3/4, 30 days, three-day run broken yesterday |
+| "gym at 7 tonight" → offer | ✅ named 0.05, *"or name your own number"*, and the 45-min target |
+| "deal" → stake locks | ✅ real devnet tx, gesture `palm` assigned **and announced** |
+| Warp past deadline → he texts first | ✅ unprompted |
+| Excuse → refusal | ✅ *"nah bro we are inside the lock now"* |
+| Repeat-excuse catch | ✅ *"too much work is the same villain from yesterday"* |
+| Broken streak | ✅ *"45 mins. start the run back."* |
+| Photo without the gesture | ✅ refused by name, stake held |
+| Watch backstop releases | ✅ `met` / `released` / `verifiedBy: watch`, real tx |
+| Brute-forcing link codes | ✅ cut off at the 11th guess |
+| Treasury | ✅ 5.16 SOL, runway 44 |
+
+**Still not proven, and cannot be from here:**
+
+- A Snap text arriving on a real handset. Inbound is proven; outbound delivery has never been watched.
+- A real training photo **with** the gesture releasing a stake. Every rejection path is verified; the acceptance path needs a real photo of a real person.
+- The iOS build. The Swift changes were read, not compiled — there is no toolchain in the environment they were written in.
+
+Those three are the whole of tonight's list, and all three need a person and a phone.
+
 ## If you get 20 seconds
 
 > "Every accountability app asks if you worked out. Snap doesn't ask — it watches your Watch, judges a photo you can't fake, and takes your money at midnight if you didn't go. A motivator is something you can ignore. This isn't."
