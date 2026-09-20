@@ -9,6 +9,34 @@ struct DebugPanel: View {
     @State private var debugKey = Config.debugKey
     @State private var confirmReset = false
 
+    /// Bindings that write through the server rather than to local state: the
+    /// panel must never show a position the backend does not actually have.
+    private var photoMode: Binding<DemoSettings.PhotoMode> {
+        Binding(
+            get: { model.demo?.photoMode ?? .strict },
+            set: { mode in Task { await model.setDemo(photoMode: mode) } }
+        )
+    }
+
+    private var allowReplay: Binding<Bool> {
+        Binding(
+            get: { model.demo?.allowReplay ?? false },
+            set: { on in Task { await model.setDemo(allowReplay: on) } }
+        )
+    }
+
+    /// What the switch actually does, in the panel, so nobody has to remember.
+    static func explain(_ demo: DemoSettings?) -> String {
+        switch demo?.photoMode {
+        case .lenient:
+            return "rescues \"can't tell\" only — a screenshot is still refused. the trace says \"demo mode\" when it changes an outcome."
+        case .always:
+            return "anything that loads counts, screenshots included. for a vision model that is down. every override is marked in the trace."
+        case .strict, .unknown, nil:
+            return "ship behaviour: the vision model's word, unassisted."
+        }
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -29,6 +57,26 @@ struct DebugPanel: View {
                          ? "mock — not talking to a server"
                          : "live · \(Config.serverURL(from: baseURL)?.host() ?? "")")
                         .font(Theme.mono(12))
+                        .foregroundStyle(Theme.inkDim)
+                }
+
+                // The stage valve. Lives above the rest of the demo controls
+                // because it is the one that decides whether the closing beat
+                // can happen at all: the photo is the verifier now, and a
+                // vision model that hedges at a real gym selfie is the most
+                // likely way this demo dies in front of judges.
+                Section("photo verification") {
+                    Picker("photos", selection: photoMode) {
+                        Text("strict").tag(DemoSettings.PhotoMode.strict)
+                        Text("lenient").tag(DemoSettings.PhotoMode.lenient)
+                        Text("always").tag(DemoSettings.PhotoMode.always)
+                    }
+                    .pickerStyle(.segmented)
+
+                    Toggle("allow reused photos", isOn: allowReplay)
+
+                    Text(Self.explain(model.demo))
+                        .font(Theme.body(12))
                         .foregroundStyle(Theme.inkDim)
                 }
 
@@ -71,6 +119,7 @@ struct DebugPanel: View {
                         .textSelection(.enabled)
                 }
             }
+            .task { await model.loadDemoSettings() }
             .navigationTitle("debug")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

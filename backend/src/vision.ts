@@ -102,6 +102,8 @@ export interface PhotoLook {
   fingerprint: string;
   /** Which model actually looked, for the trace. */
   via: 'openai' | 'workers-ai';
+  /** See `readVerdict`. Only meaningful on an `unsure`. */
+  challengeMissed?: boolean;
 }
 
 export async function describePhoto(
@@ -174,6 +176,13 @@ export function readVerdict(
   description: string;
   verdict: PhotoVerdict;
   rejection: string | null;
+  /**
+   * True when the ONLY thing wrong was the gesture. It rides along because
+   * the stage valve below has to tell a hedge from a definite answer, and
+   * "the model could not decide" and "the model looked and the hand was not
+   * there" are both `unsure`.
+   */
+  challengeMissed?: boolean;
 } {
   const text = raw.trim();
   const parsed = extractJson(text);
@@ -228,6 +237,7 @@ export function readVerdict(
         description,
         verdict: 'unsure',
         rejection: `i asked for ${challenge.ask} — can't see it`,
+        challengeMissed: true,
       };
     }
   }
@@ -262,6 +272,44 @@ function asBoolean(value: unknown): boolean | null {
     if (normalized === 'false' || normalized === 'no' || normalized === '0') return false;
   }
   return null;
+}
+
+/**
+ * How strict the verifier is being. See DemoSettings in user-agent.ts for why
+ * this exists at all.
+ */
+export type PhotoMode = 'strict' | 'lenient' | 'always';
+
+/**
+ * The stage valve, as a pure function, because it is the one thing in the demo
+ * path that can turn "not proof" into money.
+ *
+ * `lenient` rescues `unsure` and nothing else. That distinction is the whole
+ * design: `unsure` is the verdict a real gym selfie gets when the model hedges
+ * or the Workers AI fallback mangles its JSON, while `not_training` is a
+ * judgement the model actually made — and the screenshot roast is a demo beat
+ * worth keeping.
+ *
+ * `always` is break-glass: the vision model is unreachable and the closing
+ * beat has to happen anyway.
+ */
+export function applyPhotoMode(
+  verdict: PhotoVerdict,
+  mode: PhotoMode,
+  challengeMissed = false,
+): { verdict: PhotoVerdict; overridden: PhotoMode | null } {
+  if (verdict === 'training') return { verdict, overridden: null };
+  if (mode === 'always') return { verdict: 'training', overridden: 'always' };
+  // A missing gesture is `unsure` so that Snap asks again instead of accusing
+  // anyone — but by this valve's own rule it belongs on the other side of the
+  // line. `lenient` rescues a model that HEDGED; the model did not hedge here,
+  // it looked and the hand was not in the frame. Rescuing it would quietly
+  // switch off the check that stops a borrowed photo, on the one setting most
+  // likely to be on during a demo, and nobody watching would know.
+  if (mode === 'lenient' && verdict === 'unsure' && !challengeMissed) {
+    return { verdict: 'training', overridden: 'lenient' };
+  }
+  return { verdict, overridden: null };
 }
 
 /** The first `{...}` in the text, parsed, or null. */

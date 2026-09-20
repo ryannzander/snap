@@ -67,6 +67,7 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 - iPhone mirrored to a laptop (QuickTime) so judges see the trace and the incoming text together.
 - **Demo phone = whichever iPhone the Apple Watch is paired with.** That phone needs the build installed, onboarded, and linked to Snap on both Linq and Telegram by Saturday night. No Watch on the day → debug panel's simulated workout, and say it's simulated.
 - **Seeded history:** a debug action seeds a plausible week for the demo user (2/4 done, skipped yesterday, one earlier excuse). Seeded data, real reasoning — say so if asked.
+- **The photo valve:** the debug panel's "photo verification" section sets `strict` / `lenient` / `always` on the live user (`POST /debug/demo`). Run **lenient** on stage — it rescues only "can't tell", which is what a real gym selfie gets when the model hedges or the Workers AI fallback mangles its JSON, and still refuses screenshots so the roast beat works. `always` is break-glass. Overrides are labelled in the trace; do not pretend otherwise if a judge asks.
 - **Fallbacks:** Telegram already linked on the demo phone as a second channel; phone hotspot, not venue wifi; 60-second screen recording of a clean run done by Sun 6 AM (also the Devpost video).
 - **Feature freeze: Sun 4 AM.** Last four hours are rehearsal and polish only.
 

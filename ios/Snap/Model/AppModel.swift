@@ -27,6 +27,9 @@ final class AppModel {
     private(set) var isToppingUp = false
     private(set) var topUpError: String?
 
+    /// The stage valve, as the server has it. Nil until the debug panel asks.
+    private(set) var demo: DemoSettings?
+
     #if DEBUG
     /// Verdict from the `SNAP_HKDIAG` launch hook, read by the UI test. Nil in every
     /// ordinary run, and rendered invisibly — it is a test channel, not a feature.
@@ -261,6 +264,11 @@ final class AppModel {
 
         Keychain.token = nil
         WorkoutSync.clearAnchor()
+        // Dropping the anchor means the next query has no cursor, and an
+        // anchorless query against a week-wide predicate would hand the next
+        // account every workout of the last seven days. The floor is what stops
+        // a fresh start opening with this morning's session already banked.
+        WorkoutSync.syncFloor = Date()
         WorkoutSync.sessionStartedAt = nil
         sessionStartedAt = nil
         Key.all.forEach { defaults.removeObject(forKey: $0) }
@@ -269,6 +277,7 @@ final class AppModel {
         token = nil
         state = nil
         wallet = nil
+        demo = nil
         topUpError = nil
         name = ""
         linkCode = ""
@@ -295,6 +304,25 @@ final class AppModel {
     /// Seeding wipes the server's trace and restarts its ids at 1, so the cursor this
     /// app holds would point past everything new and the feed would go silent for the
     /// rest of the session. Drop the cursor with it.
+    /// Reads the stage valve so the debug panel shows its real position rather
+    /// than a guess. Silent on failure: against a Worker with no DEBUG_KEY the
+    /// route is a 404, which is not worth a red line in the panel.
+    func loadDemoSettings() async {
+        demo = try? await api.demoSettings(photoMode: nil, allowReplay: nil)
+    }
+
+    /// Flips it. The server's answer is what gets stored — a switch that shows
+    /// a position the backend does not have is worse than no switch, and this
+    /// one decides whether a photo can release money.
+    func setDemo(photoMode: DemoSettings.PhotoMode? = nil, allowReplay: Bool? = nil) async {
+        do {
+            demo = try await api.demoSettings(photoMode: photoMode, allowReplay: allowReplay)
+        } catch {
+            lastError = describe(error)
+            await loadDemoSettings()
+        }
+    }
+
     func seedDemo() async {
         do {
             try await api.seed()

@@ -7,7 +7,7 @@
  * photo taken before then cannot have it in it.
  */
 import { CHALLENGES, challengeById, pickChallenge } from '../src/agent/challenge';
-import { readVerdict, verifyPrompt, VERIFY_PROMPT } from '../src/vision';
+import { applyPhotoMode, readVerdict, verifyPrompt, VERIFY_PROMPT } from '../src/vision';
 import { section, eq, isTrue, isFalse, done } from './harness';
 
 const good = (extra = '') =>
@@ -93,6 +93,35 @@ section('the gesture is the LAST thing checked, never the first');
     three,
   );
   eq('an empty room too', empty.verdict, 'not_training');
+}
+
+section('the stage valve does not quietly switch the gesture off');
+{
+  const three = challengeById('three')!;
+  const missed = readVerdict(good(', "challenge": false'), three);
+  const hedged = readVerdict(
+    '{"training": true, "person": true, "gym": true, "screenshot": false, "confidence": 0.3, "description": "blurry, might be a gym"}',
+  );
+
+  eq('strict changes nothing', applyPhotoMode(missed.verdict, 'strict', true).verdict, 'unsure');
+
+  // `lenient` exists to rescue a model that HEDGED — a real gym selfie the
+  // Workers AI fallback mangled. The model did not hedge on a missing gesture:
+  // it looked, and the hand was not in the frame. Rescuing that would switch
+  // off the borrowed-photo check on the setting most likely to be on during a
+  // demo, and nobody watching would know.
+  eq('lenient still rescues a hedge', applyPhotoMode(hedged.verdict, 'lenient', false).verdict, 'training');
+  eq('but not a missing gesture', applyPhotoMode(missed.verdict, 'lenient', true).verdict, 'unsure');
+  eq('and says it did not override', applyPhotoMode(missed.verdict, 'lenient', true).overridden, null);
+
+  // Break-glass is break-glass: the vision model is unreachable and the
+  // closing beat has to happen anyway.
+  eq('always overrides even that', applyPhotoMode(missed.verdict, 'always', true).verdict, 'training');
+
+  // The flag only ever rides on the verdict it explains.
+  isTrue('a gesture miss is flagged', missed.challengeMissed === true);
+  isFalse('a hedge is not', hedged.challengeMissed === true);
+  isFalse('and neither is a pass', readVerdict(good(', "challenge": true'), three).challengeMissed === true);
 }
 
 done('photo challenges');

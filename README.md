@@ -56,7 +56,7 @@ The guard that matters most is the slash. Both models we tested tried to take th
 |---|---|
 | `ios/` | SwiftUI app — onboarding, HealthKit sync, wallet, and the brain screen. **No chat.** The conversation is in iMessage. |
 | `backend/` | Cloudflare Worker + Durable Objects. The agent, the guards, the alarm engine, the channel adapters and the Solana layer. |
-| `brand/` | Mark, app icon, wordmark, Devpost banner. |
+| `brand/` | Mark, app icon, wordmark, pitch images — [what each file is](brand/README.md). |
 | `docs/` | [API contract](docs/API.md) · [design](docs/DESIGN.md) · [roadmap](docs/ROADMAP.md) · [review](docs/CODE_REVIEW.md) |
 
 **The agent schedules its own future.** A Durable Object gets exactly one alarm, so wake-ups live in a key-sorted queue — `alarm:<14-digit-timestamp>:<kind>` — and a range scan finds everything due. That's what makes Snap proactive with no cron job anywhere.
@@ -76,7 +76,7 @@ Real devnet transfers with real signatures. Stake, release and slash, each polle
 ## What's tested
 
 ```
-npm test          # 13 suites, 427 checks
+npm test          # 13 suites, 444 checks
 ```
 
 | suite | what it holds |

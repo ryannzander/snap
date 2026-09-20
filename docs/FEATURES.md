@@ -79,7 +79,7 @@ Winners get **100% of their own stake back**, plus an equal share of what the sk
 ## What's tested
 
 ```
-npm test          # 13 suites, 427 checks
+npm test          # 13 suites, 444 checks
 ```
 
 `startOfWeek` / `endOfLocalDay` are asserted as properties over **20,720 instants across 14 zones**. That suite found a real bug: Egypt begins DST at midnight, so the clock reads 23:59 then 01:00 and the midnight we resolved never happens — Snap would have slashed a stake an hour before the user's day was over.
