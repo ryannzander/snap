@@ -23,6 +23,7 @@ A Durable Object gets exactly one alarm, so wake-ups live in a key-sorted queue 
 |---|---|---|
 | `grace` | deadline + your grace minutes | the first "yo, you're over" — a warning, never a slash |
 | `end_of_day` | midnight in **your** timezone | the money moves, with or without you |
+| `last_call` | an hour before the money moves | one final warning, never a second nag |
 | `morning` | 09:00 local, if nothing is planned | he asks first |
 
 **Measured live:** the grace warning fires and speaks; end-of-day settles with no model call required. **Tested:** the backward-warp hot loop is fixed — `rearm()` floors at `now + 1s`.
@@ -146,7 +147,23 @@ It also swaps the voice the model is handed for the turn.
 
 ---
 
-## 5. Negotiation
+## 5. The stake never vanishes out of silence
+
+An hour before the money moves, Snap says so **once** — *"50 mins then the 0.02 sol is gone"*, and what gets it back. Live: *"if the day cooked you, it's cooked — but this is the door rn."*
+
+Skipped when there is no room for it (a commitment made at 23:30 gets no last call at 23:00) and never fired on a session already covered by a photo or the watch.
+
+Without it the shape of a bad day was: a nudge twenty minutes past the deadline, then nothing at all, then your money gone at midnight. That silence reads as a trap rather than a deal, and the whole product rests on the deal being one you would take again tomorrow.
+
+## 6. It knows the run you just lost
+
+A live streak is the number on your home screen, counted by **the same rule the iOS app uses**, ported line for line rather than reinvented — two implementations of one number is how "2/4 this week" ends up meaning different things on the phone and in the thread.
+
+But the line that actually works is the other one: *"you had 3 days going and you binned it yesterday."* The loss is worth more than the number, which is the same reason the stake is allocated up front rather than paid at the end. One lost session is a Tuesday, and he is told not to call that a streak.
+
+The seeded demo week is three consecutive days, yesterday skipped, today still open — so the sentence has data behind it.
+
+## 7. Negotiation
 
 One reschedule per commitment, ever, and only while there's more than an hour left — an hour out you're rearranging your day, ten minutes out you're weaselling. Snap reads your history first: the same excuse you used yesterday gets called.
 
@@ -158,7 +175,7 @@ One reschedule per commitment, ever, and only while there's more than an hour le
 
 ---
 
-## 6. Competitions
+## 8. Competitions
 
 `POST /competitions`, `/competitions/join`, `GET /competitions`, `GET /competitions/<id>`, `POST /competitions/<id>/settle`. One Durable Object, one settlement path.
 
@@ -170,7 +187,7 @@ One reschedule per commitment, ever, and only while there's more than an hour le
 
 ---
 
-## 7. The thread
+## 9. The thread
 
 - **Inbound is signed.** Standard Webhooks HMAC-SHA256 over `{id}.{timestamp}.{rawBody}`, five-minute replay window, secret rotation supported. Unsigned, tampered and stale deliveries all 401. **Tested:** 13 checks in `webhook`.
 - **Tapbacks.** ❤️ 👍 👎 😂 ‼️ ❓ both ways. A 👍 from you on an offer *is* your yes — the money is locked by the time he speaks. **Tested:** 57 checks in `reactions`.
@@ -183,7 +200,7 @@ One reschedule per commitment, ever, and only while there's more than an hour le
 
 ---
 
-## 8. Timezones
+## 10. Timezones
 
 The model names an hour on your clock and never converts — asked to do it itself, it turned "gym at 7" into 3am. `startOfWeek` and `endOfLocalDay` resolve the offset **twice**, because the offset on the target midnight can differ from the offset right now. Deadlines render into the model's context as local stamps, not raw UTC.
 
@@ -191,7 +208,7 @@ The model names an hour on your clock and never converts — asked to do it itse
 
 ---
 
-## 9. The brain screen
+## 11. The brain screen
 
 The app has **no chat** — the conversation is in iMessage. The app is onboarding, HealthKit sync, your wallet, and a live trace of every decision.
 
@@ -203,7 +220,7 @@ When the model returns no reasoning of its own — `message.content` on a `tool_
 
 ---
 
-## 10. Demo controls
+## 12. Demo controls
 
 `POST /debug/message`, `/debug/timewarp`, `/debug/seed`, `/debug/forget`, `/debug/demo`. All gated on the user's bearer token **plus** `X-Debug-Key`; with no `DEBUG_KEY` configured the routes 404 rather than advertising themselves with a 401.
 
@@ -216,7 +233,7 @@ When the model returns no reasoning of its own — `message.content` on a `tool_
 ## Test suite
 
 ```
-npm test          # 13 suites, 444 checks
+npm test          # 13 suites, 488 checks
 ```
 
 | suite | checks |

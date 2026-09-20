@@ -76,7 +76,7 @@ Real devnet transfers with real signatures. Stake, release and slash, each polle
 ## What's tested
 
 ```
-npm test          # 13 suites, 444 checks
+npm test          # 13 suites, 488 checks
 ```
 
 | suite | what it holds |

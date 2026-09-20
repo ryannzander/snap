@@ -8,6 +8,7 @@
  * would say "3/4 this week" off workouts the release path rejects.
  */
 import {
+  brokenStreak,
   currentStreak,
   buildDays,
   countMovesThisWeek,
@@ -229,6 +230,7 @@ section('what the model actually sees');
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
     streak: 0,
+    brokenStreak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
@@ -327,6 +329,35 @@ section('the streak, and it has to be the number on their home screen');
   eq('capped by the window', currentStreak(thirty), 30);
 }
 
+section('the run you just lost');
+{
+  const d = (date: string, workouts: number, skipped = false) => ({ date, workouts, skipped });
+
+  // The seeded demo week, and the reason this exists: three consecutive days,
+  // yesterday skipped, today still open. No streak to talk about, but a very
+  // good sentence available.
+  const seeded = [d('2026-09-16', 1), d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 0, true), d('2026-09-20', 0)];
+  eq('no streak going', currentStreak(seeded), 0);
+  eq('but a three day run just ended', brokenStreak(seeded), 3);
+
+  // Never both. A live streak is the thing to protect; a dead one is the thing
+  // to get back, and Snap talking about both in one breath is incoherent.
+  const alive = [d('2026-09-18', 1), d('2026-09-19', 1), d('2026-09-20', 0)];
+  eq('a live streak silences it', brokenStreak(alive), 0);
+  isTrue('and the live one is still counted', currentStreak(alive) === 2);
+
+  // One session is a Tuesday. Calling it a lost streak is how Snap starts
+  // sounding like an app.
+  eq('one lost day is not a lost run', brokenStreak([d('2026-09-18', 1), d('2026-09-19', 0, true)]), 0);
+  eq('nothing at all', brokenStreak([d('2026-09-19', 0, true)]), 0);
+  eq('no history at all', brokenStreak([]), 0);
+
+  // Only the run immediately before the break, not the best run ever.
+  const older = [d('2026-09-10', 1), d('2026-09-11', 1), d('2026-09-12', 1), d('2026-09-13', 1),
+                 d('2026-09-14', 0), d('2026-09-18', 1), d('2026-09-19', 1), d('2026-09-20', 0, true)];
+  eq('the most recent run, not the longest', brokenStreak(older), 2);
+}
+
 section('snap only mentions a streak when there is one');
 {
   const base: AgentContext = {
@@ -343,6 +374,7 @@ section('snap only mentions a streak when there is one');
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
     streak: 0,
+    brokenStreak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
@@ -392,6 +424,7 @@ section('the model is told the gesture it will later enforce');
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
     streak: 0,
+    brokenStreak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [],
   };
@@ -425,6 +458,7 @@ section('the model is told which number to say');
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
     streak: 0,
+    brokenStreak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
@@ -451,6 +485,7 @@ section('an offer on the table is something the model must see');
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
     streak: 0,
+    brokenStreak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };

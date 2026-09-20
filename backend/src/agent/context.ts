@@ -52,6 +52,11 @@ export interface AgentContext {
    */
   streak: number;
   /**
+   * The run that ended, when `streak` is 0. See `brokenStreak` — this is the
+   * one worth saying out loud.
+   */
+  brokenStreak: number;
+  /**
    * The session length they asked to be held to. A target Snap says out loud,
    * not a gate — a shorter session still releases the money.
    */
@@ -129,6 +134,29 @@ export function currentStreak(days: DayRecord[]): number {
     }
   }
   return run;
+}
+
+/**
+ * The run that just ended, when there is no run going.
+ *
+ * "You're on 3 days" is a stat. "You had 3 days going and you binned it
+ * yesterday" is a thing a friend says, and it is the one that gets someone
+ * back to the gym — the loss is worth more than the number, which is the same
+ * reason the stake is allocated up front rather than paid out at the end.
+ *
+ * Zero whenever a streak is still alive, so the two can never both be talked
+ * about, and zero for a run of one, because losing a single session is a
+ * Tuesday and calling it a lost streak is how Snap starts sounding like an app.
+ */
+export function brokenStreak(days: DayRecord[]): number {
+  if (currentStreak(days) > 0) return 0;
+
+  let i = days.length - 1;
+  while (i >= 0 && days[i]!.workouts === 0) i--;
+
+  let run = 0;
+  for (; i >= 0 && days[i]!.workouts > 0; i--) run++;
+  return run >= 2 ? run : 0;
 }
 
 /** Local YYYY-MM-DD for an instant, in the user's zone. */
@@ -358,7 +386,9 @@ export function renderContext(context: AgentContext): string {
     `if you offer and they never named an amount, the stake is ${solText(context.defaultStakeLamports)} — use that number in your texts, it is the one that gets locked. they can name their own, the floor is 0.01 SOL`,
     context.streak >= 2
       ? `they are on a ${context.streak} day streak. it is the number on their home screen, so say THAT number or none. worth a mention when they finish one, and worth naming as something to lose when they are wobbling — never twice in a row, and never as a lecture.`
-      : 'no streak going right now. do not bring one up.',
+      : context.brokenStreak >= 2
+        ? `they HAD a ${context.brokenStreak} day run going and it is gone. that is the thing to bring up when they are talking themselves out of today — not as a telling off, as a thing worth getting back. once, not every turn.`
+        : 'no streak going right now. do not bring one up.',
     `they asked to be held to ${context.targetMin}-minute sessions. that is the number you hold them to out loud. it is NOT what decides the money — any session they actually turned up for pays out, even a short one. if they come in under it, say something and then pay them anyway.`,
     '',
     'stake you have offered and they have not answered:',

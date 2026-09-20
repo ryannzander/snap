@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 
 import {
   buildDays,
+  brokenStreak,
   currentStreak,
   countMovesThisWeek,
   countVerifiedThisWeek,
@@ -231,7 +232,14 @@ function rescheduleCount(commitment: { reschedules?: Reschedule[]; renegotiation
  * They are stored as keys sorted by fire time and the single alarm is always
  * armed for the earliest.
  */
-type AlarmKind = 'grace' | 'end_of_day' | 'morning';
+type AlarmKind = 'grace' | 'last_call' | 'end_of_day' | 'morning';
+
+/**
+ * How long before the money moves the last warning lands. An hour is enough
+ * to still get to a gym, and late enough that it is a last call rather than a
+ * second nag.
+ */
+const LAST_CALL_MS = 60 * 60 * 1000;
 
 interface ScheduledAlarm {
   at: number;
@@ -1304,14 +1312,25 @@ export class UserAgent extends DurableObject<Env> {
     const tz = profile.timezone;
     const weekStart = startOfWeek(now, tz);
 
-    // Two sessions earlier in the week, skipping yesterday — that is the day
-    // the story needs empty. Walk back until two days land inside this week.
+    // Three sessions on CONSECUTIVE days, then yesterday skipped — that is the
+    // day the story needs empty.
+    //
+    // Consecutive matters. Two sessions scattered through the week is a
+    // person with no momentum, and the strongest thing Snap can say to
+    // somebody talking themselves out of today is not "you're on 3 days", it
+    // is "you had 3 days going and you binned it yesterday". That line needs
+    // a run behind the skip to be true, and seeded data that cannot support
+    // the sentence is worse than none — see `brokenStreak`.
+    //
+    // They still reach back only as far as the week allows, because
+    // `workoutsThisWeek` counts from Monday and a seeded 3/4 on a Tuesday
+    // would be a lie the goal ring tells on us.
     const workoutDays: number[] = [];
-    for (let back = 2; back <= 6 && workoutDays.length < 2; back++) {
+    for (let back = 2; back <= 4; back++) {
       const at = localTimeToInstant(now, tz, 18, 0, -back);
       if (at >= weekStart && at < now) workoutDays.push(at);
     }
-    // Early in the week there are not two earlier days, so use this morning.
+    // Early in the week there are not three earlier days, so use this morning.
     while (workoutDays.length < 2) {
       const at = localTimeToInstant(now, tz, 7 + workoutDays.length, 0, 0);
       workoutDays.push(at < now ? at : now - 3600_000);
@@ -1769,8 +1788,20 @@ export class UserAgent extends DurableObject<Env> {
 
     let fired = 0;
     for (const [key, scheduled] of due) {
-      // Delete first: a wake-up that throws must not fire forever.
-      await this.ctx.storage.delete(key);
+      // Delete first, and only run it if THIS pass is the one that removed it.
+      //
+      // Deleting first stops a wake-up that throws from firing forever. The
+      // returned flag stops the other half: `due` is a snapshot, and a second
+      // invocation can start while this one is inside an agent turn — a turn
+      // is a model call and takes seconds, and a `schedule()` during it
+      // re-arms the object. Both passes then hold the same entry in their own
+      // snapshot, both walk to it, and the user gets the same text twice.
+      //
+      // Seen for real: one commitment, one `commitment_created`, and two
+      // identical last calls in the trace a few seconds apart. On a phone
+      // that is Snap saying the same thing twice; on the Linq sandbox it is
+      // double the messages out of a hundred a day.
+      if (!(await this.ctx.storage.delete(key))) continue;
       await this.runAlarm(scheduled, profile);
       fired++;
     }
@@ -1819,6 +1850,46 @@ export class UserAgent extends DurableObject<Env> {
           commitment.status === 'renegotiated'
             ? `you woke yourself up. "${commitment.text}" is the one they already moved once, to ${due}, and that time just passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it in ${commitment.graceMin} minutes, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`
             : `you woke yourself up. "${commitment.text}" was due at ${due} and the ${commitment.graceMin} minute grace has passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`,
+        );
+        return;
+      }
+
+      /**
+       * The last warning before the money goes.
+       *
+       * Without it the shape of a bad day was: a nudge twenty minutes past the
+       * deadline, then nothing at all, then the stake is gone at midnight.
+       * That silence is the part a real user would never forgive — it reads as
+       * a trap rather than a deal, and the whole product rests on the deal
+       * being one they would take again tomorrow.
+       *
+       * It is deliberately not another nag. It fires once, an hour out, and
+       * only when the money is genuinely still on the line.
+       */
+      case 'last_call': {
+        const commitment = await this.commitment(scheduled.commitmentId);
+        if (!commitment || (commitment.status !== 'pending' && commitment.status !== 'renegotiated')) {
+          return;
+        }
+        if (commitment.proof) return;
+        const coveringNow = findCoveringWorkout(
+          await this.loadWorkouts(),
+          parseIso(commitment.createdAt) ?? 0,
+          this.endOfDayFor(commitment, profile),
+        );
+        if (coveringNow) return;
+
+        const goesAt = this.endOfDayFor(commitment, profile);
+        const minutesLeft = Math.max(1, Math.round((goesAt - this.now()) / 60_000));
+        await this.appendTraces([
+          {
+            kind: 'alarm_fired',
+            summary: `${clockOnly(this.now(), profile.timezone)} — last call on ${commitment.text}`,
+            data: { commitmentId: commitment.id, kind: 'last_call', minutesLeft },
+          },
+        ]);
+        await this.runAgent(
+          `you woke yourself up. this is the LAST time you can say anything before the money moves: "${commitment.text}" is unmet, their ${solText(commitment.stake.lamports)} goes in about ${minutesLeft} minutes and after that it is gone. say the number of minutes and say what gets it back — a pic from the session, them in it. one short push, not a lecture, and do not pretend there is more time than there is. if they have genuinely run out of day, say that plainly instead of pretending.`,
         );
         return;
       }
@@ -2379,10 +2450,13 @@ not a system rejecting them.`,
     };
     await this.ctx.storage.put(KEY.commitment(commitment.id), commitment);
 
-    // Grace is the warning; end of day is when the money moves.
+    // Grace is the warning; end of day is when the money moves; last call is
+    // the one in between, so the stake never vanishes out of silence.
     const dueAt = parseIso(commitment.dueAt) ?? now;
+    const goesAt = this.endOfDayFor(commitment, profile);
     await this.schedule(dueAt + commitment.graceMin * 60_000, 'grace', commitment.id);
-    await this.schedule(this.endOfDayFor(commitment, profile), 'end_of_day', commitment.id);
+    await this.scheduleLastCall(commitment, goesAt, dueAt);
+    await this.schedule(goesAt, 'end_of_day', commitment.id);
 
     await this.appendTraces([
       {
@@ -2550,6 +2624,7 @@ not a system rejecting them.`,
 
         // The old grace wake-up is about a deadline that no longer exists.
         await this.unschedule('grace', existing.id);
+        await this.unschedule('last_call', existing.id);
         await this.unschedule('end_of_day', existing.id);
         const newDue = parseIso(moved.dueAt) ?? now;
 
@@ -2564,6 +2639,7 @@ not a system rejecting them.`,
         // are over" at all. Warning lands on the new deadline; the money goes
         // when that window closes.
         await this.schedule(newDue, 'grace', moved.id);
+        await this.scheduleLastCall(moved, newDue + moved.graceMin * 60_000, newDue);
         await this.schedule(newDue + moved.graceMin * 60_000, 'end_of_day', moved.id);
 
         await this.appendTraces([
@@ -2646,8 +2722,12 @@ not a system rejecting them.`,
       stake: { ...commitment.stake, status: stake },
     } satisfies StoredCommitment);
 
-    // Settled: nothing left to wake up about.
+    // Settled: nothing left to wake up about, and that has to mean ALL of
+    // them. The handlers each check the status and would have returned
+    // quietly, but an alarm left booked on a finished commitment is a wake-up
+    // that costs a read and tells the trace a lie about what is pending.
     await this.unschedule('grace', commitment.id);
+    await this.unschedule('last_call', commitment.id);
     await this.unschedule('end_of_day', commitment.id);
     await this.rearm();
 
@@ -2692,6 +2772,26 @@ not a system rejecting them.`,
    * for, and `guardSlash` would have allowed the model to take the money
    * during the grace it had just been promised.
    */
+  /**
+   * Books the last warning, if there is room for one.
+   *
+   * Skipped when the money moves within the hour anyway — a commitment made
+   * at 23:30 does not get a last call at 23:00 that has already passed — and
+   * never earlier than the deadline itself, so it can only ever land after
+   * the grace warning rather than ahead of it. Both cases are silence by
+   * design: one warning that arrives in the right order beats two that
+   * contradict each other.
+   */
+  private async scheduleLastCall(
+    commitment: StoredCommitment,
+    goesAt: number,
+    dueAt: number,
+  ): Promise<void> {
+    const at = goesAt - LAST_CALL_MS;
+    if (at <= this.now() || at <= dueAt) return;
+    await this.schedule(at, 'last_call', commitment.id);
+  }
+
   private endOfDayFor(commitment: StoredCommitment | null, profile: Profile): number {
     if (commitment?.status === 'renegotiated') {
       const dueAt = parseIso(commitment.dueAt);
@@ -2725,6 +2825,7 @@ not a system rejecting them.`,
       workoutsThisWeek: countVerifiedThisWeek(now, profile.timezone, workouts, commitments),
       lastSevenDays: days.slice(-7),
       streak: currentStreak(days),
+      brokenStreak: brokenStreak(days),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
         .map((c) => ({ ...toWireCommitment(c), renegotiations: rescheduleCount(c) })),

@@ -238,7 +238,7 @@ The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stre
 ```json
 { "events": [
   { "id": 41, "ts": "…", "kind": "alarm_fired", "summary": "7:24 — checking on gym at 7" },
-  { "id": 42, "ts": "…", "kind": "context", "summary": "no workout today · skipped yesterday · 2/4 this week · 0.05 SOL staked" },
+  { "id": 42, "ts": "…", "kind": "context", "summary": "no workout today · skipped yesterday · 3/4 this week · 0.05 SOL staked" },
   { "id": 43, "ts": "…", "kind": "decision", "summary": "intervene — firm", "data": { "reasoning": "…" } },
   { "id": 44, "ts": "…", "kind": "message_sent", "summary": "bro" }
 ] }

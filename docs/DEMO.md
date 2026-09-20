@@ -59,7 +59,7 @@ Ryan reads: *"yo, 18 mins over, bro. i see you."*
 
 Hugo, on the brain screen:
 
-> "That's its own reasoning. It read the history first — nothing today, skipped yesterday, 2 of 4 this week, money in escrow — and decided to speak. It logs the times it decides **not** to, as well. It once refused to text at 2:30 in the morning because 'texting now would just wake them.'"
+> "That's its own reasoning. It read the history first — nothing today, skipped yesterday, 3 of 4 this week, money in escrow — and decided to speak. It logs the times it decides **not** to, as well. It once refused to text at 2:30 in the morning because 'texting now would just wake them.'"
 
 **This is the beat most likely to get a reaction.** Give the restraint line room.
 

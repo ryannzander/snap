@@ -79,7 +79,7 @@ That he offers first is a design decision with a paper behind it. Royer, Stehr &
 
 You say "deal". The SOL moves from your wallet into escrow, on devnet, with a real signature you can open in Solana Explorer. And Snap names a random gesture your proof photo has to have in it: **"3 fingers up in the pic."**
 
-At 7:20 Snap **wakes itself up**. No photo, no workout. It pulls your context — nothing logged today, you skipped yesterday, 2/4 this week, 0.05 SOL in escrow — and texts first:
+At 7:20 Snap **wakes itself up**. No photo, no workout. It pulls your context — nothing logged today, you skipped yesterday, 3/4 this week, a three-day run you just broke, 0.05 SOL in escrow — and texts first:
 
 > yo, 18 mins over, bro. i see you.
 
