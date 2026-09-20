@@ -1213,9 +1213,25 @@ export class UserAgent extends DurableObject<Env> {
       if (await this.dispatch(call, profile, refusals)) executed.push(call.name);
     }
 
+    // offer_stake carries its own words and is sent as one action, so a turn
+    // that offered has already said the only thing it needed to.
+    const acted = executed.filter((name) => name !== 'offer_stake');
+
     if (refusals.length > 0) {
       // Whatever it was about to say is now wrong. Say the truth instead.
       await this.correct(brain, profile, instruction, refusals);
+      executed.push('send_messages');
+    } else if (acted.length > 0) {
+      // The draft was written in the same breath as the proposal, before any
+      // of it had happened — so it reports intentions, not outcomes. Caught in
+      // rehearsal announcing "already rescheduled once, can't stretch it
+      // twice" on the turn that granted the first reschedule, and "4/4 for the
+      // week" on a week that had just reached 3.
+      //
+      // Throwing the draft away and asking again costs one model call and
+      // makes it impossible for Snap to misreport what it just did, because
+      // the context is rebuilt after the action rather than before it.
+      await this.followUp(brain, profile, instruction, acted, true);
       executed.push('send_messages');
     } else {
       for (const call of decision.toolCalls) {
@@ -1455,7 +1471,9 @@ not a system rejecting them.`,
     executed: string[],
     mustSpeak = false,
   ): Promise<void> {
-    const did = executed.length ? `you just called: ${executed.join(', ')}.` : 'you did nothing yet.';
+    const did = executed.length
+      ? `you already did this, it is done: ${executed.join(', ')}. the block above is the state AFTER it.`
+      : 'you did nothing yet.';
     const talking = TOOLS.filter(
       (tool) =>
         tool.function.name === 'send_messages' ||
@@ -1468,7 +1486,7 @@ not a system rejecting them.`,
         system: SYSTEM_PROMPT,
         context: renderContext(context),
         instruction: mustSpeak
-          ? `${instruction}\n\n${did} text them about it now, in your voice. saying nothing is not an option here — their money is on the line and they need to hear it from you.`
+          ? `${instruction}\n\n${did} text them about it now, in your voice. saying nothing is not an option here — their money is on the line and they need to hear it from you. only say what the block above actually shows: do not invent a number, a deadline or a refusal that is not in it.`
           : `${instruction}\n\n${did} now text them about it, in your voice. if silence is genuinely right, call stay_quiet instead.`,
         tools: talking,
       });
