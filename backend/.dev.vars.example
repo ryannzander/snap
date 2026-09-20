@@ -5,7 +5,10 @@
 LINQ_API_KEY=""
 
 # Signing secret from the Linq webhook subscription (starts with whsec_).
-# Leave empty locally to skip signature checks; required in production.
+# Required. Leaving it empty now REFUSES every inbound webhook rather than
+# skipping the check — a forgotten `wrangler secret put` used to turn the
+# route into an open door. Unsigned local deliveries are allowed only when
+# SNAP_CHANNEL is "trace", which wrangler.local.toml sets.
 LINQ_SIGNING_SECRET=""
 
 # OpenAI API key. Leave empty and the agent falls back to Workers AI, which

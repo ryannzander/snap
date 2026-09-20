@@ -228,9 +228,32 @@ export function normalizeInbound(body: unknown): InboundMessage | null {
           // added it; without the suffix the removal looks like a duplicate
           // delivery of the reaction and is dropped.
           `${messageId}${reaction ? `:${reaction.emoji}${reaction.removed ? ':off' : ''}` : ''}`
-        : `${handle}:${text || imageUrls[0] || reaction?.emoji}`;
+        : // Last resort, with no id of any kind in the payload: the sender,
+          // what they said, and when they said it. The timestamp is the part
+          // that matters — a retry of one delivery repeats it, while a second
+          // "done" texted days later does not. Without it the key was sender
+          // + text alone, so the second time anyone ever repeated themselves
+          // the message was written off as a duplicate and never answered.
+          `${handle}:${stampSegment(envelope, message)}${text || imageUrls[0] || reaction?.emoji}`;
 
   return { channel: 'linq', chatId: handle, text, imageUrls, eventId, messageId, ...(reaction ? { reaction } : {}) };
+}
+
+/**
+ * When the vendor says the delivery happened, in whatever field this payload
+ * version carries it. Only used to tell two identical texts apart, so any
+ * stable stamp will do and a missing one costs nothing but the old behaviour.
+ */
+function stampSegment(envelope: Record<string, unknown>, message: Record<string, unknown>): string {
+  const keys = ['timestamp', 'created_at', 'sent_at', 'occurred_at', 'date', 'createdAt'];
+  for (const source of [message, envelope]) {
+    for (const key of keys) {
+      const value = source[key];
+      if (typeof value === 'string' && value.length > 0) return `${value}:`;
+      if (typeof value === 'number' && Number.isFinite(value)) return `${value}:`;
+    }
+  }
+  return '';
 }
 
 /** Message deliveries, and the tapback events that ride the same webhook. */

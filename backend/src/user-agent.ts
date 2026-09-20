@@ -1135,6 +1135,36 @@ export class UserAgent extends DurableObject<Env> {
     const profile = await this.ctx.storage.get<Profile>(KEY.profile);
     if (!profile) return fail(404, 'not_found', 'no such user');
 
+    // The same bar every other stake clears. `canCover` says yes when the
+    // chain cannot be reached, so a devnet hiccup still cannot tell someone
+    // they are broke.
+    if (!(await this.canCover(lamports))) {
+      return fail(400, 'insufficient_funds', `their wallet cannot cover ${solText(lamports)}`);
+    }
+
+    // Money first, bookkeeping after. A competition stake is not like a solo
+    // commitment: an entrant recorded as staked whose transfer never landed
+    // is paid their "own stake back" plus a share of the pot at settlement,
+    // all of it out of what the other entrants actually put in. So a failed
+    // transfer is a failed entry, and nothing is written.
+    //
+    // With no escrow configured there is no chain in the loop at all and the
+    // entry is bookkeeping only, exactly as `moveStake` treats a missing seed.
+    const escrowSeed = this.env.SNAP_ESCROW_SEED;
+    let txSig: string | null = null;
+    if (escrowSeed) {
+      txSig = await this.onChain('competition entry', async () => {
+        const wallet = await this.userWallet();
+        const user = await walletFromSeed(wallet.seed);
+        const escrow = await walletFromSeed(escrowSeed);
+        return transferSol(this.rpc(), user, escrow.address, lamports);
+      });
+      if (!txSig) {
+        return fail(503, 'chain_unavailable', 'devnet would not take the stake — try again');
+      }
+      this.balanceCache = null;
+    }
+
     await this.ctx.storage.put(KEY.competition(competitionId), {
       id: competitionId,
       name,
@@ -1147,19 +1177,9 @@ export class UserAgent extends DurableObject<Env> {
       {
         kind: 'stake_held',
         summary: `${solText(lamports)} into "${name}"`,
-        data: { competitionId },
+        data: { competitionId, txSig, ...(txSig ? { explorer: explorerUrl(txSig) } : {}) },
       },
     ]);
-
-    const txSig = await this.onChain('competition entry', async () => {
-      const wallet = await this.userWallet();
-      const user = await walletFromSeed(wallet.seed);
-      const escrowSeed = this.env.SNAP_ESCROW_SEED;
-      if (!escrowSeed) throw new Error('no escrow configured');
-      const escrow = await walletFromSeed(escrowSeed);
-      return transferSol(this.rpc(), user, escrow.address, lamports);
-    });
-    if (txSig) this.balanceCache = null;
 
     await this.recordWalletEntry({
       kind: 'held',
@@ -1193,6 +1213,11 @@ export class UserAgent extends DurableObject<Env> {
 
     const stored = await this.ctx.storage.get<CompetitionEntry>(KEY.competition(competitionId));
     const staked = stored?.stakeLamports ?? 0;
+
+    // Settled once, paid once. The competition object is the one that decides
+    // this, but it pays entrant by entrant across seconds of chain and model
+    // calls, so a retry that gets past it must not find a second payout here.
+    if (stored?.status === 'settled') return ok({ txSig: null });
 
     await this.ctx.storage.put(KEY.competition(competitionId), {
       id: competitionId,
@@ -1342,6 +1367,55 @@ export class UserAgent extends DurableObject<Env> {
       ]);
     }
     return take;
+  }
+
+  /**
+   * Sends this wallet's spendable balance back to the treasury.
+   *
+   * Every rehearsal onboards somebody, every onboard is a withdrawal from one
+   * devnet treasury, and the faucet gives a single SOL a day across the whole
+   * project. Twenty test users later the treasury could not fund the
+   * twenty-first, which is a thing you discover by onboarding a judge on
+   * stage and watching Snap tell them their wallet is empty.
+   *
+   * So a rehearsal can hand its money back. Refused while a stake is held —
+   * that money is in escrow and the commitment still has to settle — and the
+   * fee headroom stays behind so the emptied wallet can still sign.
+   */
+  async reclaim(token: string): Promise<DoResult<{ returned: number; txSig: string | null }>> {
+    await this.loadClock();
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    const held = await this.heldLamports();
+    if (held > 0) {
+      return fail(400, 'bad_request', `${solText(held)} is still staked — settle it first`);
+    }
+
+    const treasurySeed = this.env.SNAP_TREASURY_SEED;
+    if (!treasurySeed) return fail(503, 'chain_unavailable', 'no treasury configured');
+
+    const balance = await this.balance(true);
+    if (balance === null) return fail(503, 'chain_unavailable', 'could not read the balance');
+    const returned = balance - FEE_HEADROOM_LAMPORTS;
+    if (returned <= 0) return ok({ returned: 0, txSig: null });
+
+    const txSig = await this.onChain('reclaim', async () => {
+      const wallet = await this.userWallet();
+      const user = await walletFromSeed(wallet.seed);
+      const treasury = await walletFromSeed(treasurySeed);
+      return transferSol(this.rpc(), user, treasury.address, returned);
+    });
+    if (!txSig) return fail(503, 'chain_unavailable', 'devnet would not take the transfer');
+
+    this.balanceCache = null;
+    await this.recordWalletEntry({
+      kind: 'slashed',
+      lamports: returned,
+      label: 'returned to the treasury',
+      txSig,
+    });
+    return ok({ returned, txSig });
   }
 
   /** Keeps the last few of Snap's texts addressable, so a tapback can name one. */

@@ -115,19 +115,53 @@ export class Competition extends DurableObject<Env> {
       return fail(409, 'bad_request', 'that competition has already finished');
     }
 
-    const agent = this.user(userId);
-    const entry = await agent.enterCompetition(record.id, record.name, record.entryLamports);
-    if (!entry.ok) return entry;
-
+    // Take the seat BEFORE the money moves, and with nothing but storage
+    // between the read above and this write — which is the only window in
+    // which this object delivers no other events.
+    //
+    // Entering is a chain transfer inside another Durable Object and takes
+    // seconds, and events ARE delivered while that is awaited. Pushing onto
+    // the record read before it meant two taps on "join" both passed the
+    // "already an entrant" check and both staked, leaving one entrant row and
+    // two debits; and a join still in flight when the alarm settled wrote its
+    // stale copy back afterwards, reviving a settled competition as "open"
+    // with the payouts erased.
     record.entrants.push({
       userId,
-      name: entry.value.name,
+      name: '',
       stakeLamports: record.entryLamports,
       joinedAt: new Date().toISOString(),
-      entryTxSig: entry.value.txSig,
+      entryTxSig: null,
     });
     await this.ctx.storage.put(KEY.record, record);
-    return ok(record);
+
+    const entry = await this.user(userId).enterCompetition(
+      record.id,
+      record.name,
+      record.entryLamports,
+    );
+
+    // Re-read: settlement may have claimed the record while the stake moved.
+    const current = (await this.record()) ?? record;
+    const seat = current.entrants.find((e) => e.userId === userId);
+
+    if (!entry.ok) {
+      // Nothing was staked, so nothing may be owed. Only give the seat back
+      // while the competition is still open — a settled record has already
+      // paid out around this entrant and must not be rewritten.
+      if (seat && current.status === 'open') {
+        current.entrants = current.entrants.filter((e) => e.userId !== userId);
+        await this.ctx.storage.put(KEY.record, current);
+      }
+      return entry;
+    }
+
+    if (seat) {
+      seat.name = entry.value.name;
+      seat.entryTxSig = entry.value.txSig;
+      await this.ctx.storage.put(KEY.record, current);
+    }
+    return ok(current);
   }
 
   /** The competition with standings computed from HealthKit, right now. */
@@ -150,6 +184,22 @@ export class Competition extends DurableObject<Env> {
     const record = await this.record();
     if (!record) return fail(404, 'not_found', 'no such competition');
     if (record.status === 'settled') return ok(record);
+
+    // Claim it first, in the same breath as the check above — the same
+    // "delete first, then run" rule the user agent's alarms follow.
+    //
+    // Paying an entrant is a Durable Object call that transfers on chain and
+    // then runs a model turn, seconds each, and this object accepts events
+    // for the whole of it. Marking the record settled only at the end meant a
+    // POST /competitions/<id>/settle racing the alarm — or the alarm retrying
+    // after an RPC threw halfway down the list — read "open", recomputed the
+    // same settlement, and paid every winner a second time out of an escrow
+    // that only ever received one stake each. Losing a payout to a crash can
+    // be repaired by hand from the record; paying twice cannot be undone.
+    record.status = 'settled';
+    record.settledAt = new Date().toISOString();
+    await this.ctx.storage.put(KEY.record, record);
+    await this.ctx.storage.deleteAlarm();
 
     const standings = await this.standings(record);
     const settlement = settleCompetition(
@@ -187,12 +237,9 @@ export class Competition extends DurableObject<Env> {
       entrant.payoutTxSig = result.ok ? result.value.txSig : null;
     }
 
-    record.status = 'settled';
     record.potLamports = settlement.potLamports;
     record.rakeLamports = settlement.rakeLamports;
-    record.settledAt = new Date().toISOString();
     await this.ctx.storage.put(KEY.record, record);
-    await this.ctx.storage.deleteAlarm();
 
     return ok(record);
   }
@@ -203,9 +250,17 @@ export class Competition extends DurableObject<Env> {
 
     return Promise.all(
       record.entrants.map(async (entrant) => {
-        const data = await this.user(entrant.userId).competitionData(from, to);
+        // From when THEY staked, not when the competition opened. A shared
+        // join code means people arrive late, and counting the training they
+        // had already done before there was any money on it would let someone
+        // join on day six, meet the goal on arrival, and take a share of what
+        // the people who actually tried forfeited.
+        const joined = parseIso(entrant.joinedAt);
+        const start = joined !== null && joined > from ? joined : from;
+
+        const data = await this.user(entrant.userId).competitionData(start, to);
         const progress = data.ok
-          ? progressFor(record.goal, data.value.workouts, from, to, data.value.timezone)
+          ? progressFor(record.goal, data.value.workouts, start, to, data.value.timezone)
           : 0;
         return {
           userId: entrant.userId,

@@ -63,6 +63,16 @@ section('normalizing an inbound message');
     data: { direction: 'inbound', sender_handle: { handle: '+1' }, parts: [{ type: 'image', value: 'https://cdn.example/a.jpg' }] },
   });
   eq('the dedupe id falls back to the photo url when there is no text', noId?.eventId, '+1:https://cdn.example/a.jpg');
+
+  // Same sender, same word, two different days. Keyed on sender and text
+  // alone, the second one was written off as a retry and never answered.
+  const said = (at: string) =>
+    normalizeInbound({
+      event_type: 'message.received',
+      data: { direction: 'inbound', sender_handle: { handle: '+1' }, timestamp: at, parts: [{ type: 'text', value: 'done' }] },
+    })?.eventId;
+  isTrue('the same words on another day are not a duplicate', said('2026-09-19T18:00:00Z') !== said('2026-09-21T18:00:00Z'));
+  eq('...but a retry of one delivery is', said('2026-09-19T18:00:00Z'), said('2026-09-19T18:00:00Z'));
 }
 
 section('what the trace and the agent see');

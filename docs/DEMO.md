@@ -193,12 +193,35 @@ What to say while they're trying: **nothing.** Let the phone do it. Then:
 - [ ] Demo phone is the one the Watch is paired with; app installed, onboarded, linked on Linq **and** Telegram.
 - [ ] Run it twice on Telegram end to end. Time yourself.
 
+### Check the treasury before anything else
+
+```
+curl -s https://snap.snap-backend.workers.dev/debug/chain -H "x-debug-key: <DEBUG_KEY>"
+```
+
+`runway` is how many more people can onboard before funding starts failing. **If it is under 3, top it up before the demo.**
+
+Every onboard withdraws 0.115 SOL from one devnet treasury, and the faucet gives one SOL a day for the whole project. Twenty rehearsal users drained it tonight, and the way that failed was silent: onboarding succeeded, the wallet was empty, and Snap told the user to add money in the app. On stage that is a judge watching the product tell them they're broke.
+
+Two ways to refill, in order:
+
+1. **[faucet.solana.com](https://faucet.solana.com)** — paste `9xFT2UWieSpR7bubnCyPrBXE8P4Kaj9TxXjrviNvdpJw`, sign in with GitHub, take the 5 SOL. 60 seconds, and it is the reliable one.
+2. `POST /debug/airdrop` — asks the configured RPC. Capped at 1 SOL per project per day, so it is usually already spent.
+
+**After a rehearsal, hand the money back** rather than leaving it in a dead wallet:
+
+```
+curl -s -X POST .../debug/reclaim -H "authorization: Bearer <that user's token>" -H "x-debug-key: <DEBUG_KEY>"
+```
+
+It refuses while a stake is still held, so it can never strand a live commitment.
+
 ### Each morning reset
 
 - [ ] `POST /debug/seed` — seeded week, costs no messages
 - [ ] `POST /debug/demo` → `photoMode: lenient`
 - [ ] One `/debug/message` with a photo URL — confirm the verifier answers
-- [ ] Escrow balance covers the stake plus fees
+- [ ] `/debug/chain` — treasury `runway` is 3 or more, escrow covers the stake
 - [ ] Phone volume **up** — the buzz in beat 2 is half the beat
 - [ ] Brain screen open, scrolled to the bottom
 - [ ] **Never** time-warp to a time earlier than now — it hot-loops the alarm

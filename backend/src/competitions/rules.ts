@@ -85,7 +85,12 @@ export function progressFor(
   if (goal.type === 'activeHours') {
     const seconds = qualifying.reduce((sum, w) => sum + w.durationSec, 0);
     // Two decimal places: "3.5 hours of 5" reads better than 3.4999999.
-    return Math.round((seconds / 3600) * 100) / 100;
+    //
+    // Floored, not rounded. This number is not only read, it is the number
+    // `meetsGoal` compares against the target — and rounding turned 4h 59m
+    // 42s into a 5.00 that met a five-hour goal and took a share of the pot
+    // off the people who had actually finished.
+    return Math.floor((seconds / 3600) * 100) / 100;
   }
 
   // activeDays: distinct local calendar days, so two sessions in one evening
