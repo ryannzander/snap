@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 
 import {
   buildDays,
+  currentStreak,
   countMovesThisWeek,
   countVerifiedThisWeek,
   recentMessages,
@@ -2651,6 +2652,12 @@ not a system rejecting them.`,
       weeklyGoal: profile.weeklyGoal,
       workoutsThisWeek: countVerifiedThisWeek(now, profile.timezone, workouts, commitments),
       lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
+      // Counted over 30 days, the same window /state hands the schedule screen,
+      // so the number Snap says and the number on their home screen are one
+      // number. Seven would quietly cap every streak at a week.
+      streak: currentStreak(
+        buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment), 30),
+      ),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
         .map((c) => ({ ...toWireCommitment(c), renegotiations: rescheduleCount(c) })),

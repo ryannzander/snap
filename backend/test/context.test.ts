@@ -8,6 +8,7 @@
  * would say "3/4 this week" off workouts the release path rejects.
  */
 import {
+  currentStreak,
   buildDays,
   countMovesThisWeek,
   countThisWeek,
@@ -227,6 +228,7 @@ section('what the model actually sees');
     movesThisWeek: 0,
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
+    streak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
@@ -280,6 +282,82 @@ section('what the model actually sees');
   );
 }
 
+section('the streak, and it has to be the number on their home screen');
+{
+  const d = (date: string, workouts: number, skipped = false) => ({ date, workouts, skipped });
+
+  eq('nothing at all', currentStreak([]), 0);
+  eq('one day', currentStreak([d('2026-09-19', 1)]), 1);
+  eq('three in a row', currentStreak([d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 1)]), 3);
+  eq(
+    'a gap breaks it, and only the run up to today counts',
+    currentStreak([d('2026-09-15', 1), d('2026-09-16', 1), d('2026-09-17', 0), d('2026-09-18', 1), d('2026-09-19', 1)]),
+    2,
+  );
+
+  // The two that matter, and the reason this is ported rather than reinvented.
+  // Today with nothing logged yet is NOT a break — the day is not over, and a
+  // number that resets at midnight and un-resets when you train is one nobody
+  // would trust.
+  eq(
+    'today being empty does not break it',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 0)]),
+    2,
+  );
+  // But today SKIPPED is a day already decided — the money has moved.
+  eq(
+    'today being skipped does',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 0, true)]),
+    0,
+  );
+  eq(
+    'and yesterday skipped still breaks it behind an empty today',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 0, true), d('2026-09-19', 0)]),
+    0,
+  );
+  // Training today after a skipped commitment yesterday starts a fresh run.
+  eq(
+    'a fresh run starts at one',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 0, true), d('2026-09-19', 1)]),
+    1,
+  );
+
+  // Capped by the window it is given: 30 days of history cannot prove 40.
+  const thirty = Array.from({ length: 30 }, (_, i) => d(`2026-09-${String(i + 1).padStart(2, '0')}`, 1));
+  eq('capped by the window', currentStreak(thirty), 30);
+}
+
+section('snap only mentions a streak when there is one');
+{
+  const base: AgentContext = {
+    now: '2026-09-19T14:00:00Z',
+    localTime: 'Saturday 10:00',
+    timezone: TZ,
+    name: 'Ryan',
+    weeklyGoal: 4,
+    workoutsThisWeek: 2,
+    lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
+    openCommitments: [],
+    standingOffer: null,
+    movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    targetMin: 45,
+    streak: 0,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
+    recentMessages: [],
+  };
+
+  // One session is a Tuesday, not a streak, and Snap congratulating someone on
+  // a "1 day streak" is the single most patronising thing he could say.
+  isTrue('none at all is said plainly', renderContext(base).includes('no streak going'));
+  isTrue('and one day is not a streak', renderContext({ ...base, streak: 1 }).includes('no streak going'));
+
+  const five = renderContext({ ...base, streak: 5 });
+  isTrue('five is', five.includes('5 day streak'));
+  isTrue('and he is told it is the number they can see', five.includes('home screen'));
+  isFalse('with no invented number', five.includes('no streak going'));
+}
+
 section('the model is told the gesture it will later enforce');
 {
   // Enforcement reads the stored commitment; this row is the only place the
@@ -305,7 +383,7 @@ section('the model is told the gesture it will later enforce');
         reschedules: [],
         proof: null,
         verifiedBy: null,
-        challenge: 'three',
+        challenge: 'thumb',
         renegotiations: 0,
       },
     ] as unknown as Array<Commitment & { renegotiations: number }>,
@@ -313,11 +391,12 @@ section('the model is told the gesture it will later enforce');
     movesThisWeek: 0,
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
+    streak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [],
   };
   const rendered = renderContext(withChallenge);
-  isTrue('the gesture is named', rendered.includes('3 FINGERS UP IN THE PIC'));
+  isTrue('the gesture is named', rendered.includes('A THUMBS UP IN THE PIC'));
   isTrue('and snap is told to repeat it', rendered.includes('tell them, every time'));
 
   const without = renderContext({
@@ -345,6 +424,7 @@ section('the model is told which number to say');
     movesThisWeek: 0,
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
+    streak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
@@ -370,6 +450,7 @@ section('an offer on the table is something the model must see');
     movesThisWeek: 0,
     defaultStakeLamports: 50_000_000,
     targetMin: 45,
+    streak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };

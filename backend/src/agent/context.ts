@@ -47,6 +47,11 @@ export interface AgentContext {
    */
   defaultStakeLamports: number;
   /**
+   * Days in a row, the same number the schedule screen puts at the top. Snap
+   * only gets to mention it when it is worth mentioning — see `renderContext`.
+   */
+  streak: number;
+  /**
    * The session length they asked to be held to. A target Snap says out loud,
    * not a gate — a shorter session still releases the money.
    */
@@ -81,6 +86,40 @@ export interface WorkoutLike {
  */
 function counts(workout: WorkoutLike): boolean {
   return disqualification(workout) === null;
+}
+
+/**
+ * Days in a row, counting back from today.
+ *
+ * Ported from `Streak.current` in `ios/Snap/Model/Models.swift`, rule for rule,
+ * because the schedule screen shows this number and Snap says it out loud. Two
+ * implementations of one number is how "2/4 this week" ends up meaning one
+ * thing on the phone and another in the thread — this repo has paid for that
+ * lesson twice already, so if his rule changes, change this one with it.
+ *
+ * Today with nothing logged yet does NOT break it: the day isn't over, and a
+ * streak that resets at midnight and un-resets when you train is a number
+ * nobody would trust. Today *skipped* does break it — a commitment that went
+ * unmet is a day already decided, the money has moved, and only an undecided
+ * day gets the benefit of the doubt.
+ *
+ * Capped by the window it is given. Thirty days of history cannot prove a
+ * forty-day streak, and claiming one would be a lie we could not see.
+ */
+export function currentStreak(days: DayRecord[]): number {
+  let run = 0;
+  const last = days.at(-1);
+  for (let i = days.length - 1; i >= 0; i--) {
+    const day = days[i]!;
+    if (day.workouts > 0) {
+      run += 1;
+    } else if (run === 0 && day.date === last?.date && !day.skipped) {
+      continue;
+    } else {
+      break;
+    }
+  }
+  return run;
 }
 
 /** Local YYYY-MM-DD for an instant, in the user's zone. */
@@ -304,6 +343,9 @@ export function renderContext(context: AgentContext): string {
     commitments,
     '',
     `if you offer and they never named an amount, the stake is ${solText(context.defaultStakeLamports)} — use that number in your texts, it is the one that gets locked. they can name their own, the floor is 0.01 SOL`,
+    context.streak >= 2
+      ? `they are on a ${context.streak} day streak. it is the number on their home screen, so say THAT number or none. worth a mention when they finish one, and worth naming as something to lose when they are wobbling — never twice in a row, and never as a lecture.`
+      : 'no streak going right now. do not bring one up.',
     `they asked to be held to ${context.targetMin}-minute sessions. that is the number you hold them to out loud. it is NOT what decides the money — any session they actually turned up for pays out, even a short one. if they come in under it, say something and then pay them anyway.`,
     '',
     'stake you have offered and they have not answered:',

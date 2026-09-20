@@ -32,13 +32,32 @@ export interface Challenge {
   look: string;
 }
 
+/**
+ * Six gestures, and every one of them is a SHAPE rather than a COUNT.
+ *
+ * The first version asked for "exactly two / three / four fingers" and it was
+ * wrong twice over. Counting fingers is the least reliable thing you can ask a
+ * vision model — three against four, in a dim gym mirror, at arm's length, is
+ * close to a coin flip. And "two fingers up" and "a peace sign" are the same
+ * hand: a user who did exactly what he was asked could be told he had not,
+ * which is a false rejection in a path that decides whether money comes back.
+ *
+ * So each one here is a silhouette a model gets right at a glance, none can be
+ * mistaken for another, and none of them is something a person does by accident
+ * mid-set — a closed fist was cut for exactly that reason, since everyone
+ * holding a dumbbell already has one.
+ */
 export const CHALLENGES: readonly Challenge[] = [
-  { id: 'two', ask: '2 fingers up in the pic', look: 'the person is holding up exactly two fingers' },
-  { id: 'three', ask: '3 fingers up in the pic', look: 'the person is holding up exactly three fingers' },
-  { id: 'four', ask: '4 fingers up in the pic', look: 'the person is holding up exactly four fingers' },
-  { id: 'thumb', ask: 'a thumbs up in the pic', look: 'the person is giving a thumbs up' },
-  { id: 'peace', ask: 'a peace sign in the pic', look: 'the person is making a peace sign' },
-  { id: 'palm', ask: 'an open hand up in the pic', look: 'the person is holding up an open flat palm' },
+  { id: 'thumb', ask: 'a thumbs up in the pic', look: 'the person is giving a clear thumbs up' },
+  { id: 'peace', ask: 'a peace sign in the pic', look: 'the person is making a peace sign (two fingers in a V)' },
+  {
+    id: 'palm',
+    ask: 'an open hand up in the pic',
+    look: 'the person is holding up an open hand with the fingers spread, palm toward the camera',
+  },
+  { id: 'rock', ask: 'rock horns 🤘 in the pic', look: 'the person is making the rock horns sign — index and little finger up, the middle two folded down' },
+  { id: 'point', ask: 'point right at the camera in the pic', look: 'the person is pointing directly at the camera with one finger' },
+  { id: 'both', ask: 'both arms straight up in the pic', look: 'the person has both arms raised straight above their head' },
 ];
 
 /**

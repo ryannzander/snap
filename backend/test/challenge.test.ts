@@ -17,9 +17,27 @@ section('the list is usable by a model and by a person mid-set');
 {
   isTrue('there are several to pick from', CHALLENGES.length >= 4);
   eq('ids are unique', new Set(CHALLENGES.map((c) => c.id)).size, CHALLENGES.length);
+  eq('and so is what snap asks for', new Set(CHALLENGES.map((c) => c.ask)).size, CHALLENGES.length);
   for (const c of CHALLENGES) {
     isTrue(`${c.id}: snap has words for it`, c.ask.length > 0);
     isTrue(`${c.id}: the model is told literally what to look for`, c.look.includes('the person'));
+  }
+}
+
+section('no gesture may be a COUNT');
+{
+  // The first version asked for "exactly two / three / four fingers". Counting
+  // fingers is the least reliable thing a vision model does — three against
+  // four in a dim gym mirror is near a coin flip — and worse, "two fingers up"
+  // and "a peace sign" are the same hand, so a user who did exactly what he
+  // was asked could be told he had not. A false rejection here decides whether
+  // someone's money comes back, so the rule is shapes only.
+  const counting = /\b(one|two|three|four|five|exactly \d|\d fingers)\b/i;
+  for (const c of CHALLENGES) {
+    isFalse(`${c.id}: snap does not ask for a number`, counting.test(c.ask));
+    // 'two fingers in a V' survives as a description of the peace SHAPE; what
+    // must not appear is the model being asked to count to decide.
+    isFalse(`${c.id}: and the model is not asked to count`, /exactly \w+ fingers/i.test(c.look));
   }
 }
 
@@ -35,7 +53,7 @@ section('picking');
 
 section('reading one back');
 {
-  eq('a known id', challengeById('three')?.id, 'three');
+  eq('a known id', challengeById('thumb')?.id, 'thumb');
   eq('an unknown one is nothing, not a crash', challengeById('somersault'), null);
   eq('and so is a commitment made before challenges existed', challengeById(undefined), null);
 }
@@ -51,7 +69,7 @@ section('the prompt only asks when there is something to ask');
 
 section('what a missing gesture is worth');
 {
-  const three = challengeById('three')!;
+  const three = challengeById('thumb')!;
 
   eq('with it, the photo pays', readVerdict(good(', "challenge": true'), three).verdict, 'training');
   eq('and with no gesture asked for, it pays too', readVerdict(good()).verdict, 'training');
@@ -78,7 +96,7 @@ section('what a missing gesture is worth');
 
 section('the gesture is the LAST thing checked, never the first');
 {
-  const three = challengeById('three')!;
+  const three = challengeById('thumb')!;
   // A screenshot with three fingers in it is still a screenshot. Getting the
   // order wrong would let the gesture launder a photo the other rules refused.
   const shot = readVerdict(
@@ -97,7 +115,7 @@ section('the gesture is the LAST thing checked, never the first');
 
 section('the stage valve does not quietly switch the gesture off');
 {
-  const three = challengeById('three')!;
+  const three = challengeById('thumb')!;
   const missed = readVerdict(good(', "challenge": false'), three);
   const hedged = readVerdict(
     '{"training": true, "person": true, "gym": true, "screenshot": false, "confidence": 0.3, "description": "blurry, might be a gym"}',
