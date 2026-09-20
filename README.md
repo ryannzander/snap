@@ -17,4 +17,5 @@ The first text you ever get explains all of it: what Snap does, that the pic is 
 - `ios/` — SwiftUI app (onboarding, HealthKit sync, "Snap's brain" trace screen)
 - `backend/` — agent, messaging channel adapters (Telegram first, swappable), Solana stake escrow. **Lives in a separate repository**; this one holds only the app, which talks to the deployed Worker in `ios/Snap/Config.swift`.
 - `brand/` — the mark, app icon, wordmark and the three pitch images. `brand/snap-icon.png` is what ships in the app's asset catalog; [`brand/README.md`](brand/README.md) says what each file is and how to re-render it.
+- `.github/workflows/ci.yml` — every push and PR: the backend typechecks, tests and bundles for the edge; the app builds and runs its unit tests on a simulator.
 - `docs/` — design decisions. [`docs/CODE_REVIEW.md`](docs/CODE_REVIEW.md) is the last full review of this repo.
