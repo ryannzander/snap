@@ -6,7 +6,7 @@
  * Pure functions over stored records so this is testable without a model.
  */
 
-import { startOfWeek, tzOffsetMs, parseIso } from '../time';
+import { startOfMonth, startOfWeek, startOfYear, tzOffsetMs, parseIso } from '../time';
 import { disqualification } from './guards';
 import { challengeById } from './challenge';
 import { MAX_RENEGOTIATIONS, RESCHEDULE_LEAD_MS } from './tools';
@@ -29,6 +29,14 @@ export interface AgentContext {
   name: string;
   weeklyGoal: number;
   workoutsThisWeek: number;
+  /**
+   * The longer horizons, when the user set one. Snap is told about them and
+   * told which one he is allowed to raise — see `renderContext`.
+   */
+  monthlyGoal?: number;
+  yearlyGoal?: number;
+  workoutsThisMonth: number;
+  workoutsThisYear: number;
   lastSevenDays: DayRecord[];
   /**
    * Carries `renegotiations` on top of the wire shape: without it the model
@@ -223,31 +231,77 @@ export function countThisWeek(
  * a picture did one session, and counting it twice would make the goal a lie
  * in the flattering direction.
  */
+/**
+ * The three horizons, counted off one set of workouts.
+ *
+ * Weekly is the one that drives behaviour and the one Snap talks about.
+ * Monthly is what makes somebody sprint in the last week of a month. Yearly is
+ * identity rather than pressure — it is the number that makes a streak feel
+ * like it means something, and it is the one he should almost never bring up.
+ */
+export interface GoalProgress {
+  week: number;
+  month: number;
+  year: number;
+}
+
+export function countProgress(
+  now: number,
+  tz: string,
+  workouts: WorkoutLike[],
+  commitments: Array<{ status: string; dueAt: string; proof?: { at: string } | null }>,
+): GoalProgress {
+  return {
+    week: countVerifiedSince(startOfWeek(now, tz), tz, workouts, commitments),
+    month: countVerifiedSince(startOfMonth(now, tz), tz, workouts, commitments),
+    year: countVerifiedSince(startOfYear(now, tz), tz, workouts, commitments),
+  };
+}
+
 export function countVerifiedThisWeek(
   now: number,
   tz: string,
   workouts: WorkoutLike[],
   commitments: Array<{ status: string; dueAt: string; proof?: { at: string } | null }>,
 ): number {
-  const weekStart = startOfWeek(now, tz);
+  return countVerifiedSince(startOfWeek(now, tz), tz, workouts, commitments);
+}
 
+/**
+ * The same count over any window, so a month and a year cannot drift from a
+ * week.
+ *
+ * Written once rather than three times on purpose. The rule that a
+ * photo-verified session only adds a dot on a day with no qualifying workout
+ * of its own is subtle, and three copies of it is three chances for "4/4 this
+ * week" and "18/20 this month" to disagree about the same Tuesday.
+ */
+export function countVerifiedSince(
+  since: number,
+  tz: string,
+  workouts: WorkoutLike[],
+  commitments: Array<{ status: string; dueAt: string; proof?: { at: string } | null }>,
+): number {
   const daysWithWorkouts = new Set<string>();
+  let sessions = 0;
   for (const workout of workouts) {
     if (!counts(workout)) continue;
     const startedAt = parseIso(workout.start);
-    if (startedAt !== null && startedAt >= weekStart) daysWithWorkouts.add(localDate(startedAt, tz));
+    if (startedAt === null || startedAt < since) continue;
+    sessions += 1;
+    daysWithWorkouts.add(localDate(startedAt, tz));
   }
 
   const photoDays = new Set<string>();
   for (const commitment of commitments) {
     if (commitment.status !== 'met' || !commitment.proof) continue;
     const at = parseIso(commitment.proof.at);
-    if (at === null || at < weekStart) continue;
+    if (at === null || at < since) continue;
     const day = localDate(at, tz);
     if (!daysWithWorkouts.has(day)) photoDays.add(day);
   }
 
-  return countThisWeek(now, tz, workouts) + photoDays.size;
+  return sessions + photoDays.size;
 }
 
 /**
@@ -374,6 +428,7 @@ export function renderContext(context: AgentContext): string {
     `their local time right now: ${context.localTime} (${context.timezone})`,
     `user: ${context.name}`,
     `weekly goal: ${context.weeklyGoal}, done this week: ${context.workoutsThisWeek}`,
+    goalLine(context),
     `sessions moved this week: ${context.movesThisWeek}`,
     wallet,
     '',
@@ -399,6 +454,52 @@ export function renderContext(context: AgentContext): string {
     'recent conversation:',
     conversation,
   ].join('\n');
+}
+
+/**
+ * Which longer goal, if any, Snap is allowed to bring up right now.
+ *
+ * Three targets in his context is three things to nag about, and a gym bro who
+ * recites your weekly, monthly and yearly numbers in one text is a dashboard
+ * with a personality bolted on. So the rule is picked here, in code, rather
+ * than left to him:
+ *
+ * The month only matters when there is still time to do something about it and
+ * not much of it — the last ten days, and only if they are actually behind.
+ * Ahead of pace is not news. The year is identity rather than pressure, so it
+ * is only ever worth saying on the way past a round number.
+ */
+function goalLine(context: AgentContext): string {
+  const { monthlyGoal, yearlyGoal, workoutsThisMonth, workoutsThisYear } = context;
+
+  if (monthlyGoal !== undefined) {
+    const day = Number(context.localTime.match(/\b(\d{1,2})\b/)?.[1] ?? 0);
+    const left = monthlyGoal - workoutsThisMonth;
+    const daysLeft = daysLeftInMonth(context);
+    if (left > 0 && daysLeft <= 10 && left >= daysLeft / 2) {
+      return `monthly goal: ${workoutsThisMonth}/${monthlyGoal} with ${daysLeft} days left in the month. they are behind and there is still time. worth ONE mention, not a countdown every turn. (${day || ''})`.trim();
+    }
+  }
+
+  if (yearlyGoal !== undefined && workoutsThisYear > 0 && workoutsThisYear % 25 === 0) {
+    return `they just hit ${workoutsThisYear} sessions this year, on the way to ${yearlyGoal}. say it once like a friend would — "that's ${workoutsThisYear} this year bro" — then drop it.`;
+  }
+
+  const set = [
+    monthlyGoal !== undefined ? `month ${workoutsThisMonth}/${monthlyGoal}` : null,
+    yearlyGoal !== undefined ? `year ${workoutsThisYear}/${yearlyGoal}` : null,
+  ].filter(Boolean);
+  if (set.length === 0) return 'no monthly or yearly goal set. never invent one.';
+  return `${set.join(', ')} — context only. do NOT bring these up; the week is the number you talk about.`;
+}
+
+/** Whole days remaining in the user's local month, today included. */
+function daysLeftInMonth(context: AgentContext): number {
+  const now = parseIso(context.now);
+  if (now === null) return 31;
+  const local = new Date(now + tzOffsetMs(now, context.timezone));
+  const inMonth = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() + 1, 0)).getUTCDate();
+  return inMonth - local.getUTCDate() + 1;
 }
 
 /** One-line display summary for the `context` trace event. */

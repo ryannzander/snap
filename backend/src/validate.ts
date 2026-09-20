@@ -27,6 +27,23 @@ export async function readJsonBody(request: Request): Promise<unknown> {
   }
 }
 
+/**
+ * A longer-horizon goal, or nothing.
+ *
+ * The ceilings are three a day over the window: 93 in a month, 1095 in a year.
+ * Not a fitness opinion, just the point past which a number is a typo rather
+ * than an ambition, and a goal nobody can hit is a goal that teaches somebody
+ * their stake is pointless.
+ */
+function optionalGoal(value: unknown, field: string, min: number, max: number): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const n = asNumber(value, field);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw badRequest(`${field} must be a whole number between ${min} and ${max}`);
+  }
+  return n;
+}
+
 export function parseOnboardRequest(body: unknown): OnboardRequest {
   const input = asObject(body, 'body');
 
@@ -51,7 +68,17 @@ export function parseOnboardRequest(body: unknown): OnboardRequest {
     throw badRequest(`timezone "${timezone}" is not a known IANA timezone`);
   }
 
-  return { name, weeklyGoal, timezone, ...(intensity ? { intensity } : {}) };
+  const monthlyGoal = optionalGoal(input.monthlyGoal, 'monthlyGoal', 1, 93);
+  const yearlyGoal = optionalGoal(input.yearlyGoal, 'yearlyGoal', 1, 1095);
+
+  return {
+    name,
+    weeklyGoal,
+    timezone,
+    ...(intensity ? { intensity } : {}),
+    ...(monthlyGoal !== undefined ? { monthlyGoal } : {}),
+    ...(yearlyGoal !== undefined ? { yearlyGoal } : {}),
+  };
 }
 
 export function parseWorkoutsRequest(body: unknown): WorkoutInput[] {

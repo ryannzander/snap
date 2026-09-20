@@ -5,7 +5,7 @@ import {
   brokenStreak,
   currentStreak,
   countMovesThisWeek,
-  countVerifiedThisWeek,
+  countProgress,
   recentMessages,
   renderContext,
   summarizeContext,
@@ -185,6 +185,8 @@ interface Profile {
   userId: string;
   name: string;
   weeklyGoal: number;
+  monthlyGoal?: number;
+  yearlyGoal?: number;
   timezone: string;
   createdAt: string;
   /** How hard Snap pushes. Absent on profiles created before it existed. */
@@ -322,6 +324,8 @@ export interface InitializeInput {
   timezone: string;
   linkCode: string;
   intensity?: Intensity;
+  monthlyGoal?: number;
+  yearlyGoal?: number;
 }
 
 export class UserAgent extends DurableObject<Env> {
@@ -405,6 +409,8 @@ export class UserAgent extends DurableObject<Env> {
       timezone: input.timezone,
       createdAt: this.nowIso(),
       intensity: input.intensity ?? DEFAULT_INTENSITY,
+      ...(input.monthlyGoal !== undefined ? { monthlyGoal: input.monthlyGoal } : {}),
+      ...(input.yearlyGoal !== undefined ? { yearlyGoal: input.yearlyGoal } : {}),
     };
     const link: Link = {
       linkCode: input.linkCode,
@@ -555,7 +561,7 @@ export class UserAgent extends DurableObject<Env> {
     // Same bar as releasing a stake — a verified photo or a qualifying
     // workout — so the dots on the screen and the agent's "2/4 this week"
     // never disagree.
-    const workoutsThisWeek = countVerifiedThisWeek(
+    const progress = countProgress(
       this.now(),
       profile.timezone,
       [...workouts.values()],
@@ -564,7 +570,13 @@ export class UserAgent extends DurableObject<Env> {
 
     return ok({
       weeklyGoal: profile.weeklyGoal,
-      workoutsThisWeek,
+      workoutsThisWeek: progress.week,
+      // Always sent, even with no goal set, because the app can show a count
+      // without a target and a missing number is harder to render than a zero.
+      workoutsThisMonth: progress.month,
+      workoutsThisYear: progress.year,
+      ...(profile.monthlyGoal !== undefined ? { monthlyGoal: profile.monthlyGoal } : {}),
+      ...(profile.yearlyGoal !== undefined ? { yearlyGoal: profile.yearlyGoal } : {}),
       linked: link?.linked ?? false,
       // The window the app counts a streak from. Thirty days is enough to show
       // a month of dots and to make "best streak" mean something, and small
@@ -3010,6 +3022,7 @@ not a system rejecting them.`,
     // the model reads is the tail of it, oldest first, so one pass over the
     // workouts answers both.
     const days = buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment), 30);
+    const progress = countProgress(now, profile.timezone, workouts, commitments);
 
     return {
       now: this.nowIso(),
@@ -3017,7 +3030,11 @@ not a system rejecting them.`,
       timezone: profile.timezone,
       name: profile.name,
       weeklyGoal: profile.weeklyGoal,
-      workoutsThisWeek: countVerifiedThisWeek(now, profile.timezone, workouts, commitments),
+      workoutsThisWeek: progress.week,
+      workoutsThisMonth: progress.month,
+      workoutsThisYear: progress.year,
+      ...(profile.monthlyGoal !== undefined ? { monthlyGoal: profile.monthlyGoal } : {}),
+      ...(profile.yearlyGoal !== undefined ? { yearlyGoal: profile.yearlyGoal } : {}),
       lastSevenDays: days.slice(-7),
       streak: currentStreak(days),
       brokenStreak: brokenStreak(days),
