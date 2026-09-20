@@ -23,12 +23,31 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      # Requires Settings > Pages > Source = "GitHub Actions" (admin-only, one time).
-      # The enablement flag cannot do it: creating a Pages site is not available
-      # to the Actions token.
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+
+      # Turning Pages on is admin-only: the Actions token may neither create a
+      # Pages site nor read the setting back, so configure-pages just errors out
+      # until someone sets Settings > Pages > Source to "GitHub Actions". That is
+      # a missing one-time setup, not a fault in this branch, so skip instead of
+      # failing every push until it is done.
+      - id: pages
+        run: |
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/pages" || echo 000)
+          if [ "$code" = "200" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Pages not enabled::Set Settings > Pages > Source to 'GitHub Actions' to publish ranked/ (API returned $code). Skipping deploy."
+          fi
+
+      - if: steps.pages.outputs.enabled == 'true'
+        uses: actions/configure-pages@v5
+      - if: steps.pages.outputs.enabled == 'true'
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ranked
       - id: deploy
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/deploy-pages@v4
