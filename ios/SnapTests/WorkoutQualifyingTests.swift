@@ -182,3 +182,117 @@ final class SyncWindowTests: XCTestCase {
         )
     }
 }
+
+/// The streak, which is the one number on the schedule screen a user will argue
+/// with. It counts days that met the release bar, so it agrees with the money.
+final class StreakTests: XCTestCase {
+
+    /// Oldest first, exactly as `/state` sends it. `marks` reads left to right:
+    /// "x" trained, "." nothing, "s" a commitment that went unmet.
+    private func days(_ marks: String) -> [DayRecord] {
+        marks.enumerated().map { index, mark in
+            DayRecord(
+                date: String(format: "2026-09-%02d", index + 1),
+                workouts: mark == "x" ? 1 : 0,
+                skipped: mark == "s"
+            )
+        }
+    }
+
+    func testCountsBackFromToday() {
+        XCTAssertEqual(Streak.current(days("..xxx")), 3)
+        XCTAssertEqual(Streak.current(days("xxxxx")), 5)
+    }
+
+    /// The rule worth getting right: the day isn't over. A streak that resets at
+    /// midnight and un-resets when you train is a number nobody can trust.
+    func testTodayNotDoneYetDoesNotBreakIt() {
+        XCTAssertEqual(Streak.current(days("xxx.")), 3, "today is still open")
+        XCTAssertEqual(Streak.current(days("xxxx")), 4, "and training today extends it")
+    }
+
+    /// Two days off is over, though — only *today* gets the benefit of the doubt.
+    func testYesterdayMissedEndsIt() {
+        XCTAssertEqual(Streak.current(days("xxx..")), 0)
+    }
+
+    func testASkippedCommitmentIsNotATrainedDay() {
+        XCTAssertEqual(Streak.current(days("xxs")), 0, "a skip breaks it like any other day")
+        XCTAssertEqual(Streak.current(days("xxxs.")), 0)
+    }
+
+    func testEmptyAndAllRest() {
+        XCTAssertEqual(Streak.current([]), 0)
+        XCTAssertEqual(Streak.current(days(".....")), 0)
+        XCTAssertEqual(Streak.current(days(".")), 0, "one untrained day is not a streak of one")
+    }
+
+    func testBestIsTheLongestRunInTheWindow() {
+        XCTAssertEqual(Streak.best(days("xx.xxxx.x")), 4)
+        XCTAssertEqual(Streak.best(days(".....")), 0)
+        XCTAssertEqual(Streak.best(days("xxxxx")), 5)
+        XCTAssertEqual(Streak.best([]), 0)
+    }
+
+    func testBestIsAtLeastCurrent() {
+        let history = days("x.xxx")
+        XCTAssertGreaterThanOrEqual(Streak.best(history), Streak.current(history))
+    }
+}
+
+/// The month grid's arithmetic. A month that starts in the wrong column silently
+/// misreads every pattern on the screen.
+final class MonthLayoutTests: XCTestCase {
+
+    private func days(from first: String, count: Int) -> [DayRecord] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let start = formatter.date(from: first)!
+
+        return (0..<count).map { offset in
+            let date = Calendar.current.date(byAdding: .day, value: offset, to: start)!
+            return DayRecord(date: formatter.string(from: date), workouts: 0, skipped: false)
+        }
+    }
+
+    func testSevenColumnsAlways() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 1 // Sunday
+        let rows = MonthLayout.rows(from: days(from: "2026-08-21", count: 30), calendar: calendar)
+
+        XCTAssertFalse(rows.isEmpty)
+        XCTAssertTrue(rows.allSatisfy { $0.count == 7 }, "including the padded last row")
+        XCTAssertEqual(rows.flatMap { $0 }.compactMap { $0 }.count, 30, "no day is dropped")
+    }
+
+    /// 2026-08-21 is a Friday. On a Sunday-first calendar that's column 5.
+    func testTheFirstDayLandsInItsOwnColumn() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 1
+        let rows = MonthLayout.rows(from: days(from: "2026-08-21", count: 30), calendar: calendar)
+
+        XCTAssertEqual(rows[0].prefix(5).compactMap { $0 }.count, 0, "five blanks before it")
+        XCTAssertEqual(rows[0][5]?.date, "2026-08-21")
+    }
+
+    /// Same data, a Monday-first locale: the same date sits one column earlier.
+    func testAMondayFirstCalendarShiftsTheWholeGrid() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.firstWeekday = 2
+        let rows = MonthLayout.rows(from: days(from: "2026-08-21", count: 30), calendar: calendar)
+
+        XCTAssertEqual(rows[0][4]?.date, "2026-08-21")
+        XCTAssertTrue(rows.allSatisfy { $0.count == 7 })
+    }
+
+    func testEmptyHistoryDrawsNothing() {
+        XCTAssertTrue(MonthLayout.rows(from: []).isEmpty)
+    }
+
+    func testSevenWeekdayHeaders() {
+        XCTAssertEqual(MonthLayout.weekdaySymbols().count, 7)
+    }
+}
