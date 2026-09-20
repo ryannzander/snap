@@ -1841,10 +1841,30 @@ export class UserAgent extends DurableObject<Env> {
    * release transfer will need. `true` when the chain could not be reached:
    * a devnet hiccup must not be able to tell a user they are broke.
    */
+  /**
+   * Can this wallet afford to put that much on the line?
+   *
+   * Unknown is treated as yes, twice over. A devnet hiccup makes the balance
+   * null, and telling somebody they are broke because an RPC was slow is a
+   * far worse failure than offering a stake that turns out not to lock.
+   *
+   * The second case is the first thirty seconds of a wallet's life. Funding
+   * runs in the background at onboard and takes a few seconds on chain, so a
+   * user who texts straight after finishing onboarding has a real balance of
+   * zero — and Snap answered their very first message with "bro your wallet
+   * is empty 💀, add some sol in the app". It is not empty, it is arriving,
+   * and `funded` is exactly the flag that says which. Seen for real: a
+   * competition entry refused two seconds after onboard.
+   */
   private async canCover(lamports: number): Promise<boolean> {
     const balance = await this.balance();
     if (balance === null) return true;
-    return balance >= lamports + FEE_HEADROOM_LAMPORTS;
+    if (balance < lamports + FEE_HEADROOM_LAMPORTS) {
+      const wallet = await this.ctx.storage.get<StoredWallet>(KEY.wallet);
+      if (wallet && !wallet.funded && this.env.SNAP_TREASURY_SEED) return true;
+      return false;
+    }
+    return true;
   }
 
   private async recordWalletEntry(entry: Omit<WalletEntry, 'id' | 'at'> & { ref?: string }): Promise<void> {

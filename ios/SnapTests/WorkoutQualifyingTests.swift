@@ -60,9 +60,12 @@ final class WorkoutQualifyingTests: XCTestCase {
 
     /// The simulated workout is the on-stage fallback when there is no Apple Watch.
     /// It must clear all three bars the backend applies: not hand-entered, an accepted
-    /// type, and at least 30 minutes.
+    /// type, and at least the release floor.
     func testSimulatedWorkoutClearsEveryBar() {
-        let minWorkoutSec = 30 * 60  // MIN_WORKOUT_SEC in backend/src/agent/guards.ts
+        // Read from the app's own constant rather than spelled out: this said
+        // 30 * 60 for hours after the backend moved to 15, and a test that
+        // hardcodes the thing it is checking cannot catch the drift.
+        let minWorkoutSec = Int(WorkoutSync.minimumSessionSec)
 
         // What `saveSimulatedWorkout()` builds: 45 minutes of traditional strength training.
         let type = WorkoutSync.name(for: .traditionalStrengthTraining)

@@ -158,6 +158,31 @@ struct Commitment: Decodable, Identifiable, Equatable {
     /// then — which is the app's cue to ask for one.
     let proof: Proof?
     let verifiedBy: VerifiedBy?
+    /// The gesture this session's photo has to have in it, picked at random by
+    /// the backend the moment the stake locked. Optional on the wire: absent on
+    /// a commitment made before challenges existed, and absent means the photo
+    /// verifies on its own as before.
+    let challenge: String?
+
+    /// What to put on the card, in the backend's own words.
+    ///
+    /// Deliberately the same strings as `backend/src/agent/challenge.ts` —
+    /// Snap says them in the thread and this says them on the card, and a card
+    /// asking for something different from the text is worse than a card that
+    /// says nothing. An id this build does not know renders nothing rather
+    /// than guessing, so the backend can add one without shipping the app.
+    var challengeAsk: String? {
+        guard let challenge else { return nil }
+        switch challenge {
+        case "thumb": return "a thumbs up in the pic"
+        case "peace": return "a peace sign in the pic"
+        case "palm": return "an open hand up in the pic"
+        case "rock": return "rock horns 🤘 in the pic"
+        case "point": return "point right at the camera in the pic"
+        case "both": return "both arms straight up in the pic"
+        default: return nil
+        }
+    }
 
     /// When Snap wakes up to check on this.
     var checkAt: Date { dueAt.addingTimeInterval(Double(graceMin) * 60) }

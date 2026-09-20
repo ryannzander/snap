@@ -348,6 +348,18 @@ private struct PlanCard: View {
                 .buttonStyle(PillButtonStyle(kind: .onDark, enabled: ThreadLink.url(contact: model.contact) != nil, wide: false))
                 .disabled(ThreadLink.url(contact: model.contact) == nil)
 
+            // The gesture, loud, because forgetting it is the one thing that
+            // makes a real session's photo not pay. Snap asks for it in the
+            // thread every time, but this card is what someone looks at before
+            // they leave the house.
+            if let ask = commitment.challengeAsk {
+                Text(ask)
+                    .font(Theme.body(15))
+                    .foregroundStyle(Theme.surface)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Text(commitment.stake.map { "you in it, on the gym floor. that's how the \($0.sol.formatted(Self.sol)) SOL comes home." }
                  ?? "you in it, on the gym floor.")
                 .font(Theme.body(14))
@@ -572,7 +584,7 @@ private struct SessionControls: View {
                             Text(CountdownView.clock(elapsed))
                                 .font(Theme.numerals(34))
                                 .foregroundStyle(Theme.surface)
-                            Text(counts ? "training · this one counts" : "training · counts at 30 min")
+                            Text(counts ? "training · this one counts" : "training · counts at \(WorkoutSync.minimumSessionMinutes) min")
                                 .font(Theme.body(14))
                                 .foregroundStyle(Theme.surface.opacity(0.6))
                         }
@@ -587,7 +599,7 @@ private struct SessionControls: View {
                                 .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
                                 .disabled(!counts)
                                 .opacity(counts ? 1 : 0.4)
-                                .accessibilityHint(counts ? "" : "available once the session reaches 30 minutes")
+                                .accessibilityHint(counts ? "" : "available once the session reaches \(WorkoutSync.minimumSessionMinutes) minutes")
                             Button("cancel") { model.cancelSession() }
                                 .font(Theme.body(15))
                                 .foregroundStyle(Theme.surface.opacity(0.6))
@@ -597,7 +609,7 @@ private struct SessionControls: View {
             } else {
                 Button("start session") { model.startSession() }
                     .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
-                Text("no watch? snap times it. 30 min or more counts.")
+                Text("no watch? snap times it. \(WorkoutSync.minimumSessionMinutes) min or more counts.")
                     .font(Theme.body(14))
                     .foregroundStyle(Theme.surface.opacity(0.6))
                     .multilineTextAlignment(.center)
