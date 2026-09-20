@@ -263,6 +263,11 @@ final class AppModel {
         Task { try? await dying.forget() }
 
         Keychain.token = nil
+        // A delete that failed leaves the token on the device: the app looks reset
+        // until the next launch, then reads it back and walks straight into the old
+        // session. It was being swallowed — the error is only ever read after a
+        // write — so a reset that did not take had no way of saying so.
+        let keychainFailure = Keychain.lastWriteError
         WorkoutSync.clearAnchor()
         // Dropping the anchor means the next query has no cursor, and an
         // anchorless query against a week-wide predicate would hand the next
@@ -282,7 +287,7 @@ final class AppModel {
         name = ""
         linkCode = ""
         contact = nil
-        lastError = nil
+        lastError = keychainFailure.map { describe($0) }
         clearFeed()
 
         api = Config.makeAPI(token: nil)
