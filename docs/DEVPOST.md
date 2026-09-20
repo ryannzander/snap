@@ -6,7 +6,7 @@ Paste-ready, section by section. Hugo's draft with the facts corrected and the t
 
 ## Inspiration
 
-A year ago Hugo and I were the guys who skipped the gym.
+A year ago Hugo and I were chuds who skipped the gym.
 
 We had memberships. It came out of my bank account every month. We had a streak app too, and calendar reminders. We were mostly consistent, but sometimes we would skip. Some weeks we lowkey never went at all.
 
