@@ -125,6 +125,9 @@ const WALLET_ENTRY_PREFIX = 'wallet:entry:';
 /** How much of the wallet's history the app gets. It is a receipt, not a bank. */
 const WALLET_ENTRY_LIMIT = 40;
 
+/** How much history /state carries for the schedule screen. */
+const STATE_DAY_WINDOW = 30;
+
 /** Snap asks about the day at this hour, local, when nothing is committed. */
 const MORNING_HOUR = 9;
 const TRACE_PAGE_LIMIT = 200;
@@ -522,6 +525,16 @@ export class UserAgent extends DurableObject<Env> {
       weeklyGoal: profile.weeklyGoal,
       workoutsThisWeek,
       linked: link?.linked ?? false,
+      // The window the app counts a streak from. Thirty days is enough to show
+      // a month of dots and to make "best streak" mean something, and small
+      // enough that it rides along on a poll that runs every two seconds.
+      days: buildDays(
+        this.now(),
+        profile.timezone,
+        [...workouts.values()],
+        [...commitments.values()].map(toWireCommitment),
+        STATE_DAY_WINDOW,
+      ),
       commitments: [...commitments.values()]
         .sort((a, b) => a.dueAt.localeCompare(b.dueAt))
         .map(toWireCommitment),

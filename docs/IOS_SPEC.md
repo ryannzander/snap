@@ -123,7 +123,14 @@ same for the link screen.
 
 ### `Views/BrainView.swift`
 
-The live app: two screens and a bottom bar — **today · + · brain**. The `+` opens the message thread (iMessage first, Telegram otherwise), because a new plan is a text, never a form.
+The live app: four screens and a bottom bar — **today · streak · + · wallet · brain**. The `+` opens the message thread (iMessage first, Telegram otherwise), because a new plan is a text, never a form.
+
+- **today** — what's on the line right now.
+- **streak** — the record: days in a row, a month of dots, and every plan with what became of it. Also reachable by tapping the streak pill on today, which was already the week in miniature.
+- **wallet** — the money: balance, what's locked, where it went, and a button to add more.
+- **brain** — the full trace.
+
+Neither **streak** nor **wallet** can create anything. No "add a session", no "stake now": a commitment Snap did not negotiate is one he can't hold you to, so both screens hand you the thread instead.
 
 **today** is the reference's home screen, top to bottom:
 

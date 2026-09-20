@@ -133,6 +133,32 @@ actor MockAPI: SnapAPI {
         advance(to: Self.proofStep)
     }
 
+    /// A month of history for the schedule screen: a live streak running into
+    /// today, one skipped day, and a fallow patch before it — enough shape that
+    /// the grid and both streak numbers mean something offline.
+    private func history(trainedToday: Bool) -> [DayRecord] {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "yyyy-MM-dd"
+
+        // Index 29 is today, 0 is 29 days ago.
+        let trainedAgo: Set<Int> = [1, 2, 4, 6, 8, 9, 11, 15, 16, 18, 22, 25]
+        let skippedAgo: Set<Int> = [3, 13]
+
+        return (0..<30).reversed().compactMap { ago in
+            guard let date = Calendar.current.date(byAdding: .day, value: -ago, to: Date()) else {
+                return nil
+            }
+            let trained = ago == 0 ? trainedToday : trainedAgo.contains(ago)
+            return DayRecord(
+                date: formatter.string(from: date),
+                workouts: trained ? 1 : 0,
+                skipped: skippedAgo.contains(ago)
+            )
+        }
+    }
+
     func state() async throws -> SnapState {
         let reached = emitted.count
         return SnapState(
@@ -172,7 +198,10 @@ actor MockAPI: SnapAPI {
                         : nil,
                     verifiedBy: reached > Self.proofStep ? (releasedByWatch ? .watch : .photo) : nil
                 )
-            ]
+            ],
+            // Today's dot fills in the moment the scripted pic lands, so the streak
+            // ticks up on screen during the demo rather than being a static number.
+            days: history(trainedToday: reached > Self.proofStep)
         )
     }
 

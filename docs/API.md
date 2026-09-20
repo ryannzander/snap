@@ -52,7 +52,7 @@ Limits: at most 500 workouts per request (over that is a 400), and 1 MB of body 
 
 ## GET /state
 
-Everything the app needs to draw its one screen.
+Everything the app needs to draw the today and schedule screens.
 
 ```json
 {
@@ -71,6 +71,10 @@ Everything the app needs to draw its one screen.
       "proof": null,
       "verifiedBy": null
     }
+  ],
+  "days": [
+    { "date": "2026-08-21", "workouts": 0, "skipped": false },
+    { "date": "2026-08-22", "workouts": 1, "skipped": false }
   ]
 }
 ```
@@ -105,6 +109,16 @@ The new time must also be more than an hour away, or one move would hand back ex
 Refusals come back through the normal refusal path: the trace says `refused reschedule_commitment — <reason>` and Snap tells the user, rather than silently agreeing and then slashing on the original deadline.
 
 Every accepted move is appended to `commitment.reschedules` and shown to both sides — the app prints it on the plan card, and the agent sees each move on their clock plus a week-wide `sessions moved this week: N`, so a pattern can be called out ("third one this week bro") instead of only a per-commitment limit being enforced.
+
+### `days`
+
+The last **30 local days**, oldest first, ending on today in the user's own zone. What the app's schedule screen draws and what the streak is counted from.
+
+`workouts` counts sessions that met the release bar — the same bar as `workoutsThisWeek` — so a day with a dot on it is a day that would have returned your money. `skipped` is a commitment that day that went unmet, which is a different thing from a day with nothing on.
+
+The window is contiguous and always ends today; a missing date would read as a missed day rather than as missing data. Thirty days caps what the app can claim: a 40-day streak cannot be proven from it, and the app says "best" of what it can see rather than inventing the rest.
+
+**A streak counts back from today, and today not being done yet does not break it.** The day isn't over, and a number that resets at midnight and un-resets when you train is one nobody can trust. Two days off does end it — only today gets the benefit of the doubt.
 
 ## Verification
 
