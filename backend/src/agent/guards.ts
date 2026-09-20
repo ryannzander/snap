@@ -12,7 +12,7 @@
 
 import type { Commitment } from '../types';
 import { localTimeToInstant, parseIso } from '../time';
-import { DEFAULT_STAKE_LAMPORTS, MAX_RENEGOTIATIONS } from './tools';
+import { DEFAULT_STAKE_LAMPORTS, MAX_RENEGOTIATIONS, RESCHEDULE_LEAD_MS } from './tools';
 
 export type Guard<T> = { ok: true; value: T } | { ok: false; reason: string };
 
@@ -209,12 +209,31 @@ export function guardReschedule(
     return deny('this commitment has already been rescheduled once — that is the limit');
   }
 
+  // And the door closes an hour out. Every excuse ever invented arrives in the
+  // last ten minutes; an hour ahead you are rearranging your day. Measured
+  // against the CURRENT deadline, so a commitment already past due — which is
+  // exactly when someone starts negotiating — can never be moved.
+  const currentDue = parseIso(commitment.dueAt);
+  if (currentDue === null) return deny('commitment has an unreadable dueAt');
+  if (currentDue - now < RESCHEDULE_LEAD_MS) {
+    return deny(
+      currentDue <= now
+        ? 'that session is already due — it is too late to move it'
+        : 'there is less than an hour left — it is too late to move it',
+    );
+  }
+
   const resolved = resolveLocalTime(args, now, tz);
   if (!resolved.ok) return resolved;
   const dueAt = resolved.value;
   // Same stake, new deadline — but the slash still lands at end of day, so a
   // reschedule past midnight would move the goalposts past the consequence.
   if (dueAt > endOfDay) return deny('the new deadline is after end of day');
+  // Moving it to a time that is itself inside the closed window would hand
+  // back in one move what the window takes away.
+  if (dueAt - now < RESCHEDULE_LEAD_MS) {
+    return deny('that is less than an hour away — pick a time further out');
+  }
 
   const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
   if (!reason) return deny('reschedule_commitment needs a reason for the trace');

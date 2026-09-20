@@ -81,6 +81,19 @@ export interface Proof {
   description: string;
 }
 
+/**
+ * One time the session was moved. Kept as a list rather than a counter
+ * because the count only answers "can they move it again"; the list answers
+ * "is this person always moving them", which is the question worth asking.
+ */
+export interface Reschedule {
+  /** When they asked. */
+  at: string;
+  /** The deadline before and after the move. */
+  from: string;
+  to: string;
+}
+
 export interface Commitment {
   id: string;
   text: string;
@@ -88,6 +101,8 @@ export interface Commitment {
   graceMin: number;
   status: CommitmentStatus;
   stake: Stake;
+  /** Every move, oldest first. Empty on a commitment nobody has touched. */
+  reschedules: Reschedule[];
   proof: Proof | null;
   /**
    * How the session was verified once it is settled: the photo they sent, or

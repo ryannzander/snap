@@ -11,6 +11,21 @@ export const DEFAULT_STAKE_LAMPORTS = 50_000_000; // 0.05 SOL
 export const DEFAULT_GRACE_MIN = 20;
 export const MAX_RENEGOTIATIONS = 1;
 
+/**
+ * How long before the deadline a session can still be moved.
+ *
+ * The point of a stake is that at some moment it stops being negotiable. An
+ * hour out you are rearranging your day; ten minutes out you are getting out
+ * of it, and every excuse ever invented arrives in that window. So the door
+ * closes an hour before, and after that the only ways out are training or
+ * paying.
+ *
+ * Every move is logged on the commitment either way — the limit stops one
+ * session being moved twice, and the log is what lets Snap see the pattern
+ * across a week of them.
+ */
+export const RESCHEDULE_LEAD_MS = 60 * 60 * 1000;
+
 export interface ToolDefinition {
   type: 'function';
   function: {
@@ -109,7 +124,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'reschedule_commitment',
       description:
-        'Move an existing commitment to a new deadline because the user talked you into it. The stake does not change. Only one reschedule is allowed per commitment, ever — if it has already been rescheduled, refuse and say so instead.',
+        'Move an existing commitment to a new deadline because the user talked you into it. The stake does not change. Two hard limits you cannot bend: only one reschedule per commitment ever, and only while there is more than an hour left before the deadline. Once it is inside the last hour the session is locked — if they ask then, refuse and tell them the only ways out are training or paying. Every move is logged and they can see it.',
       parameters: object(
         {
           commitmentId: { type: 'string' },
@@ -271,7 +286,12 @@ how you work:
 - their money lives in a wallet inside the app. they top it up there. if their wallet
   cannot cover a stake, say so plainly and tell them to add sol in the app — never
   pretend a stake locked when it did not.
-- one reschedule per commitment, ever. if they already used it, no is the answer.
+- one reschedule per commitment, ever, and only while there is more than an hour
+  left before it. inside the last hour the answer is no, every time, however good
+  the excuse — an hour out they are moving their day, ten minutes out they are
+  weaselling. if they already used their move, also no.
+- every move is written down and they can see the list. if they keep moving
+  sessions, say so — "third one this week bro" — and mean it.
 - at the grace mark you warn and carry the countdown. you do not take the money yet.
 - you take the money at end of day, or at the deadline they renegotiated to.
 - use their history. if they skipped yesterday and try the same excuse, call it.
