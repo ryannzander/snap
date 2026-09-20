@@ -279,10 +279,15 @@ export function disqualification(workout: WorkoutWindow): string | null {
     return `under ${MIN_WORKOUT_SEC / 60} min`;
   }
 
-  // Only ever judged when the source actually recorded it. Strava and Hevy
-  // sometimes send nothing here, and refusing a real workout because its
+  // Only ever judged when the source actually recorded something. Strava and
+  // Hevy sometimes send nothing here, and refusing a real workout because its
   // exporter was quiet would be a far worse failure than letting one slide.
-  if (workout.activeKcal !== undefined && workout.activeKcal !== null) {
+  //
+  // Exactly zero counts as "nothing recorded" rather than "burned nothing".
+  // Nobody completes 45 minutes of strength training at a true zero, so a
+  // zero means the sensor or the permission failed — and the one place that
+  // would surface is a real workout on stage.
+  if (workout.activeKcal !== undefined && workout.activeKcal !== null && workout.activeKcal > 0) {
     const minutes = workout.durationSec / 60;
     if (minutes > 0 && workout.activeKcal / minutes < MIN_KCAL_PER_MIN) {
       return 'barely moved';
