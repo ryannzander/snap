@@ -70,6 +70,22 @@ export const MIN_WORKOUT_SEC = 30 * 60;
  * "Traditional Strength Training" and "Functional Strength Training" both
  * are; anything exotic arrives as `other` and will not release the stake.
  */
+/**
+ * Active energy per minute a session has to average to count as training.
+ *
+ * This is the hole the other three checks leave open. Press start on the
+ * Watch, sit in the car for 45 minutes and stop: the type is right, the
+ * duration is right, nothing was typed by hand, and the stake releases.
+ * HealthKit proves a session was *recorded*; it does not prove anyone moved.
+ *
+ * Active energy excludes basal metabolism, so sitting still reads near zero.
+ * Genuine strength work runs 5-8 kcal/min and running 10-15. Two is chosen to
+ * sit far above sitting and far below anything real, because the cost of
+ * failing an honest workout is much higher than the cost of missing a lazy
+ * cheat — someone who trained and got told they didn't will never stake again.
+ */
+export const MIN_KCAL_PER_MIN = 2;
+
 export const ACCEPTED_WORKOUT_TYPES: readonly string[] | null = [
   'traditionalStrengthTraining',
   'functionalStrengthTraining',
@@ -91,6 +107,8 @@ export interface WorkoutWindow {
   durationSec: number;
   type: string;
   wasUserEntered?: boolean;
+  /** Active energy, excluding basal. Null when the source did not record it. */
+  activeKcal?: number | null;
 }
 
 export interface CreateArgs {
@@ -259,6 +277,16 @@ export function disqualification(workout: WorkoutWindow): string | null {
   }
   if (workout.durationSec < MIN_WORKOUT_SEC) {
     return `under ${MIN_WORKOUT_SEC / 60} min`;
+  }
+
+  // Only ever judged when the source actually recorded it. Strava and Hevy
+  // sometimes send nothing here, and refusing a real workout because its
+  // exporter was quiet would be a far worse failure than letting one slide.
+  if (workout.activeKcal !== undefined && workout.activeKcal !== null) {
+    const minutes = workout.durationSec / 60;
+    if (minutes > 0 && workout.activeKcal / minutes < MIN_KCAL_PER_MIN) {
+      return 'barely moved';
+    }
   }
   return null;
 }

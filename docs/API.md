@@ -78,9 +78,13 @@ Everything the app needs to draw its one screen.
 
 Commitments come back oldest first, ordered by `dueAt`. The app shows the open one (`pending` or `renegotiated`), or the last one when none is open.
 
-`workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts only workouts that *qualify* — not every workout posted. A workout qualifies when it runs 30 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
+`workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts only workouts that *qualify* — not every workout posted. A workout qualifies when it runs 30 minutes or longer, averages at least **2 active kcal/min**, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
 
-This is deliberately the same bar that releases a stake: if a 30-minute walk cannot release your money, it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`).
+This is deliberately the same bar that releases a stake: if a 30-minute walk cannot release your money, it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`, `barely moved`).
+
+**`barely moved`** is the effort floor. Type, duration and `wasUserEntered` together still let someone press start on the Watch, sit in a car for 45 minutes and release a stake — the session is genuinely *recorded*, nobody typed it, and nobody moved. Active energy excludes basal metabolism, so sitting reads near zero while real strength work runs 5-8 kcal/min and running 10-15.
+
+It is only ever applied when `activeKcal` is actually present. A source that records no calories (some Strava and Hevy exports) is never rejected for it — failing an honest workout costs far more than missing a lazy cheat.
 
 ## GET /trace?since=<eventId>
 

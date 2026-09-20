@@ -19,6 +19,7 @@ import {
   guardAccept,
   type StandingOffer,
   MIN_WORKOUT_SEC,
+  MIN_KCAL_PER_MIN,
   type WorkoutWindow,
 } from '../src/agent/guards';
 import { endOfLocalDay } from '../src/time';
@@ -46,7 +47,8 @@ const workout = (
   durationSec: number,
   type = 'traditionalStrengthTraining',
   wasUserEntered = false,
-): WorkoutWindow => ({ start, end: null, durationSec, type, wasUserEntered });
+  activeKcal: number | null = null,
+): WorkoutWindow => ({ start, end: null, durationSec, type, wasUserEntered, activeKcal });
 
 section('local time resolution — the model never does timezone maths');
 {
@@ -159,6 +161,36 @@ section('what counts as training');
   );
   // The floor is inclusive: exactly 30 minutes counts.
   eq('exactly at the floor', disqualification(workout('2026-09-19T22:00:00Z', MIN_WORKOUT_SEC, 'running')), null);
+}
+
+section('effort — the hole the other three checks leave open');
+{
+  const at = '2026-09-19T22:00:00Z';
+  // Press start, sit in the car for 45 minutes, press stop. Right type, right
+  // duration, nothing typed by hand — and before this it released the stake.
+  eq(
+    'a 45-minute session that burned 40 kcal',
+    disqualification(workout(at, 2700, 'traditionalStrengthTraining', false, 40)),
+    'barely moved',
+  );
+  eq('a real 45-minute session at 310 kcal', disqualification(workout(at, 2700, 'traditionalStrengthTraining', false, 310)), null);
+  eq('a 30-minute run at 260 kcal', disqualification(workout(at, 1800, 'running', false, 260)), null);
+
+  // Exactly on the floor counts: 30 min x 2 kcal/min.
+  eq('exactly at the floor', disqualification(workout(at, 1800, 'running', false, 30 * MIN_KCAL_PER_MIN)), null);
+  eq('a hair under it', disqualification(workout(at, 1800, 'running', false, 30 * MIN_KCAL_PER_MIN - 1)), 'barely moved');
+
+  // The important half: never punish a source that simply did not say.
+  eq('no calorie data at all is not a rejection', disqualification(workout(at, 2700, 'running', false, null)), null);
+  eq('and neither is the field being absent', disqualification({ start: at, end: null, durationSec: 2700, type: 'running' }), null);
+
+  // Order matters: a hand-typed workout is refused for being hand-typed,
+  // whatever number it claims to have burned.
+  eq(
+    'hand-entered still reads as hand-entered',
+    disqualification(workout(at, 2700, 'running', true, 9999)),
+    'typed in by hand',
+  );
 }
 
 section('does a workout cover the commitment?');
