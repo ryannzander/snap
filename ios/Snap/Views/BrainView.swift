@@ -537,26 +537,37 @@ private struct SessionControls: View {
     var body: some View {
         VStack(spacing: 10) {
             if let startedAt = model.sessionStartedAt {
+                // The buttons live inside the TimelineView too, so "done" unlocks on
+                // the same one-second tick that drives the clock.
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     let elapsed = max(0, context.date.timeIntervalSince(startedAt))
-                    VStack(spacing: 2) {
-                        Text(CountdownView.clock(elapsed))
-                            .font(Theme.numerals(34))
-                            .foregroundStyle(Theme.surface)
-                        Text(elapsed < 30 * 60 ? "training · counts at 30 min" : "training · this one counts")
-                            .font(Theme.body(14))
-                            .foregroundStyle(Theme.surface.opacity(0.6))
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("session running, \(CountdownView.clock(elapsed))")
-                }
+                    let counts = elapsed >= WorkoutSync.minimumSessionSec
+                    VStack(spacing: 10) {
+                        VStack(spacing: 2) {
+                            Text(CountdownView.clock(elapsed))
+                                .font(Theme.numerals(34))
+                                .foregroundStyle(Theme.surface)
+                            Text(counts ? "training · this one counts" : "training · counts at 30 min")
+                                .font(Theme.body(14))
+                                .foregroundStyle(Theme.surface.opacity(0.6))
+                        }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("session running, \(CountdownView.clock(elapsed))")
 
-                HStack(spacing: Theme.Space.s) {
-                    Button("done") { Task { await model.endSession() } }
-                        .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
-                    Button("cancel") { model.cancelSession() }
-                        .font(Theme.body(15))
-                        .foregroundStyle(Theme.surface.opacity(0.6))
+                        // "done" stays out of reach until the session actually counts.
+                        // Tapping it early used to end the session for good and release
+                        // nothing, with no way back and nothing on screen to explain it.
+                        HStack(spacing: Theme.Space.s) {
+                            Button("done") { Task { await model.endSession() } }
+                                .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
+                                .disabled(!counts)
+                                .opacity(counts ? 1 : 0.4)
+                                .accessibilityHint(counts ? "" : "available once the session reaches 30 minutes")
+                            Button("cancel") { model.cancelSession() }
+                                .font(Theme.body(15))
+                                .foregroundStyle(Theme.surface.opacity(0.6))
+                        }
+                    }
                 }
             } else {
                 Button("start session") { model.startSession() }

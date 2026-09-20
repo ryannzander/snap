@@ -209,10 +209,24 @@ Sets the agent's clock for this user and fires any alarm that is now due. `{ "no
 
 Demo only. Requires header `X-Debug-Key` **and** the bearer token; 404 when `DEBUG_KEY` is unset. No body.
 
-Seeds a plausible week of history for this user (2/4 done, skipped yesterday, one earlier excuse). Clears that user's workouts, commitments, trace and alarms first, so the demo can be rehearsed from the same starting point repeatedly. The chat link and the token survive.
+Seeds a plausible week of history for this user (2/4 done, skipped yesterday, one earlier excuse). Clears that user's workouts, commitments, trace, spent photo fingerprints and alarms first, so the demo can be rehearsed from the same starting point repeatedly, then re-books the morning check-in. The chat link and the token survive.
 
 ```json
 { "workouts": 2, "commitments": 1 }
+```
+
+## POST /debug/forget
+
+Demo only. Requires header `X-Debug-Key` **and** the bearer token; 404 when `DEBUG_KEY` is unset. No body.
+
+The server half of the app's "reset app". Deletes everything stored for this user — profile, token, commitments, workouts, trace, fingerprints — disarms the alarm, and releases the chat binding and link code so the thread is free for whoever onboards next.
+
+Unlike `/debug/seed`, nothing survives: the bearer token used to call it is invalid immediately afterwards. Without it a phone-side reset leaves the agent running — its alarms keep firing and it keeps texting the thread about a commitment made before the reset.
+
+The chat is only released if it is still bound to this user, so a reset that races a re-link cannot cut the new thread loose.
+
+```json
+{ "channel": "linq", "chatId": "+15555550123", "linkCode": "4821" }
 ```
 
 ## POST /debug/message

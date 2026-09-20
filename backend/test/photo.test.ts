@@ -113,6 +113,39 @@ section('the things people will actually try');
   eq('a json array is not a verdict', readVerdict('[1,2,3]').verdict, 'unsure');
   // Missing keys must not read as a pass.
   eq('no training key is not a pass', readVerdict('{"description":"a gym"}').verdict, 'not_training');
+
+  // Asked for JSON, models answer with strings. The Workers AI fallback is the
+  // one that does it, so this fires exactly when the primary model is down —
+  // a good gym photo used to score 0 and land on unsure.
+  const stringy = readVerdict('{"training":"true","person":"true","screenshot":"false","confidence":"0.9","description":"a person mid-squat"}');
+  eq('a stringified verdict still reads as proof', stringy.verdict, 'training');
+
+  eq(
+    'a stringified screenshot is still refused',
+    readVerdict('{"training":"true","person":"true","screenshot":"true","confidence":"0.99","description":"a workout summary"}').verdict,
+    'not_training',
+  );
+  eq(
+    'a stringified low confidence is still unsure',
+    readVerdict('{"training":"true","person":"true","confidence":"0.3","description":"blurry"}').verdict,
+    'unsure',
+  );
+  eq(
+    'a stringified negative is still a no',
+    readVerdict('{"training":"false","person":"true","confidence":"0.9","description":"a plate of food"}').verdict,
+    'not_training',
+  );
+  // Coercion must not invent a pass out of something unreadable.
+  eq(
+    'an unreadable confidence is unsure, not proof',
+    readVerdict('{"training":true,"person":true,"confidence":"very high","description":"a gym"}').verdict,
+    'unsure',
+  );
+  eq(
+    'an unreadable training flag is not a pass',
+    readVerdict('{"training":"maybe","person":true,"confidence":0.9,"description":"a gym"}').verdict,
+    'not_training',
+  );
 }
 
 section('what snap is told to say about a photo');

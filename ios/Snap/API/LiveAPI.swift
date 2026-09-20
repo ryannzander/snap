@@ -44,6 +44,10 @@ struct LiveAPI: SnapAPI {
         _ = try await send(try make(.post, "debug/seed", debug: true))
     }
 
+    func forget() async throws {
+        _ = try await send(try make(.post, "debug/forget", debug: true))
+    }
+
     // MARK: - Plumbing
 
     private enum Method: String { case get = "GET", post = "POST" }
