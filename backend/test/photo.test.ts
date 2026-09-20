@@ -8,6 +8,7 @@
 import { imageUrlsFromParts, normalizeInbound } from '../src/channels/linq';
 import {
   MIN_VERIFY_CONFIDENCE,
+  applyPhotoMode,
   photoInstruction,
   photoSummary,
   readVerdict,
@@ -189,6 +190,32 @@ section('what snap is told to say about a photo');
   isTrue('a failed look is said plainly', blind.includes('could not make out'));
   isTrue('and asks for a resend', blind.includes('send it again'));
   isFalse('never blaming them for it', blind.includes('their fault') && !blind.includes('do not make it their fault'));
+}
+
+section('the stage valve — the one switch that can turn "not proof" into money');
+{
+  // Strict is ship behaviour and the default. Nothing is rescued.
+  eq('strict leaves a pass alone', applyPhotoMode('training', 'strict'), { verdict: 'training', overridden: null });
+  eq('strict leaves unsure alone', applyPhotoMode('unsure', 'strict'), { verdict: 'unsure', overridden: null });
+  eq('strict leaves a refusal alone', applyPhotoMode('not_training', 'strict'), { verdict: 'not_training', overridden: null });
+
+  // Lenient exists for exactly one failure: a real gym selfie the model
+  // hedged on, or one the Workers AI fallback answered with unparseable JSON.
+  eq('lenient rescues unsure', applyPhotoMode('unsure', 'lenient'), { verdict: 'training', overridden: 'lenient' });
+  // And nothing else. The screenshot roast is a demo beat worth keeping, and
+  // "not training" is a judgement the model actually made.
+  eq('lenient does NOT rescue a refusal', applyPhotoMode('not_training', 'lenient'), {
+    verdict: 'not_training',
+    overridden: null,
+  });
+  eq('lenient does not relabel a pass', applyPhotoMode('training', 'lenient'), { verdict: 'training', overridden: null });
+
+  // Break-glass: the vision model is down and the closing beat has to happen.
+  eq('always rescues a refusal', applyPhotoMode('not_training', 'always'), { verdict: 'training', overridden: 'always' });
+  eq('always rescues unsure', applyPhotoMode('unsure', 'always'), { verdict: 'training', overridden: 'always' });
+  // A photo that passed on its own is never marked as overridden — the trace
+  // would otherwise claim a valve was used when it was not.
+  eq('always does not mark an honest pass', applyPhotoMode('training', 'always'), { verdict: 'training', overridden: null });
 }
 
 done('photos');

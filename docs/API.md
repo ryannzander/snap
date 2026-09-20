@@ -218,6 +218,31 @@ Sets the agent's clock for this user and fires any alarm that is now due. `{ "no
 { "now": "2026-09-20T23:24:00.000Z", "fired": 2 }
 ```
 
+## POST /debug/demo
+
+Demo only. Requires `X-Debug-Key` **and** the bearer token; 404 when `DEBUG_KEY` is unset.
+
+The stage valve. The closing beat depends on a vision model judging a photo live, in a venue, under whatever lighting — and when OpenAI is unreachable the fallback is a small Workers AI model that is markedly worse at returning clean JSON, which `readVerdict` reads as `unsure`. `unsure` does not release a stake, so the likeliest way the demo dies is the verifier shrugging at a perfectly good photo.
+
+```json
+{ "photoMode": "lenient", "allowReplay": true }
+```
+→ `{ "photoMode": "lenient", "allowReplay": true }`
+
+An empty body `{}` reads the current settings instead of writing, so the app can show the switch's real position rather than guessing it.
+
+| `photoMode` | |
+|---|---|
+| `strict` | default, and ship behaviour: the vision model's word, unassisted |
+| `lenient` | rescues `unsure` **only** — a screenshot is still refused, so the roast beat still works. This is the one to run on stage. |
+| `always` | anything that loads counts. Break-glass for a vision model that is down. |
+
+`allowReplay` lets the same picture be spent twice, so a beat can be rehearsed without a fresh photo each run.
+
+**Every override is named in the trace.** A `photo_accepted` row whose verdict was changed reads `… · demo mode (lenient)` and carries `data.demoMode`. The brain screen is this product's honesty; a switch that quietly forged a verdict would be worth less than a failed demo. A photo that passes on its own is never marked.
+
+The settings are per user and survive `/debug/seed`.
+
 ## POST /debug/seed
 
 Demo only. Requires header `X-Debug-Key` **and** the bearer token; 404 when `DEBUG_KEY` is unset. No body.

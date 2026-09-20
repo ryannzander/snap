@@ -78,6 +78,8 @@ actor MockAPI: SnapAPI {
                      at: Date().addingTimeInterval(-86_400), txSig: MockAPI.mockSignature),
     ]
 
+    private var demo = DemoSettings(photoMode: .strict, allowReplay: false)
+
     /// Set when a HealthKit workout, rather than the scripted photo, closed the
     /// loop. See `postWorkouts`.
     private var releasedByWatch = false
@@ -230,6 +232,17 @@ actor MockAPI: SnapAPI {
     /// this a second run-through opens on a finished loop.
     func forget() async throws {
         reset()
+    }
+
+    func demoSettings(
+        photoMode: DemoSettings.PhotoMode?,
+        allowReplay: Bool?
+    ) async throws -> DemoSettings {
+        demo = DemoSettings(
+            photoMode: photoMode ?? demo.photoMode,
+            allowReplay: allowReplay ?? demo.allowReplay
+        )
+        return demo
     }
 
     // MARK: - Script
