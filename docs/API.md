@@ -85,7 +85,8 @@ Everything the app needs to draw its one screen.
       "stake": { "lamports": 50000000, "status": "held", "txSig": "…" },
       "reschedules": [],
       "proof": null,
-      "verifiedBy": null
+      "verifiedBy": null,
+      "challenge": "three"
     }
   ]
 }
@@ -94,6 +95,25 @@ Everything the app needs to draw its one screen.
 `commitment.status`: `pending | met | missed | renegotiated`
 `stake.status`: `none | held | released | slashed`
 `commitment.verifiedBy`: `photo | watch | null`
+
+**`challenge` is new, optional, and additive.** It is the gesture this commitment's photo has to have in it, picked at random the moment the stake locked: `two | three | four | thumb | peace | palm`. Absent on a commitment made before challenges existed, and absent means the photo verifies on its own as before, so nothing breaks by ignoring it.
+
+Why it exists: the vision model checks that a real person is training, not that the person is *you*, so any gym photo of anybody used to release a stake the first time it was sent. A photo you already had cannot have the gesture in it, because nobody knew which one until the money moved.
+
+**The app should show it on the plan card**, wherever it already says "send a pic": *"3 fingers up in the pic"*. Snap says it in the thread too, every time he asks, but the card is where someone looks before they leave the house. Suggested strings — the backend's own wording, so the two agree:
+
+| value | what to show |
+|---|---|
+| `two` | 2 fingers up in the pic |
+| `three` | 3 fingers up in the pic |
+| `four` | 4 fingers up in the pic |
+| `thumb` | a thumbs up in the pic |
+| `peace` | a peace sign in the pic |
+| `palm` | an open hand up in the pic |
+
+An unknown value should render nothing rather than failing — more may be added.
+
+A photo that is real training but missing the gesture does **not** reject the stake: it comes back `unsure`, nothing moves, and Snap asks again. The watch underneath still releases it with no photo at all.
 
 `reschedules` is every time the session was moved, oldest first: `{ "at", "from", "to" }`. The app prints the list on the plan card — moving a session is allowed, doing it quietly is not. It may be absent on a commitment stored before the log existed; treat that as empty.
 
