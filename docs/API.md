@@ -43,6 +43,10 @@ The stake is an opening, not a price — the user can name any amount from 0.01 
 
 A new wallet is funded to cover the hardest mode's stake plus fees, so picking `hard` never means the first offer is refused for want of money.
 
+`monthlyGoal` and `yearlyGoal` are **optional and additive** — omit them and nothing about the app changes. Whole numbers, 1–93 and 1–1095 respectively; anything else is a 400. The ceilings are three sessions a day over the window, which is the point past which a number is a typo rather than an ambition.
+
+They are horizons, not gates. Nothing about money reads them: they never widen or narrow a stake, and missing one costs nothing. They only give Snap something longer than a week to talk about — he mentions a month you are behind on once, not as a countdown, and marks every 25th session of the year. `/state` returns them alongside `workoutsThisMonth` and `workoutsThisYear` so the app can draw the same numbers he says.
+
 `token` is opaque to the app. Store it in the Keychain and send it on everything below.
 
 ## POST /workouts
@@ -74,6 +78,10 @@ Everything the app needs to draw the today and schedule screens.
 {
   "weeklyGoal": 4,
   "workoutsThisWeek": 2,
+  "monthlyGoal": 16,
+  "workoutsThisMonth": 7,
+  "yearlyGoal": 180,
+  "workoutsThisYear": 94,
   "linked": true,
   "commitments": [
     {
@@ -86,7 +94,7 @@ Everything the app needs to draw the today and schedule screens.
       "reschedules": [],
       "proof": null,
       "verifiedBy": null,
-      "challenge": "three"
+      "challenge": "palm"
     }
   ],
   "days": [
@@ -100,7 +108,7 @@ Everything the app needs to draw the today and schedule screens.
 `stake.status`: `none | held | released | slashed`
 `commitment.verifiedBy`: `photo | watch | null`
 
-**`challenge` is new, optional, and additive.** It is the gesture this commitment's photo has to have in it, picked at random the moment the stake locked: `two | three | four | thumb | peace | palm`. Absent on a commitment made before challenges existed, and absent means the photo verifies on its own as before, so nothing breaks by ignoring it.
+**`challenge` is new, optional, and additive.** It is the gesture this commitment's photo has to have in it, picked at random the moment the stake locked: `thumb | peace | palm | rock | point | both`. Absent on a commitment made before challenges existed, and absent means the photo verifies on its own as before, so nothing breaks by ignoring it.
 
 Why it exists: the vision model checks that a real person is training, not that the person is *you*, so any gym photo of anybody used to release a stake the first time it was sent. A photo you already had cannot have the gesture in it, because nobody knew which one until the money moved.
 
