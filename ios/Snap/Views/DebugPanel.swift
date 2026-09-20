@@ -97,19 +97,9 @@ struct DebugPanel: View {
 
                 Section("danger") {
                     // Two rows below the on-stage fallback button, on a phone held up to a
-                    // camera: this one needs a second tap.
+                    // camera: this one needs a second tap. The dialog itself hangs off the
+                    // Form, not off this row — see below.
                     Button("reset app", role: .destructive) { confirmReset = true }
-                        .confirmationDialog(
-                            "wipe the session? token, link code and health anchor all go.",
-                            isPresented: $confirmReset,
-                            titleVisibility: .visible
-                        ) {
-                            Button("reset app", role: .destructive) {
-                                model.reset()
-                                dismiss()
-                            }
-                            Button("cancel", role: .cancel) {}
-                        }
                 }
 
                 Section("last error") {
@@ -118,6 +108,27 @@ struct DebugPanel: View {
                         .foregroundStyle(model.lastError == nil ? Theme.inkDim : Theme.danger)
                         .textSelection(.enabled)
                 }
+            }
+            // Deliberately on the Form rather than on the button that sets the flag.
+            // A confirmation dialog attached to a row inside a Form hangs off a view
+            // the lazy container is free to recycle, and when it does the dialog never
+            // presents — the button reads as dead. Nothing was wrong with the reset
+            // itself; it was never being reached.
+            .confirmationDialog(
+                "wipe the session? token, link code and health anchor all go.",
+                isPresented: $confirmReset,
+                titleVisibility: .visible
+            ) {
+                Button("reset app", role: .destructive) {
+                    // Dismiss first. This sheet is presented by BrainView, and reset()
+                    // swaps the root to OnboardingView — pulling the presenter out from
+                    // under a live sheet can leave the sheet stranded on screen, which
+                    // looks exactly like a reset that did nothing. The hop lets the
+                    // dismissal start before the root changes underneath it.
+                    dismiss()
+                    Task { @MainActor in model.reset() }
+                }
+                Button("cancel", role: .cancel) {}
             }
             .task { await model.loadDemoSettings() }
             .navigationTitle("debug")
