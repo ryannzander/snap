@@ -117,7 +117,7 @@ section('progress is measured by the same bar that releases a stake');
     w('2026-09-16T23:00:00Z', 3600), // same local day as the one above
   ];
   const junk = [
-    w('2026-09-15T16:00:00Z', 1200),                              // under the floor
+    w('2026-09-15T16:00:00Z', 300),                               // five minutes
     w('2026-09-15T16:00:00Z', 3600, 'walking'),                   // wrong type
     w('2026-09-15T16:00:00Z', 3600, 'running', true),             // hand-entered
     w('2026-09-01T16:00:00Z', 3600),                              // before the window

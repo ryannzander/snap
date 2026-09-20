@@ -29,13 +29,17 @@ Limits: `name` ≤ 100 characters and non-empty after trimming, `weeklyGoal` a w
 
 `intensity` is **optional and additive** — omit it and the user is `medium`, exactly as before. It is `easy`, `medium` or `hard`; anything else is a 400 (`intensity must be easy, medium or hard`). It is the pressure dial, and it moves three things and nothing else:
 
-| | grace before the first "where are you" | default stake when no amount is named | morning check-in |
-|---|---|---|---|
-| `easy` | 45 min | 0.02 SOL | no |
-| `medium` | 20 min | 0.05 SOL | yes |
-| `hard` | 10 min | 0.1 SOL | yes |
+| | session target | grace before the first "where are you" | stake he opens with | morning check-in |
+|---|---|---|---|---|
+| `easy` | 30 min | 45 min | 0.02 SOL | no |
+| `medium` | 45 min | 20 min | 0.05 SOL | yes |
+| `hard` | 60 min | 10 min | 0.1 SOL | yes |
 
-It also picks the voice Snap is handed for the turn. It does **not** choose workouts, sets, body parts or a plan — see `ROADMAP.md`, "Anti-coach".
+It also picks the voice Snap is handed for the turn.
+
+**The target is not a gate.** It is what Snap holds you to in the conversation; coming in under it is something he says, never something that keeps your money. Release is the same 15-minute fraud floor for everyone, and it does not know the dial exists.
+
+The stake is an opening, not a price — the user can name any amount from 0.01 SOL up. It does **not** choose workouts, sets, body parts or a plan — see `ROADMAP.md`, "Anti-coach".
 
 A new wallet is funded to cover the hardest mode's stake plus fees, so picking `hard` never means the first offer is refused for want of money.
 
@@ -104,13 +108,15 @@ Commitments come back oldest first, ordered by `dueAt`. The app shows the open o
 
 `workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts a session verified by *either* verifier. Qualifying workouts count, and a photo-verified commitment adds one more **only on a local day that has no qualifying workout of its own** — someone who trains with a watch on and also sends a picture did one session, and counting it twice would flatter the goal.
 
-A workout qualifies when it runs 30 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
+A workout qualifies when it runs 15 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
 
 A workout also has to average at least **2 active kcal/min**. Type, duration and `wasUserEntered` together still let someone press start on the Watch, sit in a car for 45 minutes and release a stake — the session is genuinely *recorded*, nobody typed it, and nobody moved. Active energy excludes basal metabolism, so sitting reads near zero while real strength work runs 5-8 kcal/min and running 10-15.
 
 That floor is only applied when `activeKcal` is actually present **and above zero**. A source that records no calories (some Strava and Hevy exports) is never rejected for it, and an exact zero is read as "the sensor recorded nothing" rather than "nobody moved" — failing an honest workout costs far more than missing a lazy cheat.
 
-This is deliberately the same bar that releases a stake: if a thing cannot release your money it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`, `barely moved`).
+This is deliberately the same bar that releases a stake: if a thing cannot release your money it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 15 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 15 min`, `typed in by hand`, `barely moved`).
+
+**15 minutes is a fraud floor, not an effort bar.** It was 30, which made it both, and a user who turned up on a bad day and left early was told "doesn't count" and lost their stake. What they were aiming for is `intensity`'s target (30/45/60 min) — a number Snap says out loud and never enforces with money.
 
 ## Rescheduling
 
@@ -288,7 +294,7 @@ Unlike the webhook, this **waits for the turn to finish** before responding — 
 
 `ROADMAP.md` → "Competitions": a pot, a rule, a set of entrants, and an oracle that settles it from HealthKit. Three kinds — `solo`, `h2h`, `group` — differ only in how many people are in the entrant list.
 
-**Verification is the same bar as a stake.** A session counts toward a goal only if it would release a stake — a verified photo, or a qualifying workout (30 minutes or longer, `wasUserEntered` false, an accepted type). A competition that counts a walk while the core loop refuses it would make "it knows" untrue the moment money is involved.
+**Verification is the same bar as a stake.** A session counts toward a goal only if it would release a stake — a verified photo, or a qualifying workout (15 minutes or longer, `wasUserEntered` false, an accepted type). A competition that counts a walk while the core loop refuses it would make "it knows" untrue the moment money is involved.
 
 ### POST /competitions
 

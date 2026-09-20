@@ -46,6 +46,11 @@ export interface AgentContext {
    */
   defaultStakeLamports: number;
   /**
+   * The session length they asked to be held to. A target Snap says out loud,
+   * not a gate — a shorter session still releases the money.
+   */
+  targetMin: number;
+  /**
    * How many sessions they have moved this week, across every commitment.
    * One is a Tuesday; four is the actual behaviour the stake is meant to
    * catch, and Snap can only call it out if he can see it.
@@ -113,7 +118,11 @@ export function buildDays(
   return out;
 }
 
-export function countThisWeek(now: number, tz: string, workouts: WorkoutLike[]): number {
+export function countThisWeek(
+  now: number,
+  tz: string,
+  workouts: WorkoutLike[],
+): number {
   const weekStart = startOfWeek(now, tz);
   let count = 0;
   for (const workout of workouts) {
@@ -274,7 +283,8 @@ export function renderContext(context: AgentContext): string {
     'open commitments:',
     commitments,
     '',
-    `if you offer and they never named an amount, the stake is ${solText(context.defaultStakeLamports)} SOL — use that number in your texts, it is the one that gets locked`,
+    `if you offer and they never named an amount, the stake is ${solText(context.defaultStakeLamports)} SOL — use that number in your texts, it is the one that gets locked. they can name their own, the floor is 0.01`,
+    `they asked to be held to ${context.targetMin}-minute sessions. that is the number you hold them to out loud. it is NOT what decides the money — any session they actually turned up for pays out, even a short one. if they come in under it, say something and then pay them anyway.`,
     '',
     'stake you have offered and they have not answered:',
     context.standingOffer

@@ -194,12 +194,15 @@ section('what counts as training');
     "doesn't count as training",
   );
   eq(
-    'under the floor',
-    disqualification(workout('2026-09-19T22:00:00Z', 1200, 'running')),
+    'five minutes is not a session',
+    disqualification(workout('2026-09-19T22:00:00Z', 300, 'running')),
     `under ${MIN_WORKOUT_SEC / 60} min`,
   );
-  // The floor is inclusive: exactly 30 minutes counts.
+  // The floor is inclusive, and it is a fraud floor rather than an effort bar:
+  // twenty minutes of a session you meant to be an hour still pays. Someone
+  // told "doesn't count" after turning up on a bad day never stakes again.
   eq('exactly at the floor', disqualification(workout('2026-09-19T22:00:00Z', MIN_WORKOUT_SEC, 'running')), null);
+  eq('twenty minutes pays', disqualification(workout('2026-09-19T22:00:00Z', 1200, 'running')), null);
 }
 
 section('effort — the hole the other three checks leave open');

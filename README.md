@@ -36,7 +36,9 @@ SNAP > nah bro, can't push this any further. your sol's already on the line.
 SNAP > ayyyeee!!! you did it bro!
 ```
 
-**Two verifiers, and neither is your word for it.** A stake is released by a photo the vision model accepts — a real person, visibly training, not a screenshot, above 0.6 confidence, and never an image already spent — or by a covering HealthKit workout underneath. A workout counts only if it ran 30 minutes or longer, averages 2 active kcal/min, is one of 12 accepted types, and `wasUserEntered` is false, so opening Health → Add Data and inventing a session cannot release money. Whatever fails says why in the trace: `doesn't count as training`, `under 30 min`, `typed in by hand`, `barely moved`.
+**Two verifiers, and neither is your word for it.** A stake is released by a photo the vision model accepts — a real person, visibly training, not a screenshot, above 0.6 confidence, and never an image already spent — or by a covering HealthKit workout underneath. A workout counts if it ran 15 minutes or longer, averages 2 active kcal/min, is one of 12 accepted types, and `wasUserEntered` is false, so opening Health → Add Data and inventing a session cannot release money. Whatever fails says why in the trace: `doesn't count as training`, `under 15 min`, `typed in by hand`, `barely moved`.
+
+**That floor is there to catch a fake, not a bad day.** You pick a target when you sign up — 30, 45 or 60 minutes — and Snap holds you to it out loud, but it never holds your money to it. Drive there, warm up, feel terrible and leave after twenty minutes and you still get paid, because turning up is the behaviour the stake is buying. "Doesn't count" is how you teach someone to stop staking. The money only moves when you did not go.
 
 The fingerprint catches resending Monday's selfie and nothing cleverer — a re-crop hashes differently and gets through. That is why the watch is still there underneath.
 

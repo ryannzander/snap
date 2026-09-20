@@ -52,16 +52,20 @@ const MAX_TEXTS = 5;
 const MAX_TEXT_LENGTH = 300;
 
 /**
- * How long a workout must run to count, and which HealthKit types qualify.
+ * How long a session must run before it can release money.
  *
- * 30 minutes is Ryan's call. The floor is inclusive: a workout of exactly 30
- * minutes counts, so the seeded 30-minute run still does.
+ * This is a fraud floor, not an effort bar. It was 30 minutes, which made it
+ * both: someone who drove to the gym, warmed up, felt terrible and left after
+ * twenty minutes got told *"under 30 min"* and lost their stake — and showing
+ * up is the behaviour the whole product is trying to buy. A workout is a
+ * workout. Fifteen minutes is long enough that nobody taps it by accident and
+ * short enough that a bad day you turned up for still pays.
  *
- * The type filter is still open — any type qualifies, so a 30-minute walk
- * closes a gym commitment. Set ACCEPTED_WORKOUT_TYPES to a list of
- * HKWorkoutActivityType case names to narrow it.
+ * What you were aiming for is still a real number — see `targetMin` on the
+ * intensity dial — but it is something Snap talks to you about, never
+ * something that quietly keeps your money. The floor is inclusive.
  */
-export const MIN_WORKOUT_SEC = 30 * 60;
+export const MIN_WORKOUT_SEC = 15 * 60;
 
 /**
  * HKWorkoutActivityType case names that count, matching what WorkoutSync
@@ -325,7 +329,16 @@ export function disqualification(workout: WorkoutWindow): string | null {
   return null;
 }
 
-/** Does a workout actually cover this commitment? HealthKit decides, not the model. */
+/**
+ * Does a workout actually cover this commitment? HealthKit decides, not the
+ * model.
+ *
+ * It asks `disqualification` rather than re-checking the rules, because it
+ * used to keep its own copy of them and the copy fell behind: the effort
+ * floor was added to one and not the other, so a 45-minute session at 40 kcal
+ * released the stake through the watch while the trace said `barely moved`
+ * and the goal dot stayed empty. One bar, in one place.
+ */
 export function findCoveringWorkout(
   workouts: WorkoutWindow[],
   windowStart: number,
@@ -336,9 +349,7 @@ export function findCoveringWorkout(
     // Anyone can open Health -> Workouts -> Add Data and invent one, and
     // "Snap knows rather than asks" has to survive a judge trying exactly
     // that. Stored either way, so the trace can say why it was ignored.
-    if (workout.wasUserEntered) continue;
-    if (workout.durationSec < MIN_WORKOUT_SEC) continue;
-    if (ACCEPTED_WORKOUT_TYPES && !ACCEPTED_WORKOUT_TYPES.includes(workout.type)) continue;
+    if (disqualification(workout) !== null) continue;
 
     const start = parseIso(workout.start);
     if (start === null) continue;

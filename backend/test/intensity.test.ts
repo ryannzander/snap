@@ -13,7 +13,7 @@ import {
   DEFAULT_INTENSITY,
   MAX_DEFAULT_STAKE_LAMPORTS,
 } from '../src/agent/intensity';
-import { guardCreate } from '../src/agent/guards';
+import { guardCreate, disqualification } from '../src/agent/guards';
 import { FEE_HEADROOM_LAMPORTS, USER_FUNDING_LAMPORTS, solText } from '../src/money';
 import { section, eq, isTrue, isFalse, done } from './harness';
 
@@ -67,6 +67,23 @@ section('the stake a commitment lands on follows the dial');
   // Naming an amount still wins over the dial — it is a default, not a cap.
   const named = guardCreate({ text: 'gym', hour: 20, sol: 0.3 }, NOW, TZ, [], settingsFor('easy').defaultStakeLamports);
   eq('a named amount overrides it', named.ok ? named.value.lamports : null, 300_000_000);
+}
+
+section('the target is a target, not a gate');
+{
+  eq('easy aims at 30', settingsFor('easy').targetMin, 30);
+  eq('medium aims at 45', settingsFor('medium').targetMin, 45);
+  eq('hard aims at an hour', settingsFor('hard').targetMin, 60);
+
+  // The point of the dial is that it moves what Snap asks for and never what
+  // the chain does. A session under the target still releases the stake: it
+  // is the same disqualification() for everyone, and it does not know the
+  // dial exists.
+  const short = { start: '2026-09-19T22:00:00Z', end: null, durationSec: 20 * 60, type: 'traditionalStrengthTraining' };
+  for (const level of INTENSITIES) {
+    eq(`${level}: twenty minutes still pays`, disqualification(short), null);
+    isTrue(`${level}: and it is under their target`, 20 < settingsFor(level).targetMin);
+  }
 }
 
 section('a new wallet can afford the mode they picked');

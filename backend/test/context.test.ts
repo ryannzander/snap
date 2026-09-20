@@ -53,7 +53,7 @@ section('the weekly count uses the same bar as releasing a stake');
 {
   const junk: WorkoutLike[] = [
     workout('2026-09-18T16:00:00Z', 3600, 'walking'),                              // wrong type
-    workout('2026-09-18T16:00:00Z', 1200, 'running'),                              // under the floor
+    workout('2026-09-18T16:00:00Z', 300, 'running'),                               // five minutes
     workout('2026-09-18T16:00:00Z', 2700, 'traditionalStrengthTraining', true),    // hand-entered
     workout('2026-09-18T16:00:00Z', 3600, 'other'),                                // wrong type
   ];
@@ -65,6 +65,12 @@ section('the weekly count uses the same bar as releasing a stake');
     workout('2026-09-17T16:00:00Z', 1800, 'running'),
   ];
   eq('two that can, count for two', countThisWeek(NOW, TZ, [...junk, ...real]), 2);
+
+  // Turning up counts. Someone who drove to the gym, warmed up, felt awful
+  // and left after twenty minutes trained — the floor is there to catch a
+  // fake, not to punish a bad day.
+  const shortDay = [workout('2026-09-16T16:00:00Z', 1200, 'traditionalStrengthTraining')];
+  eq('twenty minutes is a session', countThisWeek(NOW, TZ, shortDay), 1);
 }
 
 section('a verified photo fills a goal dot, because it releases a stake');
@@ -201,6 +207,7 @@ section('what the model actually sees');
     standingOffer: null,
     movesThisWeek: 0,
     defaultStakeLamports: 50_000_000,
+    targetMin: 45,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
@@ -271,6 +278,7 @@ section('the model is told which number to say');
     standingOffer: null,
     movesThisWeek: 0,
     defaultStakeLamports: 50_000_000,
+    targetMin: 45,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
@@ -295,6 +303,7 @@ section('an offer on the table is something the model must see');
     standingOffer: null,
     movesThisWeek: 0,
     defaultStakeLamports: 50_000_000,
+    targetMin: 45,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
