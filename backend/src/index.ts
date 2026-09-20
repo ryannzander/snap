@@ -94,6 +94,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'GET');
       return chainState(request, env);
 
+    case '/debug/inbound':
+      requireMethod(request, 'POST');
+      return debugInbound(request, env, ctx);
+
     case '/debug/reclaim':
       requireMethod(request, 'POST');
       return reclaimWallet(request, env);
@@ -422,14 +426,31 @@ async function deliver(
   const code = /^\s*yo[\s,]+(\d{4})\s*[.!]?\s*$/i.exec(text)?.[1];
 
   if (code) {
-    const userId = await directoryStub(env).lookupLinkCode(code);
+    const directory = directoryStub(env);
+
+    // Guessing costs attempts. Four digits is ten thousand tries and a hit
+    // hands over somebody's whole thread, so a chat gets a handful and then
+    // stops being listened to. Spent BEFORE the lookup, or the counter only
+    // ever moves on codes that were already wrong for another reason.
+    if (!(await directory.spendLinkAttempt(channel, chatId))) {
+      return json({ ok: true, ignored: 'too many link attempts' });
+    }
+
+    const userId = await directory.lookupLinkCode(code);
     // An unknown code gets no reply: answering would burn a message from the
     // sandbox budget and tell a stranger whether a code exists.
     if (!userId) return json({ ok: true, ignored: 'unknown link code' });
 
-    await directoryStub(env).bindChat(channel, chatId, userId);
+    await directory.bindChat(channel, chatId, userId);
     const result = await userStub(env, userId).linkChat(channel, chatId);
-    return result.ok ? json({ ok: true, linked: true }) : json({ ok: true, ignored: 'no such user' });
+    if (!result.ok) return json({ ok: true, ignored: 'no such user' });
+
+    // Spent only now, once something is actually linked — a bind that failed
+    // halfway would otherwise leave the code dead and the person with no way
+    // in. A linked chat gets its attempt count back, too.
+    await directory.consumeLinkCode(code, userId);
+    await directory.clearLinkAttempts(channel, chatId);
+    return json({ ok: true, linked: true });
   }
 
   const userId = await directoryStub(env).lookupChat(channel, chatId);
@@ -526,6 +547,39 @@ async function chainState(request: Request, env: Env): Promise<Response> {
     runway:
       treasury.lamports === null ? null : Math.floor(treasury.lamports / USER_FUNDING_LAMPORTS),
   });
+}
+
+/**
+ * Delivers a text down the REAL inbound path, without a signature.
+ *
+ * `/debug/message` takes a user's token and skips straight to the agent, which
+ * means the code in front of it — link codes, chat routing, opt-out — was
+ * reachable only through a signed Linq webhook. So the one step the whole demo
+ * depends on, `yo <code>`, could not be tested by anything but a real phone,
+ * and changing it was a change nobody could check.
+ *
+ * Same door as the vendor's, minus the vendor. Debug key only, since there is
+ * no user yet to hold a token — which is the point of it.
+ */
+async function debugInbound(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/inbound');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+
+  const body = await readJsonBody(request);
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+  }
+  const record = body as Record<string, unknown>;
+  const chatId = typeof record.chatId === 'string' ? record.chatId.trim() : '';
+  const text = typeof record.text === 'string' ? record.text : '';
+  if (!chatId) throw new HttpError(400, 'bad_request', 'chatId is required');
+
+  const channel: ChannelName = record.channel === 'trace' ? 'trace' : 'linq';
+  return deliver(env, ctx, channel, chatId, text);
 }
 
 /**

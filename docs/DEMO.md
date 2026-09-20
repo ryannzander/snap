@@ -17,6 +17,7 @@ The backend now stops at 95 and writes a trace line at 70, so the cliff is somet
 - **Onboard once, tonight.** Never `POST /debug/forget` on the demo user — it wipes the link and re-onboarding costs another 10.
 - **Reset between judges with `POST /debug/seed`.** Clears commitments, workouts and the trace; keeps the profile, the token and the chat link. Costs nothing.
 - **Practise on Telegram, demo on iMessage.** Telegram has no cap and is already linked on the phone. Every rehearsal run on the real line is a judge you can't show.
+- **`POST /debug/inbound` costs nothing.** `{"chatId": "+1…", "text": "yo 4821"}` goes down the real inbound path — link codes, routing, opt-out — without the vendor and without a signature. Use it to rehearse linking rather than burning real texts on it.
 - **Count out loud.** Ryan keeps a tally, and the trace warns at 70. At one run left, switch to showing the brain screen instead of running it live.
 
 ---
