@@ -119,6 +119,8 @@ const KEY = {
   proof: (fingerprint: string) => `proof:${fingerprint}`,
   /** Stage settings. See DemoSettings. */
   demo: 'demo',
+  /** When Snap last spoke, for the burst cap. See `claimSendSlots`. */
+  sendLog: 'send:log',
   competition: (id: string) => `competition:${id}`,
   /** The stake Snap has proposed and the user has not answered yet. */
   offer: 'offer',
@@ -142,6 +144,32 @@ const STATE_DAY_WINDOW = 30;
 
 /** Snap asks about the day at this hour, local, when nothing is committed. */
 const MORNING_HOUR = 9;
+
+/**
+ * Two ceilings on Snap's own texts, both measured rather than guessed.
+ *
+ * Counting a real end-to-end run through the deployed Worker: an offer, a
+ * grace nudge, a reply, a last call and a photo answer came to 16-38 texts
+ * over a few minutes. So a cap near ten would have cut a single honest demo
+ * in half — the five-per-turn rule was never the problem, the number of TURNS
+ * is, and this is the one that bounds a burst across them.
+ *
+ * `SEND_BURST_MAX` is set where a runaway shows and a real run does not: a
+ * loop re-entering would pass thirty in seconds, and nothing honest gets near
+ * it in ten minutes.
+ *
+ * `SEND_DAY_MAX` is the one that matters on the day. The Linq sandbox is a
+ * hundred messages in twenty-four hours, onboarding spends ten of them, and a
+ * run spends fifteen to twenty more — so the real budget is four or five
+ * runs, not the eight it looks like. Five are left in reserve so the cliff is
+ * a trace line somebody can read rather than Snap silently going mute halfway
+ * through a judge.
+ */
+const SEND_BURST_MAX = 30;
+const SEND_WINDOW_MS = 10 * 60 * 1000;
+const SEND_DAY_MAX = 95;
+const SEND_DAY_WARN = 70;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const TRACE_PAGE_LIMIT = 200;
 
 /** Durable Object storage takes at most 128 keys per batched get/put. */
@@ -594,7 +622,7 @@ export class UserAgent extends DurableObject<Env> {
     // webhook, which retries anything slow — so it finishes in the background
     // while the webhook answers now. Same reason the inbound turn does.
     this.ctx.waitUntil(
-      this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null)),
+      this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null), false),
     );
     return ok({ greeted: true });
   }
@@ -608,7 +636,7 @@ export class UserAgent extends DurableObject<Env> {
    */
   private async explainAgain(): Promise<void> {
     const profile = await this.ctx.storage.get<Profile>(KEY.profile);
-    await this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null, true));
+    await this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null, true), false);
   }
 
   /** Records an inbound text, or a photo. The agent acts on it in `runInboundTurn`. */
@@ -1224,23 +1252,96 @@ export class UserAgent extends DurableObject<Env> {
    * Sends a burst of texts and traces each one. Every channel is traced the
    * same way, so the brain screen is identical whether or not delivery is real.
    */
-  async sendTexts(texts: string[]): Promise<void> {
+  /**
+   * Says it out loud, unless Snap has already said too much.
+   *
+   * `metered` is on for anything the model wrote and off for the fixed
+   * onboarding copy, which is ten texts sent once and cannot be trimmed
+   * without breaking the one message that explains how money moves.
+   */
+  async sendTexts(texts: string[], metered = true): Promise<void> {
     if (texts.length === 0) return;
 
     const link = await this.ctx.storage.get<Link>(KEY.link);
     if (!link?.linked || !link.chatId || !link.channel) return;
     if (link.optedOut) return;
 
-    await this.appendTraces(texts.map((text) => ({ kind: 'message_sent' as const, summary: text })));
+    const allowed = metered ? await this.claimSendSlots(texts.length) : texts.length;
+    if (allowed === 0) {
+      // Traced, not sent: the brain screen still shows what he meant to say,
+      // which is the difference between a cap and a mystery.
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `held ${texts.length} texts — out of send budget (${SEND_BURST_MAX}/${SEND_WINDOW_MS / 60_000}min, ${SEND_DAY_MAX}/day)`,
+          data: { held: texts },
+        },
+      ]);
+      return;
+    }
+
+    const sending = texts.slice(0, allowed);
+    await this.appendTraces(sending.map((text) => ({ kind: 'message_sent' as const, summary: text })));
+    if (allowed < texts.length) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `held the last ${texts.length - allowed} of ${texts.length} texts — burst cap`,
+          data: { held: texts.slice(allowed) },
+        },
+      ]);
+    }
 
     try {
-      const ids = await this.channelFor(link.channel).send(link.chatId, texts);
-      await this.rememberOutbound(texts, ids);
+      const ids = await this.channelFor(link.channel).send(link.chatId, sending);
+      await this.rememberOutbound(sending, ids);
     } catch (error) {
       // A send failure must not lose the trace or fail the caller's request;
       // the brain screen still shows what Snap decided to say.
       console.error('channel send failed', redact(String(error)));
     }
+  }
+
+  /**
+   * How many of a burst Snap is allowed to actually send right now.
+   *
+   * A turn is capped at five texts, but nothing bounded a burst ACROSS turns —
+   * an alarm, a reply and a follow-up in the same minute are three separate
+   * turns and three separate bursts. A loop that re-entered would have emptied
+   * the Linq sandbox's hundred a day in under a minute, and that budget is the
+   * one the demo runs on: onboarding spends ten of it and a full run spends
+   * another ten, so there are only six to eight runs in a day to begin with.
+   *
+   * Sliding window rather than a daily counter, because the failure this
+   * guards against is a burst, and a daily quota would let a runaway spend the
+   * lot in a minute and then go silent for the rest of the day.
+   */
+  private async claimSendSlots(wanted: number): Promise<number> {
+    const now = this.now();
+    const log = ((await this.ctx.storage.get<number[]>(KEY.sendLog)) ?? []).filter((at) => at > now - DAY_MS);
+    const inWindow = log.filter((at) => at > now - SEND_WINDOW_MS).length;
+
+    const room = Math.min(SEND_BURST_MAX - inWindow, SEND_DAY_MAX - log.length);
+    const take = Math.max(0, Math.min(wanted, room));
+
+    // Always write back the pruned log, so a day's worth of timestamps cannot
+    // accumulate on an account that has stopped talking.
+    await this.ctx.storage.put(KEY.sendLog, [...log, ...Array<number>(take).fill(now)].slice(-SEND_DAY_MAX));
+
+    // The cliff has to be visible BEFORE it arrives. Snap going quiet halfway
+    // through a judge, with nothing in the trace saying why, is the worst way
+    // to find out the sandbox is spent.
+    const after = log.length + take;
+    if (after >= SEND_DAY_WARN && log.length < SEND_DAY_WARN) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `heads up — ${after} of ${SEND_DAY_MAX} texts used in the last 24h`,
+          data: { used: after, ceiling: SEND_DAY_MAX },
+        },
+      ]);
+    }
+    return take;
   }
 
   /** Keeps the last few of Snap's texts addressable, so a tapback can name one. */

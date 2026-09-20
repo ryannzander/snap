@@ -8,14 +8,16 @@ For Sunday. Judges walk up, you show them the thing, they interrupt, they leave,
 
 ## Before anything: the budget
 
-**The Linq sandbox is 100 messages a day.** Onboarding alone is 10, and a full run is 8–12 more.
+**The Linq sandbox is 100 messages a day.** Onboarding alone is 10 — and a full run is **15–20 more**, not the 8–12 it looks like. That is counted, not estimated: an offer, a grace nudge, a reply, a last call and a photo answer came to 16–38 texts across real end-to-end runs through the deployed Worker.
 
-That is **six to eight complete runs**, and then Snap goes silent for the rest of the day.
+So the honest number is **four or five complete runs**, and then Snap goes silent.
+
+The backend now stops at 95 and writes a trace line at 70, so the cliff is something you can read coming rather than Snap going mute halfway through a judge. Watch for `heads up — 70 of 95 texts used`.
 
 - **Onboard once, tonight.** Never `POST /debug/forget` on the demo user — it wipes the link and re-onboarding costs another 10.
 - **Reset between judges with `POST /debug/seed`.** Clears commitments, workouts and the trace; keeps the profile, the token and the chat link. Costs nothing.
 - **Practise on Telegram, demo on iMessage.** Telegram has no cap and is already linked on the phone. Every rehearsal run on the real line is a judge you can't show.
-- **Count out loud.** Ryan keeps a tally. At two runs left, say so.
+- **Count out loud.** Ryan keeps a tally, and the trace warns at 70. At one run left, switch to showing the brain screen instead of running it live.
 
 ---
 
