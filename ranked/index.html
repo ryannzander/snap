@@ -457,12 +457,18 @@ textarea.ta:focus{border-color:var(--accent)}
         <h3><span>Does any of this predict winning?</span><span>tested on 2023, 2024 and 2025</span></h3>
         <div class="pad">
           <p class="tiny" style="margin:0 0 14px">Devpost marks past winners, so this model was run over three
-            finished Hack the Norths — 706 projects with real write-ups, 127 of which won something — and scored on
-            whether it ranks a winner above a non-winner. 0.50 is a coin flip.</p>
+            finished Hack the Norths — 706 projects with real write-ups, 127 of which won something and 35 of which
+            became Finalists — and scored on whether it ranks them above everyone else. 0.50 is a coin flip.
+            Nobody publishes who advanced to round&nbsp;2, so the 12 Finalists a year are the closest proxy for
+            surviving the main judging. It makes no difference: the model lands near 0.61 whatever you aim it at.</p>
           <div class="scroll"><table style="min-width:520px">
             <thead><tr><th>Signal</th><th class="n">2023</th><th class="n">2024</th><th class="n">2025</th><th class="n">mean</th><th>verdict</th></tr></thead>
             <tbody id="valBody"></tbody>
           </table></div>
+          <p class="tiny" style="margin-top:14px"><b>Concretely, for Finalists.</b> 5.0% of rated projects became one.
+            Of our top 10, <b>20%</b> did. Of our #11&ndash;25, <b>2%</b>. Of #26&ndash;50, 5%. Of #51&ndash;100, 6%.
+            Of #101 and below, 4%. Outside a small head the ranking is flat &mdash; it carries no information at all.
+            A third of Finalists sat in our bottom half, and one we ranked <b>237th</b>.</p>
           <p class="tiny">What winners actually did differently, pooled across the three years:
             <b>demo video 67% vs 41%</b>, repo linked 94% vs 85%, write-up 617 vs 513 words, tags 4 vs 3.
             Measured numbers and evidence phrases: no difference at all. Winners also polish their pages after
@@ -1252,9 +1258,11 @@ function buildIdeas(p){
   return out.sort((a, b) => b.score - a.score).slice(0, 6);
 }
 const VALID = [
+  ['&rarr; predicting a FINALIST',   [0.511,0.680,0.638], 'CI touches a coin flip'],
+  ['&rarr; predicting a sponsor prize', [0.629,0.563,0.620], 'no better'],
+  ['&rarr; predicting any prize',    [0.594,0.607,0.636], 'no better'],
   ['Demo video (not in the rating)', [0.586,0.671,0.595], 'best single predictor'],
   ['Team size (not in the rating)',  [0.676,0.565,0.573], 'strong, and unfixable tonight'],
-  ['The composite rating',           [0.594,0.607,0.636], 'weak but real'],
   ['Technical depth',                [0.589,0.560,0.639], 'weak'],
   ['Completeness',                   [0.558,0.582,0.646], 'weak'],
   ['Originality',                    [0.600,0.597,0.540], 'weak'],
