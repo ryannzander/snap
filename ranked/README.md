@@ -40,8 +40,9 @@ admin-only — the Actions token can neither create the site nor read the settin
 npx vercel --prod
 ```
 
-Anonymous (`--temporary`) Vercel deployments expire after an hour and cannot be renewed in
-place, so they are only useful while something keeps redeploying them.
+Anonymous (`--temporary`) deployments are not worth it here: they expire an hour after the
+first one and cannot be renewed in place or claimed afterwards, so the URL dies mid-event.
+The refresh script used to publish one and no longer does.
 
 Any static host works the same way (GitHub Pages, Netlify, Cloudflare Pages, `python3 -m http.server`).
 

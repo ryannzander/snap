@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One full refresh: gallery -> pages -> score -> enrich -> build -> repo -> vercel.
+# One full refresh: gallery -> pages -> score -> enrich -> build -> repo -> githack.
 # Safe to re-run; idempotent apart from the snapshot rotation.
 set -uo pipefail
 cd "$(dirname "$0")"
@@ -89,14 +89,8 @@ else
   echo "no repo change"
 fi
 
-# 6. deploy -------------------------------------------------------------------
+# 6. publish ------------------------------------------------------------------
 cd "$REPO/ranked"
-for a in 1 5 15 30; do
-  OUT=$(timeout 300 npx --yes vercel@latest deploy --temporary --yes 2>&1)
-  if echo "$OUT" | grep -q '^▲'; then echo "$OUT" | grep -E '^▲' | head -1; break; fi
-  echo "deploy attempt failed: $(echo "$OUT" | grep -iE 'error' | head -1)"
-  sleep $a
-done
 # githack serves the pushed file directly, so the branch URL is already current.
 GH="https://raw.githack.com/ryannzander/snap/claude/amazing-babbage-hveamd/ranked/index.html"
 code=$(curl -sS -o /dev/null -m 60 -w '%{http_code}' "$GH" || echo 000)
