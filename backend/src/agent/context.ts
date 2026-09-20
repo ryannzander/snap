@@ -77,6 +77,15 @@ export interface WorkoutLike {
   type: string;
   end: string | null;
   wasUserEntered?: boolean;
+  /**
+   * Active energy, excluding basal. Null when the source did not record it.
+   *
+   * Here because `disqualification` reads it: a shape that leaves it out
+   * typechecks and then quietly skips the effort floor, so "2/4 this week"
+   * would count a session the release path rejects. The bar has to be the
+   * same bar, and the type is half of saying so.
+   */
+  activeKcal?: number | null;
 }
 
 /**
@@ -300,13 +309,17 @@ export function renderContext(context: AgentContext): string {
           // out, so the refusal beat only landed when it guessed wrong first.
           const due = parseIso(c.dueAt);
           const used = c.renegotiations >= MAX_RENEGOTIATIONS;
-          const tooLate = due !== null && due - Date.parse(context.now) < RESCHEDULE_LEAD_MS;
+          // An unreadable deadline is a locked door, not an open one:
+          // guardReschedule refuses it outright, and the alternative was
+          // rendering `0 - an hour` as a 1969 timestamp and telling the user
+          // they had until then.
+          const tooLate = due === null || due - Date.parse(context.now) < RESCHEDULE_LEAD_MS;
           const door = used
             ? 'locked — they already used their move'
             : tooLate
               ? 'locked — under an hour left, it cannot be moved'
               : `can still be moved, but only until ${localStamp(
-                  new Date((due ?? 0) - RESCHEDULE_LEAD_MS).toISOString(),
+                  new Date(due - RESCHEDULE_LEAD_MS).toISOString(),
                   context.timezone,
                 )} their time`;
           const ask = challengeById(c.challenge);

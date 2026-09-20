@@ -41,9 +41,11 @@ export function verifyPrompt(challenge: string | null): string {
   if (!challenge) return VERIFY_PROMPT;
   return `${VERIFY_PROMPT}
 
-one more thing. the person was asked to put a specific gesture in this photo, so that an old or borrowed picture cannot pass. also answer:
+one more thing. the person was asked to put a specific gesture in this photo, so that an old or borrowed picture cannot pass. put ONE MORE KEY in the same json object, alongside the ones above — the object you reply with is:
 
-"challenge": true|false — ${challenge}. true ONLY if you can actually see it. if the hands are out of frame, blurred, or you are guessing, answer false.`;
+{"training": true|false, "person": true|false, "gym": true|false, "screenshot": true|false, "confidence": 0.0, "description": "one plain literal sentence", "challenge": true|false}
+
+"challenge" is: ${challenge}. true ONLY if you can actually see it. if the hands are out of frame, blurred, or you are guessing, answer false. never leave this key out.`;
 }
 
 export const VERIFY_PROMPT = `you are checking whether a photo proves someone just trained.
@@ -237,7 +239,15 @@ export function readVerdict(
         description,
         verdict: 'unsure',
         rejection: `i asked for ${challenge.ask} — can't see it`,
-        challengeMissed: true,
+        // Only an explicit `false` is a definite answer. A model that did not
+        // answer the question at all is a HEDGE — the fallback vision model
+        // returns the six keys the schema names and nothing else — and the
+        // `lenient` valve exists precisely to rescue a hedge. Flagging a
+        // silent model as a definite miss would refuse every genuine photo on
+        // the fallback path with the one setting that could have saved it
+        // switched off. The money still does not move either way: the verdict
+        // stays `unsure`, and `strict` refuses both.
+        ...(satisfied === false ? { challengeMissed: true } : {}),
       };
     }
   }

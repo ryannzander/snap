@@ -140,6 +140,21 @@ section('the stage valve does not quietly switch the gesture off');
   isTrue('a gesture miss is flagged', missed.challengeMissed === true);
   isFalse('a hedge is not', hedged.challengeMissed === true);
   isFalse('and neither is a pass', readVerdict(good(', "challenge": true'), three).challengeMissed === true);
+
+  // And a model that did not answer the question at all is a HEDGE, not a
+  // miss. The Workers AI fallback answers the six keys the schema names and
+  // drops anything else, so reading silence as "looked and it wasn't there"
+  // would refuse every genuine photo on the fallback path with the one
+  // setting that could have saved it switched off. Nothing moves either way
+  // under strict; lenient is allowed to rescue it and not the other.
+  const silent = readVerdict(good(), three);
+  eq('a silent model still does not pay under strict', applyPhotoMode(silent.verdict, 'strict', silent.challengeMissed ?? false).verdict, 'unsure');
+  isFalse('a silent model is not a definite miss', silent.challengeMissed === true);
+  eq(
+    'so lenient can still rescue it',
+    applyPhotoMode(silent.verdict, 'lenient', silent.challengeMissed ?? false).verdict,
+    'training',
+  );
 }
 
 done('photo challenges');

@@ -885,10 +885,16 @@ export class UserAgent extends DurableObject<Env> {
 
     // The gesture this photo has to have in it, if there is a stake waiting on
     // one. No open commitment means nothing to prove, so nothing is asked for.
-    const openNow = (await this.loadCommitments()).filter(
-      (c) => c.status === 'pending' || c.status === 'renegotiated',
+    //
+    // Selected by exactly the predicate `judgePhoto` releases on, so the
+    // gesture asked for and the stake paid out are always the same
+    // commitment: asking for one commitment's gesture while another one's
+    // money is on the line refuses someone who did what they were told.
+    const openNow = (await this.loadCommitments()).find(
+      (c) =>
+        (c.status === 'pending' || c.status === 'renegotiated') && c.stake.status === 'held',
     );
-    const challenge = challengeById(openNow[0]?.challenge);
+    const challenge = challengeById(openNow?.challenge);
 
     let look: PhotoLook | null = null;
     try {
@@ -1777,8 +1783,13 @@ export class UserAgent extends DurableObject<Env> {
     switch (scheduled.kind) {
       case 'grace': {
         const commitment = await this.commitment(scheduled.commitmentId);
-        // Already settled, or talked forward — nothing to check on.
-        if (!commitment || commitment.status !== 'pending') return;
+        // Already settled — nothing to check on. A RENEGOTIATED one still
+        // counts: reschedule puts this wake-up on the new deadline so the
+        // warning lands before the money moves, and refusing to run it here
+        // is what left a moved commitment slashed with nothing said first.
+        if (!commitment || (commitment.status !== 'pending' && commitment.status !== 'renegotiated')) {
+          return;
+        }
 
         // A verified photo settles the commitment the moment it lands, so
         // this is belt and braces — but nagging someone who has already sent
@@ -1798,8 +1809,16 @@ export class UserAgent extends DurableObject<Env> {
             data: { commitmentId: commitment.id, kind: 'grace' },
           },
         ]);
+        // A moved deadline IS the slash point, so this wake-up sits ON it and
+        // the money goes when the grace after it closes. An original deadline
+        // is the other way round: the grace has already run and the money
+        // goes at end of day. Saying the wrong one is Snap misreporting the
+        // one number the user is deciding on.
+        const due = clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone);
         await this.runAgent(
-          `you woke yourself up. "${commitment.text}" was due at ${clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone)} and the ${commitment.graceMin} minute grace has passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`,
+          commitment.status === 'renegotiated'
+            ? `you woke yourself up. "${commitment.text}" is the one they already moved once, to ${due}, and that time just passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it in ${commitment.graceMin} minutes, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`
+            : `you woke yourself up. "${commitment.text}" was due at ${due} and the ${commitment.graceMin} minute grace has passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`,
         );
         return;
       }
@@ -2030,8 +2049,18 @@ export class UserAgent extends DurableObject<Env> {
       // Throwing the draft away and asking again costs one model call and
       // makes it impossible for Snap to misreport what it just did, because
       // the context is rebuilt after the action rather than before it.
-      await this.followUp(brain, profile, instruction, acted, true);
-      executed.push('send_messages');
+      //
+      // Unless that second call does not come back. Silence on the turn that
+      // just locked or moved someone's money is worse than a draft written a
+      // beat early, so an unreachable model falls back to what it had.
+      if (await this.followUp(brain, profile, instruction, acted, true)) {
+        executed.push('send_messages');
+      } else {
+        for (const call of decision.toolCalls) {
+          if (!isTalking(call.name)) continue;
+          if (await this.dispatch(call, profile)) executed.push(call.name);
+        }
+      }
     } else {
       for (const call of decision.toolCalls) {
         if (!isTalking(call.name)) continue;
@@ -2043,9 +2072,17 @@ export class UserAgent extends DurableObject<Env> {
     // or no — and "did they agree?" against two options is a far easier call
     // than picking one of eight tools. This is the whole reason Snap offers
     // rather than waiting to be told an amount.
+    //
+    // A stake taken HERE was taken after the turn's texts were already
+    // written, so whatever went out was written before the commitment — and
+    // its gesture — existed. That draft cannot have named either, so this
+    // needs the same second pass an in-band accept gets, whether or not Snap
+    // has already said something this turn.
+    let acceptedLate = false;
     if (fromUser && standingOffer && !executed.includes('accept_offer') && !executed.includes('create_commitment')) {
       if (await this.confirmAcceptance(brain, profile, instruction)) {
         executed.push('accept_offer');
+        acceptedLate = true;
       }
     }
 
@@ -2076,10 +2113,11 @@ export class UserAgent extends DurableObject<Env> {
     // A tapback is an answer. Forcing a text on top of one is how a thread
     // ends up with a 👍 and then "👍" typed out underneath it.
     const spoke =
-      executed.includes('send_messages') ||
-      executed.includes('stay_quiet') ||
-      executed.includes('react') ||
-      executed.includes('offer_stake');
+      !acceptedLate &&
+      (executed.includes('send_messages') ||
+        executed.includes('stay_quiet') ||
+        executed.includes('react') ||
+        executed.includes('offer_stake'));
 
     if (!spoke) {
       // Creating a commitment or accepting an offer is a moment that demands
@@ -2265,14 +2303,21 @@ not a system rejecting them.`,
     await this.followUp(brain, profile, instruction, [], true);
   }
 
-  /** Second pass: you acted, now say something — or justify not saying it. */
+  /**
+   * Second pass: you acted, now say something — or justify not saying it.
+   *
+   * Returns whether anything actually went out, so a caller that threw its
+   * first draft away can tell "the model chose silence" from "the model was
+   * unreachable" and put the draft back rather than leave a locked stake
+   * unremarked on.
+   */
   private async followUp(
     brain: Brain,
     profile: Profile,
     instruction: string,
     executed: string[],
     mustSpeak = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const did = executed.length
       ? `you already did this, it is done: ${executed.join(', ')}. the block above is the state AFTER it.`
       : 'you did nothing yet.';
@@ -2292,11 +2337,16 @@ not a system rejecting them.`,
           : `${instruction}\n\n${did} now text them about it, in your voice. if silence is genuinely right, call stay_quiet instead.`,
         tools: talking,
       });
-      for (const call of decision.toolCalls) await this.dispatch(call, profile);
+      let said = false;
+      for (const call of decision.toolCalls) {
+        if (await this.dispatch(call, profile)) said ||= call.name === 'send_messages';
+      }
+      return said;
     } catch (error) {
       await this.appendTraces([
         { kind: 'decision', summary: 'could not reach the brain for a reply', data: { error: redact(String(error)) } },
       ]);
+      return false;
     }
   }
 
@@ -2627,10 +2677,25 @@ not a system rejecting them.`,
    * When the money moves for this commitment: the renegotiated deadline if
    * there is one, otherwise end of the local day the commitment was for.
    */
+  /**
+   * When the money moves for this commitment. One answer, used by the guard,
+   * by the covering-workout window and by the alarm, because three answers is
+   * how a stake gets taken while someone is mid-set.
+   *
+   * A renegotiated deadline IS the slash point rather than end of day — they
+   * used their move, so they do not also get the rest of the day. It carries
+   * the same grace as any other deadline, though, and this has to say so: the
+   * reschedule schedules the slash at `dueAt + graceMin`, and while this
+   * returned the bare `dueAt` the two disagreed by exactly that window. A
+   * session started five minutes past a renegotiated deadline fell outside
+   * `findCoveringWorkout`'s window and could not cover the commitment it was
+   * for, and `guardSlash` would have allowed the model to take the money
+   * during the grace it had just been promised.
+   */
   private endOfDayFor(commitment: StoredCommitment | null, profile: Profile): number {
     if (commitment?.status === 'renegotiated') {
       const dueAt = parseIso(commitment.dueAt);
-      if (dueAt !== null) return dueAt;
+      if (dueAt !== null) return dueAt + commitment.graceMin * 60_000;
     }
     const anchor = commitment ? (parseIso(commitment.dueAt) ?? this.now()) : this.now();
     return endOfLocalDay(anchor, profile.timezone);
@@ -2644,6 +2709,13 @@ not a system rejecting them.`,
     ]);
     const now = this.now();
 
+    // Built once over 30 days — the same window /state hands the schedule
+    // screen, so the streak Snap says and the number on their home screen are
+    // one number; seven would quietly cap every streak at a week. The seven
+    // the model reads is the tail of it, oldest first, so one pass over the
+    // workouts answers both.
+    const days = buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment), 30);
+
     return {
       now: this.nowIso(),
       localTime: localClock(now, profile.timezone),
@@ -2651,13 +2723,8 @@ not a system rejecting them.`,
       name: profile.name,
       weeklyGoal: profile.weeklyGoal,
       workoutsThisWeek: countVerifiedThisWeek(now, profile.timezone, workouts, commitments),
-      lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
-      // Counted over 30 days, the same window /state hands the schedule screen,
-      // so the number Snap says and the number on their home screen are one
-      // number. Seven would quietly cap every streak at a week.
-      streak: currentStreak(
-        buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment), 30),
-      ),
+      lastSevenDays: days.slice(-7),
+      streak: currentStreak(days),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
         .map((c) => ({ ...toWireCommitment(c), renegotiations: rescheduleCount(c) })),

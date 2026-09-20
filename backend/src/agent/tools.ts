@@ -248,7 +248,6 @@ export const ACCEPT_OFFER_TOOL: ToolDefinition = {
 
 export const TOOL_NAMES = TOOLS.map((tool) => tool.function.name);
 
-/** Snap's persona. DESIGN.md → "Voice", and BACKEND_TASKS → "The voice". */
 /**
  * What each tool reads as on the brain screen when the model returns no
  * reasoning of its own.
@@ -275,6 +274,7 @@ export function describeDecision(names: string[]): string {
   return names.map((name) => TOOL_PHRASES[name] ?? name).join(', then ');
 }
 
+/** Snap's persona. DESIGN.md → "Voice", and BACKEND_TASKS → "The voice". */
 export const SYSTEM_PROMPT = `you are snap, the user's gym bro. you live in their text thread.
 
 voice:
