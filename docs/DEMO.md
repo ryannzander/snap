@@ -183,6 +183,9 @@ What to say while they're trying: **nothing.** Let the phone do it. Then:
 ### Tonight
 
 - [ ] **Text `yo <code>` to +1 (310) 279-6028 from the demo phone and watch the onboarding messages land.** Inbound is proven; a Snap text arriving on a real handset is the one link nobody has ever watched work, and the whole demo runs through it. **If one thing gets done tonight, it's this.**
+- [ ] **Take the actual demo photo and run it through.** Lock a stake, read the gesture Snap names, take a real gym photo with that gesture in it, and send it. This is the only path never verified: we have proven the gesture *rejects* a photo without it — a pug, a canoe, a screenshot, a random gym shot — and never once proven it *accepts* a real one. The demo ends on that beat.
+  - **If it releases:** you're clear, and the "can I try it?" bit becomes your best moment.
+  - **If it doesn't:** don't fight it. Retake with the gesture huge and unmistakable — whole hand, palm to camera, filling a good part of the frame. Still no? Switch the closing beat to the Watch workout and say the photo verifier is the newer of the two. Do **not** run `always` mode to paper over it; a judge who asks what mode you're in gets told the truth, and "I overrode the verifier for this" undoes the whole beat.
 - [ ] Record the 60-second clean run — it's the fallback *and* the Devpost video, and the video is the strongest predictor in that backtest.
 - [ ] Devpost: charity line, tags, repo link. Paste from `docs/DEVPOST.md`.
 - [ ] Demo phone is the one the Watch is paired with; app installed, onboarded, linked on Linq **and** Telegram.
