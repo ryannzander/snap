@@ -62,6 +62,30 @@ A brand funds the pot; users enter free or with a stake; Snap settles it.
 - **Fantasy.** Draft your friends. Their verified workouts score points for your team each week; skips cost you. Snap texts the league: "ryan's team is carried entirely by his mom." Fantasy is the growth loop — you can't play without inviting the people you draft, and they can't score without onboarding HealthKit.
 - **Seasons.** Monthly. Season pot from house rake + a sponsor. Top of the ladder at season end splits it.
 
+### 4. Live challenges — the one HealthKit cannot judge
+
+Everything above verifies *that you trained*. None of it verifies *what you did*. A 45-minute strength session and 45 minutes of half-hearted machine circuits are the same row in HealthKit, and a bench PR is not a HealthKit data type at all.
+
+Live challenges are the answer to that, and they are a game rather than a feature: two to eight people on a video call, phones propped up, everyone doing the same exercise. Each phone counts its own reps from the camera. Loser's stake goes to the winner.
+
+**Pose counting is cheap and needs no data.** Apple's Vision framework ships `VNDetectHumanBodyPoseRequest` — 19 joints, on-device, no model to train and nothing to collect. A pushup rep is the elbow angle crossing a threshold and returning. Depth is the same measurement: if the elbow never passes ~90° at the bottom, score it half. Form scoring is joint-angle heuristics, not machine learning, which is why this is days of work rather than a research project.
+
+**The video call is not garnish — it is the verification.** This is the part worth being clear-eyed about. A rep count posted by our own app is self-reported by software we control, which is *strictly weaker* than HealthKit. What makes a live challenge trustworthy is the opponent watching you do it. Pose counting without the call is a worse version of what Snap already has; the call without pose counting is just a video chat. Both or neither.
+
+**It plugs into the engine that already exists.** The `Competition` object already holds a pot, a rule, an entrant list and an oracle, and already settles pro rata with the rake coming out of what the skippers forfeited. A live challenge is one more goal type — `reps`, with an exercise — and a settlement that reads final counts instead of HealthKit. No new money path.
+
+**What it costs, honestly:**
+
+| piece | size |
+|---|---|
+| Pose counting + form scoring on-device | ~1 day of iOS |
+| Multi-party video (WebRTC, signalling, TURN) | the real cost — days, and the first thing to buy rather than build |
+| Backend: `reps` goal type, live scoreboard | small, the engine is there |
+
+**Why it is worth it anyway.** It is the first thing in this document that is inherently viral: you cannot do a 1v1 without inviting someone, and a 4v4 drags in six people who each need the app. It is also the only feature here a spectator can understand in three seconds, which matters more for growth than anything about escrow.
+
+**Where it does not go.** This stays a side mode, not the main loop. Snap's claim is that it never asks — filming yourself is asking, with extra steps, and the day the core loop requires a camera is the day we become Forfeit with more steps. The daily commitment stays passive and sensor-verified; live challenges are what you do *because you want to*, on a Friday night, for money.
+
 ### What stays true across all of them
 
 - Verification is always HealthKit. No photos, no self-report, no "trust me." A comp that can be gamed is worth nothing to a sponsor.
