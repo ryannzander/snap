@@ -1,0 +1,66 @@
+name = "snap"
+main = "src/index.ts"
+compatibility_date = "2026-09-15"
+
+# Logs in the Cloudflare dashboard. Worth having when something goes wrong
+# on stage and there is no terminal attached.
+[observability]
+enabled = true
+
+# One Durable Object per user: profile, workouts, commitments, trace feed,
+# and (from step 4) the alarms that make Snap proactive.
+[[durable_objects.bindings]]
+name = "USER_AGENT"
+class_name = "UserAgent"
+
+# Single global object holding the `yo <code>` link-code index.
+[[durable_objects.bindings]]
+name = "DIRECTORY"
+class_name = "Directory"
+
+[[durable_objects.bindings]]
+name = "COMPETITION"
+class_name = "Competition"
+
+[[migrations]]
+tag = "v1"
+# SQLite-backed Durable Objects — required on the free plan.
+new_sqlite_classes = ["UserAgent", "Directory"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Competition"]
+
+# Where /onboard tells the app to text Snap. Placeholders until the Telegram
+# bot and the Linq sandbox number exist; not secrets, so they live here.
+[vars]
+SNAP_TELEGRAM = "@snap_bro_bot"
+SNAP_IMESSAGE = "+13102796028"
+
+# Which adapter actually delivers. "trace" writes what Snap would have texted
+# into the brain screen and sends nothing, which keeps the Linq sandbox's
+# 100-messages-a-day budget for real end-to-end tests and the demo.
+# Set to "linq" to deliver for real.
+SNAP_CHANNEL = "linq"
+
+# Which brain reasons. OpenAI is the demo brain (DESIGN.md); with no
+# OPENAI_API_KEY set, the agent falls back to the Workers AI binding below.
+OPENAI_MODEL = "gpt-5.5"
+WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+
+# Looks at photos the user texts. OpenAI's chat model sees images itself; this
+# is the Workers AI fallback when there is no OpenAI key or it is down.
+WORKERS_AI_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
+
+# SOLANA_RPC_URL is deliberately NOT here. The working devnet URL carries its
+# API key in the query string, this file is committed, and the repo is public.
+# It is a secret: `wrangler secret put SOLANA_RPC_URL`.
+#
+# A [vars] entry and a secret of the same name collide — the plaintext var
+# wins and the secret is silently ignored, which would look exactly like the
+# 403 we already have. So the name must appear in exactly one place.
+# user-agent.ts falls back to the public endpoint when it is unset.
+
+# Workers AI — fallback brain while there is no OpenAI key.
+[ai]
+binding = "AI"

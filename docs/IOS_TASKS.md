@@ -1,6 +1,6 @@
 # iOS — start here
 
-Read `DESIGN.md` and `API.md` first. The Xcode project lives in `ios/`.
+Read `DESIGN.md` and `API.md` first. The Xcode project lives in `ios/`. **The full build spec — what exists, every file left to write, and the done checklist — is `IOS_SPEC.md`.**
 
 The app has three jobs. It has no chat UI — Snap lives in Messages.
 
@@ -11,4 +11,4 @@ The app has three jobs. It has no chat UI — Snap lives in Messages.
 3. **Onboarding.** Name, weekly goal, HealthKit permission, `POST /onboard`, then one screen: "text Snap `yo 4821`" with a button that opens Messages / Telegram prefilled. Store the token in the Keychain.
 4. **"Snap's brain" screen.** The main screen. Poll `GET /trace` and `GET /state`. Trace events animate in one at a time as a vertical feed — this is what judges watch on the mirrored screen while the text arrives on the phone. Above it: the open commitment, a countdown to the deadline, and the staked amount.
 5. **Polish.** This screen is most of the Design score. One strong visual idea, done properly, beats several screens.
-6. **Hidden debug panel** (long-press the logo): time-warp to "deadline + 1 min", save a fake workout, reset.
+6. **Hidden debug panel** (long-press the logo): time-warp to "deadline + 1 min", seed demo history (`POST /debug/seed`), save a fake workout, reset.

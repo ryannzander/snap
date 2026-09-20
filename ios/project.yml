@@ -1,0 +1,79 @@
+name: Snap
+options:
+  bundleIdPrefix: com.ryanzander
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Project-wide so the test bundles sign on a device too. Not a secret — every IPA
+    # carries its team id. Regenerating with xcodegen used to drop this and the app icon.
+    DEVELOPMENT_TEAM: TP6Q77MJ35
+targets:
+  Snap:
+    type: application
+    platform: iOS
+    sources: [Snap]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ryanzander.snap
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    info:
+      path: Snap/Info.plist
+      properties:
+        CFBundleDisplayName: Snap
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        UIUserInterfaceStyle: Light
+        NSHealthShareUsageDescription: Snap reads your workouts so it knows whether you actually went.
+        NSHealthUpdateUsageDescription: Snap can save a test workout from its debug panel.
+    entitlements:
+      path: Snap/Snap.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.healthkit.background-delivery: true
+  SnapUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [SnapUITests]
+    dependencies:
+      - target: Snap
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.ryanzander.snap.uitests
+  SnapTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [SnapTests]
+    dependencies:
+      - target: Snap
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.ryanzander.snap.tests
+schemes:
+  Snap:
+    build:
+      targets:
+        Snap: all
+        SnapTests: [test]
+        SnapUITests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      # SnapUITests drives a system HealthKit permission sheet. A scheme-level skip
+      # would also block `-only-testing`, so it stays a normal member and the unit-only
+      # run leaves it out explicitly:
+      #   xcodebuild test -scheme Snap -skip-testing:SnapUITests -destination '...'
+      #   xcodebuild test -scheme Snap -only-testing:SnapUITests -destination '...'
+      targets:
+        - SnapTests
+        - SnapUITests

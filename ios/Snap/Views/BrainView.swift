@@ -1,0 +1,911 @@
+import SwiftUI
+
+/// The live app: three screens and a bar.
+///
+/// **today** is the reference's home — a greeting, the week, one dark card for the plan
+/// on the line and one white card for the stake — and ends with the last few thoughts
+/// from Snap's brain. **wallet** is the money: what you have, how to add to it, and
+/// where the rest of it went. **brain** is the full trace, the thing judges actually
+/// watch. The `+` in the middle of the bar opens the message thread, because a new plan
+/// is a text, never a form.
+struct BrainView: View {
+    @Environment(AppModel.self) private var model
+    @State private var tab: Tab = .today
+    @State private var showDebug = false
+
+    enum Tab { case today, wallet, brain }
+
+    var body: some View {
+        ZStack {
+            Theme.bg.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                Group {
+                    switch tab {
+                    case .today:  TodayScreen(openBrain: { tab = .brain },
+                                              openWallet: { tab = .wallet },
+                                              openDebug: { showDebug = true })
+                    case .wallet: WalletScreen()
+                    case .brain:  BrainScreen()
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
+                .id(tab)
+
+                BottomBar(tab: $tab)
+            }
+        }
+        .animation(.snappy(duration: 0.22), value: tab)
+        .sheet(isPresented: $showDebug) { DebugPanel() }
+    }
+}
+
+// MARK: - Bar
+
+/// today · wallet · + · brain. The plus is the one filled thing in the bar, and it
+/// leaves the app on purpose: Snap lives in the thread, so that's where a plan gets
+/// made. The wallet sits next to it because the two are the same sentence — the money
+/// you have, and the place you put it on the line.
+private struct BottomBar: View {
+    @Environment(AppModel.self) private var model
+    @Binding var tab: BrainView.Tab
+
+    var body: some View {
+        HStack {
+            item(.today, icon: "house.fill", label: "today")
+            Spacer()
+            item(.wallet, icon: "wallet.bifold.fill", label: "wallet")
+            Spacer()
+            Button {
+                ThreadLink.open(contact: model.contact)
+            } label: {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(CircleButtonStyle(enabled: ThreadLink.url(contact: model.contact) != nil, size: 58))
+            .disabled(ThreadLink.url(contact: model.contact) == nil)
+            .accessibilityLabel("text snap a plan")
+            Spacer()
+            item(.brain, icon: "brain", label: "brain")
+        }
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.top, Theme.Space.s)
+        .padding(.bottom, Theme.Space.xs)
+        .background(
+            // A soft fade so the scroll content dissolves into the bar instead of
+            // being cut by it.
+            LinearGradient(colors: [Theme.bg.opacity(0), Theme.bg, Theme.bg],
+                           startPoint: .top, endPoint: .bottom)
+                .padding(.top, -Theme.Space.m)
+                .ignoresSafeArea()
+        )
+    }
+
+    private func item(_ target: BrainView.Tab, icon: String, label: String) -> some View {
+        let selected = tab == target
+        return Button {
+            tab = target
+        } label: {
+            VStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: selected ? .semibold : .regular))
+                Text(label)
+                    .font(selected ? Theme.medium(13) : Theme.body(13))
+            }
+            .foregroundStyle(selected ? Theme.ink : Theme.inkDim)
+            .frame(width: 58)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+// MARK: - Today
+
+private struct TodayScreen: View {
+    @Environment(AppModel.self) private var model
+    let openBrain: () -> Void
+    let openWallet: () -> Void
+    let openDebug: () -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: Theme.Space.m) {
+                header
+                WeekStrip()
+                PlanCard()
+                if let commitment = model.state?.openCommitment ?? model.state?.commitments.last,
+                   let stake = commitment.stake, stake.status != .none {
+                    StakeCard(stake: stake)
+                }
+                WalletStrip(open: openWallet)
+                if model.isHealthAccessUndetermined {
+                    healthNotice
+                }
+                brainPreview
+            }
+            .padding(.horizontal, Theme.screenPad)
+            .padding(.bottom, Theme.Space.m)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    /// The streak pill, the greeting, and you. Long-press anywhere here for the debug
+    /// panel; nothing on screen advertises it.
+    private var header: some View {
+        let goal = model.state?.weeklyGoal ?? 4
+        let done = model.state?.workoutsThisWeek ?? 0
+
+        return HStack {
+            HStack(spacing: 5) {
+                Image(systemName: "flame.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                Text("\(done)/\(goal)")
+                    .font(Theme.numerals(15))
+                    .contentTransition(.numericText())
+            }
+            .foregroundStyle(done > 0 ? Theme.ink : Theme.inkDim)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1.5))
+            .animation(.snappy, value: done)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(done) of \(goal) workouts this week")
+
+            Spacer()
+
+            Text(Self.greeting(hour: Calendar.current.component(.hour, from: .now)))
+                .font(Theme.display(26))
+                .foregroundStyle(Theme.ink)
+
+            Spacer()
+
+            Text(model.name.prefix(1).lowercased())
+                .font(Theme.medium(15))
+                .foregroundStyle(Theme.surface)
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(Theme.ink))
+                .accessibilityLabel(model.name.isEmpty ? "you" : model.name)
+        }
+        .padding(.top, Theme.Space.xs)
+        .contentShape(.rect)
+        .onLongPressGesture(minimumDuration: 0.7) { openDebug() }
+    }
+
+    static func greeting(hour: Int) -> String {
+        switch hour {
+        case 5..<12:  "good morning."
+        case 12..<17: "good afternoon."
+        default:      "good evening."
+        }
+    }
+
+    /// The one sync state the app can name. HealthKit hides read denial, but "never
+    /// asked" is knowable, and it means the closing beat of the demo can't happen.
+    private var healthNotice: some View {
+        Text("snap can't see your workouts yet. open settings → health → snap.")
+            .font(Theme.body(14))
+            .foregroundStyle(Theme.danger)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Theme.Space.xs)
+    }
+
+    /// The last few thoughts, then the way to the rest of them.
+    private var brainPreview: some View {
+        VStack(spacing: Theme.Space.s) {
+            SectionLabel("snap's brain")
+                .padding(.top, Theme.Space.s)
+
+            if model.events.isEmpty {
+                Text(model.isMock ? "waiting for snap to think…" : "waiting for snap to think… text him a plan.")
+                    .font(Theme.body(15))
+                    .foregroundStyle(Theme.inkDim)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+            } else {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(model.events.suffix(3)) { event in
+                        TraceRow(event: event).id(event.id)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Button("see everything") { openBrain() }
+                .buttonStyle(PillButtonStyle(kind: .pale, wide: false))
+                .padding(.top, 4)
+        }
+    }
+}
+
+/// Sunday to Saturday of this week, today in a box — the reference's week bar. It's a
+/// calendar, not a scoreboard: the count lives in the streak pill.
+private struct WeekStrip: View {
+    var body: some View {
+        let calendar = Calendar.current
+        let today = Date.now
+        let start = calendar.dateInterval(of: .weekOfYear, for: today)?.start ?? today
+
+        HStack(spacing: 0) {
+            ForEach(0..<7, id: \.self) { offset in
+                let day = calendar.date(byAdding: .day, value: offset, to: start) ?? today
+                let isToday = calendar.isDate(day, inSameDayAs: today)
+                let weekday = calendar.component(.weekday, from: day)
+                let symbol = calendar.shortWeekdaySymbols[weekday - 1].prefix(2)
+
+                VStack(spacing: 6) {
+                    Text(symbol)
+                        .font(isToday ? Theme.medium(15) : Theme.body(15))
+                    Text("\(calendar.component(.day, from: day))")
+                        .font(isToday ? Theme.numerals(17) : Theme.body(17))
+                }
+                .foregroundStyle(isToday ? Theme.ink : Theme.inkDim)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(isToday ? Theme.hairline : .clear, lineWidth: 1.5)
+                )
+                .accessibilityLabel(isToday ? "today, \(day.formatted(.dateTime.weekday(.wide).day()))"
+                                            : day.formatted(.dateTime.weekday(.wide).day()))
+            }
+        }
+    }
+}
+
+// MARK: - Plan card
+
+/// The dark card: what's on the line, how long is left, and the way into the thread.
+/// A settled commitment gets a verdict, not a clock — a countdown that keeps ticking
+/// after the thing is decided is just noise.
+private struct PlanCard: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: Theme.Space.m) {
+            // Prefer what's open; fall back to the most recent so the finished loop still
+            // shows its verdict instead of snapping back to the empty state.
+            if let commitment = model.state?.openCommitment ?? model.state?.commitments.last {
+                VStack(spacing: 8) {
+                    Text(Self.kicker(for: commitment.status))
+                        .font(Theme.body(17))
+                        .foregroundStyle(Theme.surface.opacity(0.6))
+                    Text(commitment.text)
+                        .font(Theme.display(26))
+                        .foregroundStyle(Theme.surface)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    // The log, on the card. Moving a session is allowed; doing it
+                    // quietly is not, and a line you have to read every time you
+                    // open the app is the whole point of keeping the record.
+                    ForEach(Array(commitment.moves.enumerated()), id: \.offset) { _, move in
+                        Text(BrainView.moveLine(move))
+                            .font(Theme.body(14))
+                            .foregroundStyle(Theme.surface.opacity(0.5))
+                    }
+                }
+                verdict(for: commitment)
+                // The pic is what returns the money, so the open plan's job is to
+                // ask for it. Everything else on this card is context for that.
+                if commitment.awaitingProof {
+                    proofAsk(for: commitment)
+                }
+                // No Watch? Snap times the session itself. Only while the plan is open —
+                // a settled commitment has nothing left to record against.
+                if commitment.status == .pending || commitment.status == .renegotiated {
+                    SessionControls()
+                }
+            } else {
+                VStack(spacing: 8) {
+                    Text("no plan yet")
+                        .font(Theme.body(17))
+                        .foregroundStyle(Theme.surface.opacity(0.6))
+                    Text("what's the move today?")
+                        .font(Theme.display(26))
+                        .foregroundStyle(Theme.surface)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.bottom, Theme.Space.m)
+            }
+
+            Button("text snap") { ThreadLink.open(contact: model.contact) }
+                .buttonStyle(PillButtonStyle(kind: .onDark, enabled: ThreadLink.url(contact: model.contact) != nil, wide: false))
+                .disabled(ThreadLink.url(contact: model.contact) == nil)
+        }
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Space.l)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius).fill(Theme.darkCard))
+    }
+
+    static func kicker(for status: Commitment.Status) -> String {
+        switch status {
+        // The move itself is spelled out underneath now, so the kicker does not
+        // have to carry it.
+        case .pending, .renegotiated, .met, .missed, .unknown: "today's plan"
+        }
+    }
+
+    /// The one instruction on the screen while money is on the line: send the
+    /// picture. It opens the thread, because that is where the photo has to
+    /// land — there is no upload button in this app on purpose, the verifier
+    /// lives in the conversation.
+    private func proofAsk(for commitment: Commitment) -> some View {
+        VStack(spacing: 10) {
+            Button("send the pic") { ThreadLink.open(contact: model.contact) }
+                .buttonStyle(PillButtonStyle(kind: .onDark, enabled: ThreadLink.url(contact: model.contact) != nil, wide: false))
+                .disabled(ThreadLink.url(contact: model.contact) == nil)
+
+            Text(commitment.stake.map { "you in it, on the gym floor. that's how the \($0.sol.formatted(Self.sol)) SOL comes home." }
+                 ?? "you in it, on the gym floor.")
+                .font(Theme.body(14))
+                .foregroundStyle(Theme.surface.opacity(0.6))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private static let sol = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...3))
+
+    @ViewBuilder
+    private func verdict(for commitment: Commitment) -> some View {
+        switch commitment.status {
+        case .met:
+            VStack(spacing: 8) {
+                HStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 30, weight: .bold))
+                    Text("done.")
+                        .font(Theme.display(44))
+                }
+                .foregroundStyle(Theme.surface)
+
+                // Which verifier paid. "your watch covered you" is the line that
+                // teaches someone to send the pic next time, so it is worth the
+                // row — and a photo that counted deserves to be seen counting.
+                if let line = BrainView.verifiedLine(for: commitment) {
+                    Text(line)
+                        .font(Theme.body(14))
+                        .foregroundStyle(Theme.surface.opacity(0.6))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        case .missed:
+            Text("missed.")
+                .font(Theme.display(44))
+                .foregroundStyle(Theme.dangerOnDark)
+        case .pending, .renegotiated:
+            CountdownView(checkAt: commitment.checkAt)
+        case .unknown:
+            // A status this build doesn't know. Say nothing rather than guess a clock.
+            EmptyView()
+        }
+    }
+}
+
+// MARK: - Stake card
+
+/// The white card: the money, where it is, and the receipt. `slashed` means the whole
+/// stake is forfeited — a half-back split was built, deployed and withdrawn on the
+/// backend (commit 3f77f7d), so nothing on the wire describes a partial refund.
+private struct StakeCard: View {
+    @Environment(AppModel.self) private var model
+    let stake: Stake
+
+    private static let sol = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...3))
+
+    var body: some View {
+        VStack(spacing: Theme.Space.s) {
+            VStack(spacing: 4) {
+                Text("\(stake.sol.formatted(Self.sol)) SOL on the line.")
+                    .font(Theme.display(24))
+                    .foregroundStyle(Theme.ink)
+                    .multilineTextAlignment(.center)
+                Text(subtitle)
+                    .font(Theme.body(14))
+                    .foregroundStyle(Theme.inkDim)
+            }
+
+            statusPill
+
+            Text(body_)
+                .font(Theme.body(17))
+                .foregroundStyle(Theme.ink)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let signature = stake.txSig {
+                explorerLink(signature)
+            }
+        }
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Space.l)
+        .frame(maxWidth: .infinity)
+        .snapCard()
+    }
+
+    private var subtitle: String {
+        switch stake.status {
+        case .held:     model.isMock ? "held · mock, no chain" : "held · solana devnet"
+        case .released: "released · back in your wallet"
+        case .slashed:  "slashed · gone"
+        case .none, .unknown: "stake"
+        }
+    }
+
+    private var body_: String {
+        switch stake.status {
+        case .held:     "send the pic, it comes home.\ndon't, and it's gone."
+        case .released: "proof landed. snap let go of the stake."
+        case .slashed:  "no proof by the deadline. the stake is gone."
+        case .none, .unknown: ""
+        }
+    }
+
+    /// Held is the one moment the app's colour appears: money is out of your hands.
+    @ViewBuilder
+    private var statusPill: some View {
+        let label = Text(stake.status.rawValue)
+            .font(Theme.medium(13))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+        switch stake.status {
+        case .held:     label.foregroundStyle(Theme.surface).background(Capsule().fill(Theme.gradient))
+        case .released: label.foregroundStyle(Theme.surface).background(Capsule().fill(Theme.ink))
+        case .slashed:  label.foregroundStyle(Theme.surface).background(Capsule().fill(Theme.danger))
+        case .none, .unknown: label.foregroundStyle(Theme.inkDim).background(Capsule().fill(Theme.surfaceAlt))
+        }
+    }
+
+    /// The on-chain receipt. Only drawn when the backend actually got a signature —
+    /// with no signature there is no claim to make, so the row simply isn't there.
+    /// On the mock it is labelled as such: the mock's signature points at nothing, and a
+    /// dead explorer link in front of a Solana judge is worse than no link.
+    @ViewBuilder
+    private func explorerLink(_ signature: String) -> some View {
+        let url = URL(string: "https://explorer.solana.com/tx/\(signature)?cluster=devnet")
+        Link(destination: url ?? URL(string: "https://explorer.solana.com")!) {
+            HStack(spacing: 8) {
+                Image(systemName: "link")
+                Text(BrainView.shorten(signature))
+                    .font(Theme.mono(13))
+                if model.isMock {
+                    Text("mock")
+                        .foregroundStyle(Theme.inkDim)
+                }
+            }
+        }
+        .buttonStyle(PillButtonStyle(kind: .outline, wide: false))
+        .accessibilityLabel("View this transaction on Solana Explorer")
+    }
+}
+
+extension BrainView {
+    /// Signatures are 88 characters. Show enough of both ends to check it against
+    /// the explorer by eye, which is the only thing anyone does with one on stage.
+    nonisolated static func shorten(_ signature: String) -> String {
+        guard signature.count > 16 else { return signature }
+        return "\(signature.prefix(6))…\(signature.suffix(6))"
+    }
+
+    /// `"👍 on: bro lock in"` → `("👍", "bro lock in")`. The backend builds the summary
+    /// and sends the emoji alone when it doesn't know which message was reacted to —
+    /// so a missing target is normal, not a parse failure.
+    nonisolated static func splitReaction(_ summary: String) -> (String, String?) {
+        guard let range = summary.range(of: " on: ") else {
+            return (summary.trimmingCharacters(in: .whitespaces), nil)
+        }
+        let target = String(summary[range.upperBound...]).trimmingCharacters(in: .whitespaces)
+        return (
+            String(summary[..<range.lowerBound]).trimmingCharacters(in: .whitespaces),
+            target.isEmpty ? nil : target
+        )
+    }
+
+    /// What closed a commitment, in one line under "done.". Nil when the backend
+    /// did not say — a commitment settled before this field existed.
+    ///
+    /// The watch line is doing work: it is the only place a user learns that
+    /// something other than their photo can pay them, and it says so while
+    /// pointing back at the photo.
+    nonisolated static func verifiedLine(for commitment: Commitment) -> String? {
+        switch commitment.verifiedBy {
+        case .photo:
+            return commitment.proof.map { "pic checked out · \($0.description)" } ?? "pic checked out"
+        case .watch:
+            return "no pic, but your watch covered you. it's quicker with the pic."
+        case .unknown, nil:
+            return commitment.proof.map { "pic checked out · \($0.description)" }
+        }
+    }
+
+    /// `"moved 7:00 PM → 8:30 PM"`. Their clock and their locale: the times are
+    /// the ones they agreed to, so they should read the way their phone reads.
+    nonisolated static func moveLine(_ move: Reschedule) -> String {
+        let from = move.from.formatted(date: .omitted, time: .shortened)
+        let to = move.to.formatted(date: .omitted, time: .shortened)
+        return "moved \(from) → \(to)"
+    }
+
+    nonisolated static func spokenReaction(emoji: String, target: String?, fromSnap: Bool) -> String {
+        let who = fromSnap ? "snap reacted" : "you reacted"
+        guard let target else { return "\(who) \(emoji)" }
+        return "\(who) \(emoji) to: \(target)"
+    }
+}
+
+// MARK: - Countdown
+
+/// Counts down to the moment Snap wakes up, then counts *up* in red once it's passed.
+/// Its own view so the `TimelineView` (and its `.now` anchor) is only rebuilt when the
+/// deadline itself changes, not every time the rest of the card moves.
+/// "start session" / a running clock and "done". Snap records the session as a real
+/// HealthKit workout, the same evidence tier as Hevy or Strava, so a phone without a
+/// Watch can still close the loop. The backend's 30-minute floor still applies, and
+/// the caption says so before anyone finds out the hard way.
+private struct SessionControls: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let startedAt = model.sessionStartedAt {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    let elapsed = max(0, context.date.timeIntervalSince(startedAt))
+                    VStack(spacing: 2) {
+                        Text(CountdownView.clock(elapsed))
+                            .font(Theme.numerals(34))
+                            .foregroundStyle(Theme.surface)
+                        Text(elapsed < 30 * 60 ? "training · counts at 30 min" : "training · this one counts")
+                            .font(Theme.body(14))
+                            .foregroundStyle(Theme.surface.opacity(0.6))
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("session running, \(CountdownView.clock(elapsed))")
+                }
+
+                HStack(spacing: Theme.Space.s) {
+                    Button("done") { Task { await model.endSession() } }
+                        .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
+                    Button("cancel") { model.cancelSession() }
+                        .font(Theme.body(15))
+                        .foregroundStyle(Theme.surface.opacity(0.6))
+                }
+            } else {
+                Button("start session") { model.startSession() }
+                    .buttonStyle(PillButtonStyle(kind: .onDark, wide: false))
+                Text("no watch? snap times it. 30 min or more counts.")
+                    .font(Theme.body(14))
+                    .foregroundStyle(Theme.surface.opacity(0.6))
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .animation(.snappy, value: model.sessionStartedAt)
+    }
+}
+
+private struct CountdownView: View {
+    let checkAt: Date
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let remaining = checkAt.timeIntervalSince(context.date)
+            let late = remaining < 0
+
+            VStack(spacing: 2) {
+                Text(Self.clock(abs(remaining)))
+                    .font(Theme.numerals(56))
+                    .foregroundStyle(late ? Theme.dangerOnDark : Theme.surface)
+                Text(late ? "late" : "left")
+                    .font(Theme.medium(16))
+                    .foregroundStyle(late ? Theme.dangerOnDark : Theme.surface.opacity(0.6))
+            }
+            .animation(.snappy, value: late)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(late ? "\(Self.clock(abs(remaining))) late" : "\(Self.clock(remaining)) left")
+        }
+    }
+
+    static func clock(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds.rounded())
+        let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60)
+        return h > 0
+            ? String(format: "%d:%02d:%02d", h, m, s)
+            : String(format: "%d:%02d", m, s)
+    }
+}
+
+// MARK: - Wallet
+
+private struct WalletScreen: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("your money.")
+                .font(Theme.display(26))
+                .foregroundStyle(Theme.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.xs)
+            WalletView()
+        }
+    }
+}
+
+/// One line on the today screen: what is in the wallet, and the way to the rest of it.
+/// It exists because the stake card only ever says what is *gone* — without this, a
+/// balance is something you have to go looking for to find out you have.
+private struct WalletStrip: View {
+    @Environment(AppModel.self) private var model
+    let open: () -> Void
+
+    private static let sol = FloatingPointFormatStyle<Double>.number.precision(.fractionLength(0...3))
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: Theme.Space.s) {
+                Image(systemName: "wallet.bifold.fill")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Theme.ink)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("wallet")
+                        .font(Theme.medium(15))
+                        .foregroundStyle(Theme.ink)
+                    Text(subtitle)
+                        .font(Theme.body(13))
+                        .foregroundStyle(Theme.inkDim)
+                }
+
+                Spacer(minLength: 0)
+
+                Text(balance)
+                    .font(Theme.numerals(20))
+                    .foregroundStyle(Theme.ink)
+                    .contentTransition(.numericText())
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.inkDim)
+            }
+            .padding(.horizontal, Theme.Space.m)
+            .padding(.vertical, Theme.Space.s + 2)
+            .frame(maxWidth: .infinity)
+            .snapCard()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(spoken)
+        .animation(.snappy, value: model.wallet)
+    }
+
+    private var balance: String {
+        guard let balance = model.wallet?.balanceSol else { return "—" }
+        return "\(balance.formatted(Self.sol)) SOL"
+    }
+
+    private var subtitle: String {
+        guard let wallet = model.wallet else { return "loading…" }
+        if wallet.balanceLamports == nil { return "can't reach the chain" }
+        if wallet.heldSol > 0 { return "\(wallet.heldSol.formatted(Self.sol)) SOL on the line" }
+        // An empty wallet cannot stake anything, and finding that out mid-negotiation
+        // is the worst time to find it out.
+        if (wallet.balanceSol ?? 0) < 0.05 { return "add money to put some on a session" }
+        return "tap to add money"
+    }
+
+    private var spoken: String {
+        model.wallet == nil ? "wallet, loading" : "wallet, \(balance). \(subtitle)"
+    }
+}
+
+// MARK: - Brain
+
+/// The full trace, and nothing else on the screen to compete with it.
+private struct BrainScreen: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("snap's brain.")
+                .font(Theme.display(26))
+                .foregroundStyle(Theme.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.xs)
+            TraceFeed()
+        }
+        .padding(.horizontal, Theme.screenPad)
+    }
+}
+
+/// The feed, isolated so its churn doesn't re-run the header.
+/// Anchored to the bottom: it opens on the newest event and stays there as rows arrive,
+/// but lets go the moment someone scrolls up to re-read a decision.
+private struct TraceFeed: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 9) {
+                if model.events.isEmpty {
+                    emptyState
+                }
+                ForEach(model.events) { event in
+                    TraceRow(event: event).id(event.id)
+                }
+            }
+            .padding(.vertical, Theme.Space.s)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollIndicators(.hidden)
+        .defaultScrollAnchor(.bottom)
+        // Rows dissolve into the title instead of being sliced by it.
+        .overlay(alignment: .top) {
+            LinearGradient(colors: [Theme.bg, Theme.bg.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: 18)
+                .allowsHitTesting(false)
+        }
+    }
+
+    /// Between beats the screen must never look broken. In voice, dim, and gone the
+    /// moment the first event lands.
+    private var emptyState: some View {
+        Text(model.isMock ? "waiting for snap to think…" : "waiting for snap to think… text him a plan.")
+            .font(Theme.body(15))
+            .foregroundStyle(Theme.inkDim)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 2)
+    }
+}
+
+// MARK: - Rows
+
+private struct TraceRow: View {
+    let event: TraceEvent
+    @State private var shown = false
+
+    var body: some View {
+        content
+            .opacity(shown ? 1 : 0)
+            .offset(y: shown ? 0 : 10)
+            .onAppear {
+                withAnimation(.snappy(duration: 0.26)) { shown = true }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        switch event.kind {
+        case .messageSent:      bubble(fromSnap: true)
+        case .messageReceived:  bubble(fromSnap: false)
+        case .reactionSent:     tapback(fromSnap: true)
+        case .reactionReceived: tapback(fromSnap: false)
+        case .decision:         decision
+        default:                plain
+        }
+    }
+
+    /// A tapback, drawn the way iMessage draws one: a small capsule tucked against the
+    /// bubble it belongs to, on that bubble's side. Snap's sit right, theirs sit left.
+    /// Pulled up into the row above, because a reaction floating on its own line is
+    /// just another message and this is explicitly not one.
+    private func tapback(fromSnap: Bool) -> some View {
+        let (emoji, target) = BrainView.splitReaction(event.summary)
+
+        return HStack(spacing: 0) {
+            if fromSnap { Spacer(minLength: 56) }
+
+            HStack(spacing: 6) {
+                Text(emoji)
+                    .font(.system(size: 15))
+                if let target {
+                    Text(target)
+                        .font(Theme.body(12))
+                        .foregroundStyle(Theme.inkDim)
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Capsule().fill(Theme.surface))
+            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1))
+
+            if !fromSnap { Spacer(minLength: 56) }
+        }
+        .padding(.top, -6)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(BrainView.spokenReaction(emoji: emoji, target: target, fromSnap: fromSnap))
+    }
+
+    /// Snap's own messages sit right in ink, yours sit left in grey — this is his head,
+    /// not your inbox.
+    private func bubble(fromSnap: Bool) -> some View {
+        HStack(spacing: 0) {
+            if fromSnap { Spacer(minLength: 56) }
+
+            Text(event.summary)
+                .font(Theme.body(16))
+                .foregroundStyle(fromSnap ? Theme.surface : Theme.ink)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(fromSnap ? Theme.ink : Theme.surfaceAlt)
+                )
+
+            if !fromSnap { Spacer(minLength: 56) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(fromSnap ? "snap said: \(event.summary)" : "you said: \(event.summary)")
+    }
+
+    /// The moment the agent actually chooses something: a white card, so it stands off
+    /// the paper the way the reference's cards do. When the backend sent its reasoning,
+    /// it sits under the verdict in small type.
+    private var decision: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Theme.tint)
+                Text(event.summary)
+                    .font(Theme.medium(16))
+                Spacer(minLength: 0)
+            }
+            if let reasoning = event.reasoning {
+                Text(reasoning)
+                    .font(Theme.body(14))
+                    .foregroundStyle(Theme.inkDim)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .foregroundStyle(Theme.ink)
+        .padding(.horizontal, Theme.Space.m)
+        .padding(.vertical, Theme.Space.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 22).fill(Theme.surface))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("decision: \(event.summary)")
+    }
+
+    private var plain: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(Self.hms.string(from: event.ts))
+                .font(Theme.mono(12))
+                .foregroundStyle(Theme.inkDim)
+            Image(systemName: glyph)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.inkDim)
+                .frame(width: 16)
+            Text(event.summary)
+                .font(Theme.body(15))
+                .foregroundStyle(Theme.ink)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 2)
+    }
+
+    private var glyph: String {
+        switch event.kind {
+        case .commitmentCreated: "flag.fill"
+        case .alarmFired:        "alarm.fill"
+        case .context:           "brain"
+        case .workoutDetected:   "figure.strengthtraining.traditional"
+        case .stakeHeld:         "lock.fill"
+        case .stakeReleased:     "lock.open.fill"
+        case .stakeSlashed:      "flame.fill"
+        case .photoAccepted:     "checkmark.seal.fill"
+        case .photoRejected:     "xmark.seal.fill"
+        case .walletFunded:      "plus.circle.fill"
+        default:                 "circle.fill"
+        }
+    }
+
+    /// Fixed locale and calendar: the trace is a monospaced column, and a device set
+    /// to non-Latin digits would break its alignment.
+    private static let hms: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter
+    }()
+}
