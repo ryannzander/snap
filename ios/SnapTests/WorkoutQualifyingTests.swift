@@ -115,3 +115,70 @@ final class ExplorerLinkTests: XCTestCase {
         XCTAssertEqual(BrainView.shorten(""), "")
     }
 }
+
+/// Where a HealthKit sync starts looking.
+///
+/// The bug: reset drops the anchor, and an anchorless query against a week-wide
+/// predicate hands the brand-new account every workout of the last seven days —
+/// so you wipe the app, onboard again, and Snap opens already knowing about this
+/// morning's session.
+final class SyncWindowTests: XCTestCase {
+
+    private let now = Date(timeIntervalSince1970: 1_789_860_240) // 2026-09-19T23:24:00Z
+
+    override func tearDown() {
+        WorkoutSync.syncFloor = nil
+        super.tearDown()
+    }
+
+    /// A genuine first install still backfills the week, so "2/4 this week" is true
+    /// on the day it's installed instead of starting at zero and lying.
+    func testWithNoFloorItLooksBackAWeek() {
+        WorkoutSync.syncFloor = nil
+        XCTAssertEqual(
+            WorkoutSync.windowStart(now: now),
+            now.addingTimeInterval(-7 * 86_400)
+        )
+    }
+
+    /// After a reset, nothing from before the reset belongs to the next account.
+    func testAFloorAfterTheRollingWindowWins() {
+        let resetAt = now.addingTimeInterval(-3600) // an hour ago
+        WorkoutSync.syncFloor = resetAt
+        XCTAssertEqual(WorkoutSync.windowStart(now: now), resetAt)
+    }
+
+    /// A floor older than the week does not widen the window — the week is still
+    /// the outer bound, whatever is stored.
+    func testAFloorOlderThanTheWindowDoesNotWidenIt() {
+        WorkoutSync.syncFloor = now.addingTimeInterval(-30 * 86_400)
+        XCTAssertEqual(
+            WorkoutSync.windowStart(now: now),
+            now.addingTimeInterval(-7 * 86_400)
+        )
+    }
+
+    /// The floor is a wall, not a window: a workout that starts after it syncs,
+    /// one that started before it does not, however recent.
+    func testTheFloorExcludesThisMorningButNotThisAfternoon() {
+        let resetAt = now.addingTimeInterval(-3600)
+        WorkoutSync.syncFloor = resetAt
+        let start = WorkoutSync.windowStart(now: now)
+
+        let thisMorning = now.addingTimeInterval(-6 * 3600)
+        let afterTheReset = now.addingTimeInterval(-600)
+        XCTAssertLessThan(thisMorning, start, "a session from before the reset is out")
+        XCTAssertGreaterThan(afterTheReset, start, "one from after it is in")
+    }
+
+    /// The floor survives a relaunch — it lives in UserDefaults, not memory — or a
+    /// reset would only hold until the app was killed.
+    func testTheFloorPersists() {
+        let resetAt = now.addingTimeInterval(-3600)
+        WorkoutSync.syncFloor = resetAt
+        XCTAssertEqual(
+            UserDefaults.standard.object(forKey: "hkSyncFloor") as? Date,
+            resetAt
+        )
+    }
+}

@@ -264,6 +264,11 @@ final class AppModel {
 
         Keychain.token = nil
         WorkoutSync.clearAnchor()
+        // Dropping the anchor means the next query has no cursor, and an
+        // anchorless query against a week-wide predicate would hand the next
+        // account every workout of the last seven days. The floor is what stops
+        // a fresh start opening with this morning's session already banked.
+        WorkoutSync.syncFloor = Date()
         WorkoutSync.sessionStartedAt = nil
         sessionStartedAt = nil
         Key.all.forEach { defaults.removeObject(forKey: $0) }
