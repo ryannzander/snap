@@ -55,6 +55,7 @@ python3 novelty.py > /dev/null || exit 1
 python3 funnel.py  > /dev/null || exit 1
 python3 enrich.py            || exit 1
 python3 model_score.py       || exit 1
+python3 sub_merge.py         || exit 1
 
 # 4. build --------------------------------------------------------------------
 python3 - <<'PY' || exit 1
