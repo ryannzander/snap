@@ -120,11 +120,28 @@ export interface Commitment {
   challenge?: string;
 }
 
+/**
+ * One local day of history, for the app's schedule screen.
+ *
+ * `workouts` counts sessions that met the release bar — the same bar as
+ * `workoutsThisWeek` — so a day with a dot on it is a day that would have
+ * returned your money. `skipped` is a commitment that day that went unmet,
+ * which is a different thing from a day you simply did not train.
+ */
+export interface DayRecord {
+  /** Local calendar date in the user's own zone, YYYY-MM-DD. */
+  date: string;
+  workouts: number;
+  skipped: boolean;
+}
+
 export interface StateResponse {
   weeklyGoal: number;
   workoutsThisWeek: number;
   linked: boolean;
   commitments: Commitment[];
+  /** The last 30 local days, oldest first. What the streak is counted from. */
+  days: DayRecord[];
 }
 
 /** GET /wallet */

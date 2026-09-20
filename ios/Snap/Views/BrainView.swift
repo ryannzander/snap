@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// The live app: three screens and a bar.
+/// The live app: four screens and a bar.
 ///
 /// **today** is the reference's home — a greeting, the week, one dark card for the plan
 /// on the line and one white card for the stake — and ends with the last few thoughts
-/// from Snap's brain. **wallet** is the money: what you have, how to add to it, and
+/// from Snap's brain. **streak** is the record — the streak, a month of dots, and
+/// every plan with what became of it. **wallet** is the money: what you have, how to add to it, and
 /// where the rest of it went. **brain** is the full trace, the thing judges actually
 /// watch. The `+` in the middle of the bar opens the message thread, because a new plan
 /// is a text, never a form.
@@ -13,7 +14,7 @@ struct BrainView: View {
     @State private var tab: Tab = .today
     @State private var showDebug = false
 
-    enum Tab { case today, wallet, brain }
+    enum Tab { case today, schedule, wallet, brain }
 
     var body: some View {
         ZStack {
@@ -22,11 +23,13 @@ struct BrainView: View {
             VStack(spacing: 0) {
                 Group {
                     switch tab {
-                    case .today:  TodayScreen(openBrain: { tab = .brain },
-                                              openWallet: { tab = .wallet },
-                                              openDebug: { showDebug = true })
-                    case .wallet: WalletScreen()
-                    case .brain:  BrainScreen()
+                    case .today:    TodayScreen(openBrain: { tab = .brain },
+                                                openWallet: { tab = .wallet },
+                                                openSchedule: { tab = .schedule },
+                                                openDebug: { showDebug = true })
+                    case .schedule: ScheduleScreen()
+                    case .wallet:   WalletScreen()
+                    case .brain:    BrainScreen()
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -43,10 +46,9 @@ struct BrainView: View {
 
 // MARK: - Bar
 
-/// today · wallet · + · brain. The plus is the one filled thing in the bar, and it
-/// leaves the app on purpose: Snap lives in the thread, so that's where a plan gets
-/// made. The wallet sits next to it because the two are the same sentence — the money
-/// you have, and the place you put it on the line.
+/// today · schedule · + · wallet · brain. The plus is the one filled thing in the bar,
+/// and it leaves the app on purpose: Snap lives in the thread, so that's where a plan
+/// gets made. Two either side of it — what you did and what it cost.
 private struct BottomBar: View {
     @Environment(AppModel.self) private var model
     @Binding var tab: BrainView.Tab
@@ -55,7 +57,7 @@ private struct BottomBar: View {
         HStack {
             item(.today, icon: "house.fill", label: "today")
             Spacer()
-            item(.wallet, icon: "wallet.bifold.fill", label: "wallet")
+            item(.schedule, icon: "flame.fill", label: "streak")
             Spacer()
             Button {
                 ThreadLink.open(contact: model.contact)
@@ -66,9 +68,13 @@ private struct BottomBar: View {
             .disabled(ThreadLink.url(contact: model.contact) == nil)
             .accessibilityLabel("text snap a plan")
             Spacer()
+            item(.wallet, icon: "wallet.bifold.fill", label: "wallet")
+            Spacer()
             item(.brain, icon: "brain", label: "brain")
         }
-        .padding(.horizontal, Theme.Space.m)
+        // Five things across a phone: the items give up a few points each so the
+        // plus keeps its size, since it is the only one that leaves the app.
+        .padding(.horizontal, Theme.Space.s)
         .padding(.top, Theme.Space.s)
         .padding(.bottom, Theme.Space.xs)
         .background(
@@ -93,7 +99,7 @@ private struct BottomBar: View {
                     .font(selected ? Theme.medium(13) : Theme.body(13))
             }
             .foregroundStyle(selected ? Theme.ink : Theme.inkDim)
-            .frame(width: 58)
+            .frame(width: 52)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -107,6 +113,7 @@ private struct TodayScreen: View {
     @Environment(AppModel.self) private var model
     let openBrain: () -> Void
     let openWallet: () -> Void
+    let openSchedule: () -> Void
     let openDebug: () -> Void
 
     var body: some View {
@@ -138,20 +145,24 @@ private struct TodayScreen: View {
         let done = model.state?.workoutsThisWeek ?? 0
 
         return HStack {
-            HStack(spacing: 5) {
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("\(done)/\(goal)")
-                    .font(Theme.numerals(15))
-                    .contentTransition(.numericText())
+            // The pill was already the week in miniature, so it is the natural door
+            // to the whole of it.
+            Button(action: openSchedule) {
+                HStack(spacing: 5) {
+                    Image(systemName: "flame.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                    Text("\(done)/\(goal)")
+                        .font(Theme.numerals(15))
+                        .contentTransition(.numericText())
+                }
+                .foregroundStyle(done > 0 ? Theme.ink : Theme.inkDim)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1.5))
+                .animation(.snappy, value: done)
             }
-            .foregroundStyle(done > 0 ? Theme.ink : Theme.inkDim)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .overlay(Capsule().stroke(Theme.hairline, lineWidth: 1.5))
-            .animation(.snappy, value: done)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(done) of \(goal) workouts this week")
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(done) of \(goal) workouts this week. opens your streak.")
 
             Spacer()
 
@@ -624,6 +635,22 @@ private struct CountdownView: View {
         return h > 0
             ? String(format: "%d:%02d:%02d", h, m, s)
             : String(format: "%d:%02d", m, s)
+    }
+}
+
+// MARK: - Schedule
+
+private struct ScheduleScreen: View {
+    var body: some View {
+        VStack(spacing: 0) {
+            Text("what you've done.")
+                .font(Theme.display(26))
+                .foregroundStyle(Theme.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.top, Theme.Space.xs)
+                .padding(.bottom, Theme.Space.xs)
+            ScheduleView()
+        }
     }
 }
 

@@ -41,9 +41,84 @@ struct SnapState: Decodable, Equatable {
     let workoutsThisWeek: Int
     let linked: Bool
     let commitments: [Commitment]
+    /// The last 30 local days, oldest first. Optional so a backend that predates
+    /// the schedule screen still decodes — an absent key is an empty history, not
+    /// a failed `/state`, and everything else on the today screen still draws.
+    let days: [DayRecord]?
 
     var openCommitment: Commitment? {
         commitments.first { $0.status == .pending || $0.status == .renegotiated }
+    }
+
+    var history: [DayRecord] { days ?? [] }
+}
+
+/// One local day. `workouts` counts sessions that met the release bar, so a day
+/// with a dot is a day that would have returned your money; `skipped` is a
+/// commitment that went unmet, which is a different thing from a day off.
+struct DayRecord: Decodable, Equatable, Identifiable {
+    let date: String
+    let workouts: Int
+    let skipped: Bool
+
+    var id: String { date }
+    var trained: Bool { workouts > 0 }
+
+    /// The backend sends a local calendar date, already in the user's zone, so it
+    /// is parsed as a plain date rather than an instant — reading it as UTC and
+    /// re-localising would slide a day either side of midnight.
+    var day: Date? { DayRecord.formatter.date(from: date) }
+
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+}
+
+/// What the schedule screen puts at the top.
+///
+/// A day counts when it has a session that met the release bar — the same bar
+/// that returns a stake, so the number on this screen and the money agree.
+enum Streak {
+    /// Days in a row up to today.
+    ///
+    /// Today not being done yet does **not** break it. The day isn't over, and a
+    /// streak that resets every midnight and un-resets when you train would be a
+    /// number nobody could trust. It counts back from yesterday in that case, and
+    /// today's session extends it the moment it lands.
+    ///
+    /// Today being *skipped* does break it, though. A commitment that went unmet
+    /// is a day already decided — the money has moved — and only an undecided day
+    /// gets the benefit of the doubt.
+    static func current(_ days: [DayRecord]) -> Int {
+        var run = 0
+        for day in days.reversed() {
+            if day.trained {
+                run += 1
+            } else if run == 0 && day.id == days.last?.id && !day.skipped {
+                // Today, nothing yet. Not a break — the day isn't over.
+                continue
+            } else {
+                break
+            }
+        }
+        return run
+    }
+
+    /// The longest run in the window. Capped by it: 30 days of history cannot
+    /// prove a 40-day streak, and claiming one would be a lie the app can't see.
+    static func best(_ days: [DayRecord]) -> Int {
+        var best = 0
+        var run = 0
+        for day in days {
+            run = day.trained ? run + 1 : 0
+            best = max(best, run)
+        }
+        return best
     }
 }
 

@@ -119,6 +119,25 @@ section('a verified photo fills a goal dot, because it releases a stake');
   );
 }
 
+section('the window /state carries for the schedule screen');
+{
+  // Thirty days of dots, and the streak is counted from them — so the window
+  // has to end on today and be contiguous, or a gap reads as a missed day.
+  const days = buildDays(NOW, TZ, [workout('2026-09-18T16:00:00Z')], [], 30);
+  eq('thirty rows', days.length, 30);
+  eq('oldest first', days[0]!.date, '2026-08-21');
+  eq('ending today, on their clock', days[29]!.date, '2026-09-19');
+
+  const dates = days.map((d) => d.date);
+  eq('no gaps', new Set(dates).size, 30);
+  const contiguous = dates.every((date, i) => {
+    if (i === 0) return true;
+    return Date.parse(date + 'T12:00:00Z') - Date.parse(dates[i - 1]! + 'T12:00:00Z') === 86_400_000;
+  });
+  isTrue('one day apart, all the way down', contiguous);
+  eq('the session lands on its local day', days.find((d) => d.date === '2026-09-18')?.workouts, 1);
+}
+
 section('moving sessions is a pattern, so it is counted across all of them');
 {
   const moved = (at: string) => ({ reschedules: [{ at }] });
