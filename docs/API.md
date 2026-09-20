@@ -14,7 +14,7 @@ Auth: `Authorization: Bearer <token>` on everything except `/onboard` and `/webh
 ## POST /onboard
 
 ```json
-{ "name": "Ryan", "weeklyGoal": 4, "timezone": "America/Toronto" }
+{ "name": "Ryan", "weeklyGoal": 4, "timezone": "America/Toronto", "intensity": "medium" }
 ```
 →
 ```json
@@ -26,6 +26,26 @@ The app then tells the user to text Snap `yo 4821`. That first inbound message l
 Linking sends the thread's onboarding: what Snap does, that a plan is a text, that the money is theirs and comes back if they train, that a 👍 is how they agree to a stake, that the watch is the referee, and that the wallet lives in the app. It is fixed copy, not a model turn — the one message that explains how money moves can never be improvised. Texting `help` (or "how does this work") replays it without the greeting.
 
 Limits: `name` ≤ 100 characters and non-empty after trimming, `weeklyGoal` a whole number 1–21, `timezone` a zone name the runtime knows. Anything else is a 400.
+
+`intensity` is **optional and additive** — omit it and the user is `medium`, exactly as before. It is `easy`, `medium` or `hard`; anything else is a 400 (`intensity must be easy, medium or hard`). It is the pressure dial, and it moves three things and nothing else:
+
+| | session target | grace before the first "where are you" | stake he opens with | morning check-in |
+|---|---|---|---|---|
+| `easy` | 30 min | 45 min | 0.02 SOL | no |
+| `medium` | 45 min | 20 min | 0.05 SOL | yes |
+| `hard` | 60 min | 10 min | 0.1 SOL | yes |
+
+It also picks the voice Snap is handed for the turn.
+
+**The target is not a gate.** It is what Snap holds you to in the conversation; coming in under it is something he says, never something that keeps your money. Release is the same 15-minute fraud floor for everyone, and it does not know the dial exists.
+
+The stake is an opening, not a price — the user can name any amount from 0.01 SOL up. It does **not** choose workouts, sets, body parts or a plan — see `ROADMAP.md`, "Anti-coach".
+
+A new wallet is funded to cover the hardest mode's stake plus fees, so picking `hard` never means the first offer is refused for want of money.
+
+`monthlyGoal` and `yearlyGoal` are **optional and additive** — omit them and nothing about the app changes. Whole numbers, 1–93 and 1–1095 respectively; anything else is a 400. The ceilings are three sessions a day over the window, which is the point past which a number is a typo rather than an ambition.
+
+They are horizons, not gates. Nothing about money reads them: they never widen or narrow a stake, and missing one costs nothing. They only give Snap something longer than a week to talk about — he mentions a month you are behind on once, not as a countdown, and marks every 25th session of the year. `/state` returns them alongside `workoutsThisMonth` and `workoutsThisYear` so the app can draw the same numbers he says.
 
 `token` is opaque to the app. Store it in the Keychain and send it on everything below.
 
@@ -58,6 +78,10 @@ Everything the app needs to draw the today and schedule screens.
 {
   "weeklyGoal": 4,
   "workoutsThisWeek": 2,
+  "monthlyGoal": 16,
+  "workoutsThisMonth": 7,
+  "yearlyGoal": 180,
+  "workoutsThisYear": 94,
   "linked": true,
   "commitments": [
     {
@@ -69,7 +93,8 @@ Everything the app needs to draw the today and schedule screens.
       "stake": { "lamports": 50000000, "status": "held", "txSig": "…" },
       "reschedules": [],
       "proof": null,
-      "verifiedBy": null
+      "verifiedBy": null,
+      "challenge": "palm"
     }
   ],
   "days": [
@@ -82,6 +107,25 @@ Everything the app needs to draw the today and schedule screens.
 `commitment.status`: `pending | met | missed | renegotiated`
 `stake.status`: `none | held | released | slashed`
 `commitment.verifiedBy`: `photo | watch | null`
+
+**`challenge` is new, optional, and additive.** It is the gesture this commitment's photo has to have in it, picked at random the moment the stake locked: `thumb | peace | palm | rock | point | both`. Absent on a commitment made before challenges existed, and absent means the photo verifies on its own as before, so nothing breaks by ignoring it.
+
+Why it exists: the vision model checks that a real person is training, not that the person is *you*, so any gym photo of anybody used to release a stake the first time it was sent. A photo you already had cannot have the gesture in it, because nobody knew which one until the money moved.
+
+**The app should show it on the plan card**, wherever it already says "send a pic": *"3 fingers up in the pic"*. Snap says it in the thread too, every time he asks, but the card is where someone looks before they leave the house. Suggested strings — the backend's own wording, so the two agree:
+
+| value | what to show |
+|---|---|
+| `two` | 2 fingers up in the pic |
+| `three` | 3 fingers up in the pic |
+| `four` | 4 fingers up in the pic |
+| `thumb` | a thumbs up in the pic |
+| `peace` | a peace sign in the pic |
+| `palm` | an open hand up in the pic |
+
+An unknown value should render nothing rather than failing — more may be added.
+
+A photo that is real training but missing the gesture does **not** reject the stake: it comes back `unsure`, nothing moves, and Snap asks again. The watch underneath still releases it with no photo at all.
 
 `reschedules` is every time the session was moved, oldest first: `{ "at", "from", "to" }`. The app prints the list on the plan card — moving a session is allowed, doing it quietly is not. It may be absent on a commitment stored before the log existed; treat that as empty.
 
@@ -96,9 +140,15 @@ Commitments come back oldest first, ordered by `dueAt`. The app shows the open o
 
 `workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts a session verified by *either* verifier. Qualifying workouts count, and a photo-verified commitment adds one more **only on a local day that has no qualifying workout of its own** — someone who trains with a watch on and also sends a picture did one session, and counting it twice would flatter the goal.
 
-A workout qualifies when it runs 30 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
+A workout qualifies when it runs 15 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
 
-This is deliberately the same bar that releases a stake: if a thing cannot release your money it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`).
+A workout also has to average at least **2 active kcal/min**. Type, duration and `wasUserEntered` together still let someone press start on the Watch, sit in a car for 45 minutes and release a stake — the session is genuinely *recorded*, nobody typed it, and nobody moved. Active energy excludes basal metabolism, so sitting reads near zero while real strength work runs 5-8 kcal/min and running 10-15.
+
+That floor is only applied when `activeKcal` is actually present **and above zero**. A source that records no calories (some Strava and Hevy exports) is never rejected for it, and an exact zero is read as "the sensor recorded nothing" rather than "nobody moved" — failing an honest workout costs far more than missing a lazy cheat.
+
+This is deliberately the same bar that releases a stake: if a thing cannot release your money it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 15 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 15 min`, `typed in by hand`, `barely moved`).
+
+**15 minutes is a fraud floor, not an effort bar.** It was 30, which made it both, and a user who turned up on a bad day and left early was told "doesn't count" and lost their stake. What they were aiming for is `intensity`'s target (30/45/60 min) — a number Snap says out loud and never enforces with money.
 
 ## Rescheduling
 
@@ -196,7 +246,7 @@ The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stre
 ```json
 { "events": [
   { "id": 41, "ts": "…", "kind": "alarm_fired", "summary": "7:24 — checking on gym at 7" },
-  { "id": 42, "ts": "…", "kind": "context", "summary": "no workout today · skipped yesterday · 2/4 this week · 0.05 SOL staked" },
+  { "id": 42, "ts": "…", "kind": "context", "summary": "no workout today · skipped yesterday · 3/4 this week · 0.05 SOL staked" },
   { "id": 43, "ts": "…", "kind": "decision", "summary": "intervene — firm", "data": { "reasoning": "…" } },
   { "id": 44, "ts": "…", "kind": "message_sent", "summary": "bro" }
 ] }
@@ -311,7 +361,7 @@ Unlike the webhook, this **waits for the turn to finish** before responding — 
 
 `ROADMAP.md` → "Competitions": a pot, a rule, a set of entrants, and an oracle that settles it from HealthKit. Three kinds — `solo`, `h2h`, `group` — differ only in how many people are in the entrant list.
 
-**Verification is the same bar as a stake.** A session counts toward a goal only if it would release a stake — a verified photo, or a qualifying workout (30 minutes or longer, `wasUserEntered` false, an accepted type). A competition that counts a walk while the core loop refuses it would make "it knows" untrue the moment money is involved.
+**Verification is the same bar as a stake.** A session counts toward a goal only if it would release a stake — a verified photo, or a qualifying workout (15 minutes or longer, `wasUserEntered` false, an accepted type). A competition that counts a walk while the core loop refuses it would make "it knows" untrue the moment money is involved.
 
 ### POST /competitions
 

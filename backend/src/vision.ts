@@ -20,6 +20,7 @@
  */
 
 import type { AiBinding } from './brains/workers-ai';
+import type { Challenge } from './agent/challenge';
 import { solText } from './money';
 
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1/chat/completions';
@@ -36,6 +37,17 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
  * The negative list is longer than the positive one on purpose. Everything on
  * it is something a person would actually try.
  */
+export function verifyPrompt(challenge: string | null): string {
+  if (!challenge) return VERIFY_PROMPT;
+  return `${VERIFY_PROMPT}
+
+one more thing. the person was asked to put a specific gesture in this photo, so that an old or borrowed picture cannot pass. put ONE MORE KEY in the same json object, alongside the ones above — the object you reply with is:
+
+{"training": true|false, "person": true|false, "gym": true|false, "screenshot": true|false, "confidence": 0.0, "description": "one plain literal sentence", "challenge": true|false}
+
+"challenge" is: ${challenge}. true ONLY if you can actually see it. if the hands are out of frame, blurred, or you are guessing, answer false. never leave this key out.`;
+}
+
 export const VERIFY_PROMPT = `you are checking whether a photo proves someone just trained.
 
 reply with ONLY a json object and nothing else:
@@ -70,6 +82,14 @@ export const MIN_VERIFY_CONFIDENCE = 0.6;
 export interface VisionEnv {
   OPENAI_API_KEY?: string;
   OPENAI_MODEL?: string;
+  /**
+   * The model that LOOKS at the photo. Its own knob on purpose.
+   *
+   * It used to read OPENAI_MODEL, which wrangler.toml sets for the
+   * conversation brain — so pointing the agent at a new chat model silently
+   * repointed the verifier too, and the verifier is the headline feature.
+   */
+  OPENAI_VISION_MODEL?: string;
   LINQ_API_KEY?: string;
   WORKERS_AI_VISION_MODEL?: string;
   AI?: AiBinding;
@@ -84,25 +104,42 @@ export interface PhotoLook {
   fingerprint: string;
   /** Which model actually looked, for the trace. */
   via: 'openai' | 'workers-ai';
+  /** See `readVerdict`. Only meaningful on an `unsure`. */
+  challengeMissed?: boolean;
 }
 
-export async function describePhoto(env: VisionEnv, url: string): Promise<PhotoLook> {
+export async function describePhoto(
+  env: VisionEnv,
+  url: string,
+  challenge: Challenge | null = null,
+): Promise<PhotoLook> {
   const image = await fetchImage(url, env.LINQ_API_KEY);
   const fingerprint = await fingerprint_(image.bytes);
+  const prompt = verifyPrompt(challenge?.look ?? null);
 
   let primaryError: unknown = null;
   if (env.OPENAI_API_KEY) {
     try {
-      const raw = await describeWithOpenAI(env.OPENAI_API_KEY, env.OPENAI_MODEL || 'gpt-4o', image);
-      return { ...readVerdict(raw), fingerprint, via: 'openai' };
+      const raw = await describeWithOpenAI(
+        env.OPENAI_API_KEY,
+        env.OPENAI_VISION_MODEL || 'gpt-4o',
+        image,
+        prompt,
+      );
+      return { ...readVerdict(raw, challenge), fingerprint, via: 'openai' };
     } catch (error) {
       primaryError = error;
     }
   }
 
   if (env.AI) {
-    const raw = await describeWithWorkersAI(env.AI, env.WORKERS_AI_VISION_MODEL || DEFAULT_VISION_MODEL, image);
-    return { ...readVerdict(raw), fingerprint, via: 'workers-ai' };
+    const raw = await describeWithWorkersAI(
+      env.AI,
+      env.WORKERS_AI_VISION_MODEL || DEFAULT_VISION_MODEL,
+      image,
+      prompt,
+    );
+    return { ...readVerdict(raw, challenge), fingerprint, via: 'workers-ai' };
   }
 
   if (primaryError) throw primaryError;
@@ -134,10 +171,20 @@ async function fingerprint_(bytes: Uint8Array): Promise<string> {
  * Pure, and exported, because this is the function that decides whether a
  * picture is worth 0.05 SOL.
  */
-export function readVerdict(raw: string): {
+export function readVerdict(
+  raw: string,
+  challenge: Challenge | null = null,
+): {
   description: string;
   verdict: PhotoVerdict;
   rejection: string | null;
+  /**
+   * True when the ONLY thing wrong was the gesture. It rides along because
+   * the stage valve below has to tell a hedge from a definite answer, and
+   * "the model could not decide" and "the model looked and the hand was not
+   * there" are both `unsure`.
+   */
+  challengeMissed?: boolean;
 } {
   const text = raw.trim();
   const parsed = extractJson(text);
@@ -177,6 +224,32 @@ export function readVerdict(raw: string): {
   }
   if (confidence < MIN_VERIFY_CONFIDENCE) {
     return { description, verdict: 'unsure', rejection: "can't tell if that's really you training" };
+  }
+
+  // The gesture, last, and only on a photo that has already passed everything
+  // else. A real training photo without it is `unsure`, never `not_training`:
+  // the model missing three fingers in a blurry mirror shot is not the same
+  // accusation as sending a picture of your lunch, and the difference is
+  // whether Snap roasts them or asks again. Either way the money stays put,
+  // and the watch underneath can still pay them without a photo at all.
+  if (challenge) {
+    const satisfied = asBoolean(parsed.challenge);
+    if (satisfied !== true) {
+      return {
+        description,
+        verdict: 'unsure',
+        rejection: `i asked for ${challenge.ask} — can't see it`,
+        // Only an explicit `false` is a definite answer. A model that did not
+        // answer the question at all is a HEDGE — the fallback vision model
+        // returns the six keys the schema names and nothing else — and the
+        // `lenient` valve exists precisely to rescue a hedge. Flagging a
+        // silent model as a definite miss would refuse every genuine photo on
+        // the fallback path with the one setting that could have saved it
+        // switched off. The money still does not move either way: the verdict
+        // stays `unsure`, and `strict` refuses both.
+        ...(satisfied === false ? { challengeMissed: true } : {}),
+      };
+    }
   }
 
   return { description, verdict: 'training', rejection: null };
@@ -233,10 +306,17 @@ export type PhotoMode = 'strict' | 'lenient' | 'always';
 export function applyPhotoMode(
   verdict: PhotoVerdict,
   mode: PhotoMode,
+  challengeMissed = false,
 ): { verdict: PhotoVerdict; overridden: PhotoMode | null } {
   if (verdict === 'training') return { verdict, overridden: null };
   if (mode === 'always') return { verdict: 'training', overridden: 'always' };
-  if (mode === 'lenient' && verdict === 'unsure') {
+  // A missing gesture is `unsure` so that Snap asks again instead of accusing
+  // anyone — but by this valve's own rule it belongs on the other side of the
+  // line. `lenient` rescues a model that HEDGED; the model did not hedge here,
+  // it looked and the hand was not in the frame. Rescuing it would quietly
+  // switch off the check that stops a borrowed photo, on the one setting most
+  // likely to be on during a demo, and nobody watching would know.
+  if (mode === 'lenient' && verdict === 'unsure' && !challengeMissed) {
     return { verdict: 'training', overridden: 'lenient' };
   }
   return { verdict, overridden: null };
@@ -308,7 +388,7 @@ export function photoInstruction(
       return `the user just sent you a photo${caption}. ${seen}. it does NOT count as proof — ${outcome.reason}. their money is still on the line. roast the picture lightly, funny not mean, and say exactly what you want instead: them in the shot, on the gym floor, mid-set or dripping. do not explain rules and do not lecture; make the ask a bit. ${voice}`;
 
     case 'unsure':
-      return `the user just sent you a photo${caption}. ${seen}. you could not tell whether that is really them training, so nothing moved and their money is still on the line. say you cannot tell, ask for one you can — them in it, at the gym — and keep it light. ${voice}`;
+      return `the user just sent you a photo${caption}. ${seen}. it did not settle anything — ${outcome.reason} — so nothing moved and their money is still on the line. say that plainly in your voice, ask for one that works, and if the reason names a gesture then NAME THAT GESTURE again: it is the thing that proves the pic is from today. keep it light, they are not in trouble. ${voice}`;
 
     case 'replay':
       return `the user just sent you a photo${caption}. ${seen}. you have seen that EXACT photo before and already counted it once. call it out — they are trying to reuse a pic — funny, not furious. their money is still on the line and you want a fresh one, from today. ${voice}`;
@@ -376,7 +456,12 @@ function toBase64(bytes: Uint8Array): string {
 // --- models ------------------------------------------------------------------
 
 /** Returns whatever the model said, raw. `readVerdict` makes sense of it. */
-async function describeWithOpenAI(apiKey: string, model: string, image: FetchedImage): Promise<string> {
+async function describeWithOpenAI(
+  apiKey: string,
+  model: string,
+  image: FetchedImage,
+  prompt: string = VERIFY_PROMPT,
+): Promise<string> {
   const response = await fetch(OPENAI_ENDPOINT, {
     method: 'POST',
     headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
@@ -386,7 +471,7 @@ async function describeWithOpenAI(apiKey: string, model: string, image: FetchedI
         {
           role: 'user',
           content: [
-            { type: 'text', text: VERIFY_PROMPT },
+            { type: 'text', text: prompt },
             { type: 'image_url', image_url: { url: `data:${image.mime};base64,${toBase64(image.bytes)}`, detail: 'low' } },
           ],
         },
@@ -403,9 +488,14 @@ async function describeWithOpenAI(apiKey: string, model: string, image: FetchedI
   return content;
 }
 
-async function describeWithWorkersAI(ai: AiBinding, model: string, image: FetchedImage): Promise<string> {
+async function describeWithWorkersAI(
+  ai: AiBinding,
+  model: string,
+  image: FetchedImage,
+  prompt: string = VERIFY_PROMPT,
+): Promise<string> {
   const raw = (await ai.run(model, {
-    prompt: VERIFY_PROMPT,
+    prompt,
     image: Array.from(image.bytes),
     max_tokens: 160,
   })) as { response?: string | null; description?: string | null };

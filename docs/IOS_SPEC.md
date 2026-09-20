@@ -56,7 +56,7 @@ An actor (`MockAPI.shared`) that plays the whole loop with no backend, so the UI
 commitment_created  "gym at 7 · 0.05 SOL on it"
 stake_held          "0.05 SOL locked · 4xK…9fQ"
 alarm_fired         "7:24 — checking on gym at 7"
-context             "no workout today · skipped yesterday · 2/4 this week · 0.05 SOL staked"
+context             "no workout today · skipped yesterday · 3/4 this week · 0.05 SOL staked"
 decision            "intervene — firm"
 message_sent        "bro"
 message_sent        "7:24 and no workout 😭"

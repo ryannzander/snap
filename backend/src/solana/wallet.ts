@@ -104,7 +104,18 @@ export async function transferSol(
   return signature;
 }
 
-/** Polls until the cluster has confirmed it, or gives up. */
+/**
+ * Polls until the cluster has confirmed it, or gives up.
+ *
+ * A rejected transaction throws — that one is definitive, and pretending the
+ * money moved is the worst thing this file could do. A TIMEOUT does not,
+ * because it is not a failure: it means we stopped asking. It used to throw
+ * too, `onChain` swallowed it, and the signature was discarded along with it
+ * — so a transfer that landed a second after we gave up showed in the app as
+ * a stake that never moved, with no explorer link to check. The signature is
+ * the receipt; it is worth more than our certainty, and the comment here
+ * already claimed the caller kept it.
+ */
 async function confirm(rpc: Rpc, signature: string, attempts = 30): Promise<void> {
   for (let i = 0; i < attempts; i++) {
     const { value } = await rpc
@@ -117,8 +128,6 @@ async function confirm(rpc: Rpc, signature: string, attempts = 30): Promise<void
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  // Not fatal: it may still land. The caller keeps the signature either way.
-  throw new Error('transaction not confirmed in time');
 }
 
 // --- base64 for a Uint8Array, which Workers has no helper for ---------------

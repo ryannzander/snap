@@ -13,6 +13,9 @@ import { normalizeInbound, verifySignature } from './channels/linq';
 import { competitionStub } from './competitions/competition';
 import { MAX_ENTRY_LAMPORTS, MIN_ENTRY_LAMPORTS } from './competitions/rules';
 import { directoryStub } from './directory';
+import { USER_FUNDING_LAMPORTS } from './money';
+import { redact } from './redact';
+import { getBalanceLamports, rpcFor, walletFromSeed } from './solana/wallet';
 import { HttpError, errorResponse, json, toResponse } from './http';
 import { newUserId, userIdFromToken } from './ids';
 import type { OnboardResponse } from './types';
@@ -86,6 +89,22 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     case '/debug/demo':
       requireMethod(request, 'POST');
       return demoSettings(request, env);
+
+    case '/debug/chain':
+      requireMethod(request, 'GET');
+      return chainState(request, env);
+
+    case '/debug/inbound':
+      requireMethod(request, 'POST');
+      return debugInbound(request, env, ctx);
+
+    case '/debug/reclaim':
+      requireMethod(request, 'POST');
+      return reclaimWallet(request, env);
+
+    case '/debug/airdrop':
+      requireMethod(request, 'POST');
+      return airdropTreasury(request, env);
 
     case '/debug/message':
       requireMethod(request, 'POST');
@@ -292,7 +311,25 @@ async function getTrace(request: Request, url: URL, env: Env): Promise<Response>
 async function linqWebhook(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const rawBody = await request.text();
 
-  if (env.LINQ_SIGNING_SECRET) {
+  // Unsigned deliveries are refused, and a MISSING secret refuses them too.
+  //
+  // This used to fail open: with no `LINQ_SIGNING_SECRET` configured the
+  // check was skipped entirely, so anyone who found the URL could post as
+  // anyone's chat — make a commitment, accept an offer, move money. A
+  // forgotten `wrangler secret put` turned the whole webhook into an open
+  // door, and nothing anywhere would have said so.
+  //
+  // `SNAP_CHANNEL = "trace"` is the one exception, because it already means
+  // exactly "this is a local run": wrangler.local.toml sets it, it is what
+  // stops outbound sends reaching a real phone, and production is "linq". One
+  // flag, one meaning, and no new knob that can be left on by accident.
+  const localRun = (env.SNAP_CHANNEL as string) === 'trace';
+  if (!env.LINQ_SIGNING_SECRET) {
+    if (!localRun) {
+      console.error('refusing webhook: LINQ_SIGNING_SECRET is not set');
+      return errorResponse(401, 'bad_signature', 'webhook signature did not verify');
+    }
+  } else {
     const valid = await verifySignature(
       request.headers,
       rawBody,
@@ -389,14 +426,31 @@ async function deliver(
   const code = /^\s*yo[\s,]+(\d{4})\s*[.!]?\s*$/i.exec(text)?.[1];
 
   if (code) {
-    const userId = await directoryStub(env).lookupLinkCode(code);
+    const directory = directoryStub(env);
+
+    // Guessing costs attempts. Four digits is ten thousand tries and a hit
+    // hands over somebody's whole thread, so a chat gets a handful and then
+    // stops being listened to. Spent BEFORE the lookup, or the counter only
+    // ever moves on codes that were already wrong for another reason.
+    if (!(await directory.spendLinkAttempt(channel, chatId))) {
+      return json({ ok: true, ignored: 'too many link attempts' });
+    }
+
+    const userId = await directory.lookupLinkCode(code);
     // An unknown code gets no reply: answering would burn a message from the
     // sandbox budget and tell a stranger whether a code exists.
     if (!userId) return json({ ok: true, ignored: 'unknown link code' });
 
-    await directoryStub(env).bindChat(channel, chatId, userId);
+    await directory.bindChat(channel, chatId, userId);
     const result = await userStub(env, userId).linkChat(channel, chatId);
-    return result.ok ? json({ ok: true, linked: true }) : json({ ok: true, ignored: 'no such user' });
+    if (!result.ok) return json({ ok: true, ignored: 'no such user' });
+
+    // Spent only now, once something is actually linked — a bind that failed
+    // halfway would otherwise leave the code dead and the person with no way
+    // in. A linked chat gets its attempt count back, too.
+    await directory.consumeLinkCode(code, userId);
+    await directory.clearLinkAttempts(channel, chatId);
+    return json({ ok: true, linked: true });
   }
 
   const userId = await directoryStub(env).lookupChat(channel, chatId);
@@ -441,6 +495,165 @@ async function timewarp(request: Request, env: Env): Promise<Response> {
   }
 
   return toResponse(await stub.timewarp(token, now));
+}
+
+/**
+ * Where the money actually is, on the day.
+ *
+ * The treasury funds every new wallet and the escrow holds every live stake,
+ * and until this existed neither balance was visible anywhere: the only way
+ * to learn the treasury had run dry was to onboard somebody and notice their
+ * wallet was empty. Which is how it was found — mid-rehearsal, with
+ * *"Transfer: insufficient lamports 129570000, need 210000000"* buried in a
+ * worker log, hours before a demo where onboarding happens on stage.
+ *
+ * Addresses are public by nature; the seeds that derive them never leave the
+ * secret store. Behind the debug key like the rest, and `runway` is the
+ * number worth reading — how many more people can onboard before funding
+ * starts failing.
+ */
+async function chainState(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for GET /debug/chain');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+  if (!env.SOLANA_RPC_URL) {
+    return errorResponse(503, 'chain_unavailable', 'no SOLANA_RPC_URL configured');
+  }
+
+  const rpc = rpcFor(env.SOLANA_RPC_URL);
+  const look = async (seed: string | undefined) => {
+    if (!seed) return { address: null, lamports: null };
+    const wallet = await walletFromSeed(seed);
+    try {
+      return { address: String(wallet.address), lamports: await getBalanceLamports(rpc, wallet.address) };
+    } catch {
+      return { address: String(wallet.address), lamports: null };
+    }
+  };
+
+  const [treasury, escrow] = await Promise.all([
+    look(env.SNAP_TREASURY_SEED),
+    look(env.SNAP_ESCROW_SEED),
+  ]);
+
+  return json({
+    cluster: 'devnet',
+    treasury,
+    escrow,
+    perUserFundingLamports: USER_FUNDING_LAMPORTS,
+    runway:
+      treasury.lamports === null ? null : Math.floor(treasury.lamports / USER_FUNDING_LAMPORTS),
+  });
+}
+
+/**
+ * Delivers a text down the REAL inbound path, without a signature.
+ *
+ * `/debug/message` takes a user's token and skips straight to the agent, which
+ * means the code in front of it — link codes, chat routing, opt-out — was
+ * reachable only through a signed Linq webhook. So the one step the whole demo
+ * depends on, `yo <code>`, could not be tested by anything but a real phone,
+ * and changing it was a change nobody could check.
+ *
+ * Same door as the vendor's, minus the vendor. Debug key only, since there is
+ * no user yet to hold a token — which is the point of it.
+ */
+async function debugInbound(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/inbound');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+
+  const body = await readJsonBody(request);
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+  }
+  const record = body as Record<string, unknown>;
+  const chatId = typeof record.chatId === 'string' ? record.chatId.trim() : '';
+  const text = typeof record.text === 'string' ? record.text : '';
+  if (!chatId) throw new HttpError(400, 'bad_request', 'chatId is required');
+
+  const channel: ChannelName = record.channel === 'trace' ? 'trace' : 'linq';
+  return deliver(env, ctx, channel, chatId, text);
+}
+
+/**
+ * Hands a rehearsal's wallet back to the treasury. Debug key plus the user's
+ * own token, like the rest — see `UserAgent.reclaim`.
+ */
+async function reclaimWallet(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/reclaim');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+  const { token, stub } = authenticate(request, env);
+  return toResponse(await stub.reclaim(token));
+}
+
+/**
+ * Asks devnet for more test SOL, from inside the Worker.
+ *
+ * The treasury funds every new wallet, and when it runs dry onboarding
+ * silently produces people with empty pockets. Refilling it needs the keyed
+ * RPC, which lives in the secret store and never leaves it — so the request
+ * has to be made from in here rather than from somebody's laptop. The public
+ * faucet rate-limits by IP and is frequently dry; the configured provider
+ * usually is not.
+ *
+ * It only ever pulls free devnet SOL IN, to one address derived from a seed
+ * this code already holds. It cannot move a user's money, and there is no
+ * amount of it that is worth anything.
+ */
+async function airdropTreasury(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/airdrop');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+  if (!env.SOLANA_RPC_URL || !env.SNAP_TREASURY_SEED) {
+    return errorResponse(503, 'chain_unavailable', 'no RPC or treasury configured');
+  }
+
+  const body = await readJsonBody(request).catch(() => ({}));
+  const asked = (body as Record<string, unknown>)?.sol;
+  const sol = typeof asked === 'number' && asked > 0 && asked <= 5 ? asked : 1;
+
+  const treasury = await walletFromSeed(env.SNAP_TREASURY_SEED);
+  const response = await fetch(env.SOLANA_RPC_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'requestAirdrop',
+      params: [String(treasury.address), Math.round(sol * 1_000_000_000)],
+    }),
+  });
+  const text = await response.text();
+  const rpc = rpcFor(env.SOLANA_RPC_URL);
+  let lamports: number | null = null;
+  try {
+    lamports = await getBalanceLamports(rpc, treasury.address);
+  } catch {
+    lamports = null;
+  }
+
+  return json({
+    address: String(treasury.address),
+    asked: sol,
+    // Redacted: the RPC url carries its key and an error body can echo it.
+    result: redact(text).slice(0, 400),
+    lamports,
+    runway: lamports === null ? null : Math.floor(lamports / USER_FUNDING_LAMPORTS),
+  });
 }
 
 /**

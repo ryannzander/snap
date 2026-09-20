@@ -2,8 +2,10 @@ import { DurableObject } from 'cloudflare:workers';
 
 import {
   buildDays,
+  brokenStreak,
+  currentStreak,
   countMovesThisWeek,
-  countVerifiedThisWeek,
+  countProgress,
   recentMessages,
   renderContext,
   summarizeContext,
@@ -21,7 +23,13 @@ import {
   guardSlash,
   type StandingOffer,
 } from './agent/guards';
-import { ACCEPT_OFFER_TOOL, DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
+import {
+  ACCEPT_OFFER_TOOL,
+  DEFAULT_GRACE_MIN,
+  SYSTEM_PROMPT,
+  TOOLS,
+  describeDecision,
+} from './agent/tools';
 import { describeReaction, isAffirmative, isNegative, reactionEmoji, toReaction, type ReactionName } from './reactions';
 import type { Brain, ToolCall } from './brain';
 import { FallbackBrain } from './brains/fallback';
@@ -34,11 +42,15 @@ import { fail, ok, type DoResult } from './http';
 import { asksHowItWorks, onboardingTexts } from './onboarding';
 import { isOptOut } from './optout';
 import {
+  FEE_HEADROOM_LAMPORTS,
   MAX_TOPUP_LAMPORTS,
   MIN_TOPUP_LAMPORTS,
+  USER_FUNDING_LAMPORTS,
   WALLET_CEILING_LAMPORTS,
   solText,
 } from './money';
+import { DEFAULT_INTENSITY, settingsFor, type Intensity } from './agent/intensity';
+import { challengeById, pickChallenge } from './agent/challenge';
 import { redact } from './redact';
 import {
   applyPhotoMode,
@@ -107,6 +119,8 @@ const KEY = {
   proof: (fingerprint: string) => `proof:${fingerprint}`,
   /** Stage settings. See DemoSettings. */
   demo: 'demo',
+  /** When Snap last spoke, for the burst cap. See `claimSendSlots`. */
+  sendLog: 'send:log',
   competition: (id: string) => `competition:${id}`,
   /** The stake Snap has proposed and the user has not answered yet. */
   offer: 'offer',
@@ -130,6 +144,32 @@ const STATE_DAY_WINDOW = 30;
 
 /** Snap asks about the day at this hour, local, when nothing is committed. */
 const MORNING_HOUR = 9;
+
+/**
+ * Two ceilings on Snap's own texts, both measured rather than guessed.
+ *
+ * Counting a real end-to-end run through the deployed Worker: an offer, a
+ * grace nudge, a reply, a last call and a photo answer came to 16-38 texts
+ * over a few minutes. So a cap near ten would have cut a single honest demo
+ * in half — the five-per-turn rule was never the problem, the number of TURNS
+ * is, and this is the one that bounds a burst across them.
+ *
+ * `SEND_BURST_MAX` is set where a runaway shows and a real run does not: a
+ * loop re-entering would pass thirty in seconds, and nothing honest gets near
+ * it in ten minutes.
+ *
+ * `SEND_DAY_MAX` is the one that matters on the day. The Linq sandbox is a
+ * hundred messages in twenty-four hours, onboarding spends ten of them, and a
+ * run spends fifteen to twenty more — so the real budget is four or five
+ * runs, not the eight it looks like. Five are left in reserve so the cliff is
+ * a trace line somebody can read rather than Snap silently going mute halfway
+ * through a judge.
+ */
+const SEND_BURST_MAX = 30;
+const SEND_WINDOW_MS = 10 * 60 * 1000;
+const SEND_DAY_MAX = 95;
+const SEND_DAY_WARN = 70;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const TRACE_PAGE_LIMIT = 200;
 
 /** Durable Object storage takes at most 128 keys per batched get/put. */
@@ -145,8 +185,12 @@ interface Profile {
   userId: string;
   name: string;
   weeklyGoal: number;
+  monthlyGoal?: number;
+  yearlyGoal?: number;
   timezone: string;
   createdAt: string;
+  /** How hard Snap pushes. Absent on profiles created before it existed. */
+  intensity?: Intensity;
 }
 
 /** Which chat Snap talks to this user in. Populated in step 2 by `yo <code>`. */
@@ -185,16 +229,6 @@ interface StoredWallet {
   funded: boolean;
 }
 
-/** Enough to cover a 0.05 SOL stake and the fees around it. */
-const USER_FUNDING_LAMPORTS = 100_000_000;
-
-/**
- * Signing costs lamports, and a wallet emptied to the last one cannot pay for
- * the transfer that releases the stake back into it. Staking leaves this much
- * behind.
- */
-const FEE_HEADROOM_LAMPORTS = 5_000_000;
-
 /**
  * The balance is read from the chain, which is a network call on a path that
  * runs inside an agent turn. Re-reading it every few seconds is what the RPC
@@ -228,7 +262,14 @@ function rescheduleCount(commitment: { reschedules?: Reschedule[]; renegotiation
  * They are stored as keys sorted by fire time and the single alarm is always
  * armed for the earliest.
  */
-type AlarmKind = 'grace' | 'end_of_day' | 'morning';
+type AlarmKind = 'grace' | 'last_call' | 'end_of_day' | 'morning';
+
+/**
+ * How long before the money moves the last warning lands. An hour is enough
+ * to still get to a gym, and late enough that it is a last call rather than a
+ * second nag.
+ */
+const LAST_CALL_MS = 60 * 60 * 1000;
 
 interface ScheduledAlarm {
   at: number;
@@ -282,6 +323,9 @@ export interface InitializeInput {
   weeklyGoal: number;
   timezone: string;
   linkCode: string;
+  intensity?: Intensity;
+  monthlyGoal?: number;
+  yearlyGoal?: number;
 }
 
 export class UserAgent extends DurableObject<Env> {
@@ -364,6 +408,9 @@ export class UserAgent extends DurableObject<Env> {
       weeklyGoal: input.weeklyGoal,
       timezone: input.timezone,
       createdAt: this.nowIso(),
+      intensity: input.intensity ?? DEFAULT_INTENSITY,
+      ...(input.monthlyGoal !== undefined ? { monthlyGoal: input.monthlyGoal } : {}),
+      ...(input.yearlyGoal !== undefined ? { yearlyGoal: input.yearlyGoal } : {}),
     };
     const link: Link = {
       linkCode: input.linkCode,
@@ -514,7 +561,7 @@ export class UserAgent extends DurableObject<Env> {
     // Same bar as releasing a stake — a verified photo or a qualifying
     // workout — so the dots on the screen and the agent's "2/4 this week"
     // never disagree.
-    const workoutsThisWeek = countVerifiedThisWeek(
+    const progress = countProgress(
       this.now(),
       profile.timezone,
       [...workouts.values()],
@@ -523,7 +570,13 @@ export class UserAgent extends DurableObject<Env> {
 
     return ok({
       weeklyGoal: profile.weeklyGoal,
-      workoutsThisWeek,
+      workoutsThisWeek: progress.week,
+      // Always sent, even with no goal set, because the app can show a count
+      // without a target and a missing number is harder to render than a zero.
+      workoutsThisMonth: progress.month,
+      workoutsThisYear: progress.year,
+      ...(profile.monthlyGoal !== undefined ? { monthlyGoal: profile.monthlyGoal } : {}),
+      ...(profile.yearlyGoal !== undefined ? { yearlyGoal: profile.yearlyGoal } : {}),
       linked: link?.linked ?? false,
       // The window the app counts a streak from. Thirty days is enough to show
       // a month of dots and to make "best streak" mean something, and small
@@ -581,7 +634,7 @@ export class UserAgent extends DurableObject<Env> {
     // webhook, which retries anything slow — so it finishes in the background
     // while the webhook answers now. Same reason the inbound turn does.
     this.ctx.waitUntil(
-      this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null)),
+      this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null), false),
     );
     return ok({ greeted: true });
   }
@@ -595,7 +648,7 @@ export class UserAgent extends DurableObject<Env> {
    */
   private async explainAgain(): Promise<void> {
     const profile = await this.ctx.storage.get<Profile>(KEY.profile);
-    await this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null, true));
+    await this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null, true), false);
   }
 
   /** Records an inbound text, or a photo. The agent acts on it in `runInboundTurn`. */
@@ -855,9 +908,9 @@ export class UserAgent extends DurableObject<Env> {
   /**
    * The agent's turn on something the user sent. A plain text is handed over
    * as is. A photo is looked at first, the look is traced, and the agent gets
-   * the description in its instruction — it never sees pixels itself, and the
-   * guards never hear about the photo at all: a photo is a hype beat, and the
-   * money still only moves on the watch.
+   * the description AND the verdict in its instruction — it never sees pixels
+   * itself, and it is told what already happened to the money rather than
+   * asked what should. The photo is the verifier; the watch is the backstop.
    */
   async runInboundTurn(text: string, imageUrls: string[] = []): Promise<DoResult<{ ran: boolean }>> {
     if (imageUrls.length === 0) {
@@ -877,16 +930,32 @@ export class UserAgent extends DurableObject<Env> {
 
     await this.loadClock();
     const url = imageUrls[0]!;
+
+    // The gesture this photo has to have in it, if there is a stake waiting on
+    // one. No open commitment means nothing to prove, so nothing is asked for.
+    //
+    // Selected by exactly the predicate `judgePhoto` releases on, so the
+    // gesture asked for and the stake paid out are always the same
+    // commitment: asking for one commitment's gesture while another one's
+    // money is on the line refuses someone who did what they were told.
+    const openNow = (await this.loadCommitments()).find(
+      (c) =>
+        (c.status === 'pending' || c.status === 'renegotiated') && c.stake.status === 'held',
+    );
+    const challenge = challengeById(openNow?.challenge);
+
     let look: PhotoLook | null = null;
     try {
       // The generated `Ai` binding type is model-specific; the vision module
       // only needs `run`, the same loosening `brain()` does.
-      look = await describePhoto(this.env as unknown as VisionEnv, url);
+      look = await describePhoto(this.env as unknown as VisionEnv, url, challenge);
       await this.appendTraces([
         {
           kind: 'context',
-          summary: `looked at the photo · ${look.description}`,
-          data: { via: look.via, imageUrl: url, verdict: look.verdict },
+          summary: challenge
+            ? `looked at the photo · asked for ${challenge.ask} · ${look.description}`
+            : `looked at the photo · ${look.description}`,
+          data: { via: look.via, imageUrl: url, verdict: look.verdict, challenge: challenge?.id ?? null },
         },
       ]);
     } catch (error) {
@@ -922,7 +991,11 @@ export class UserAgent extends DurableObject<Env> {
     // photo gets when the model hedges or the fallback model mangles its JSON
     // — so a screenshot is still refused and the roast beat still works.
     // `always` accepts anything that loaded, for a vision model that is down.
-    const { verdict, overridden } = applyPhotoMode(look.verdict, demo.photoMode);
+    const { verdict, overridden } = applyPhotoMode(
+      look.verdict,
+      demo.photoMode,
+      look.challengeMissed ?? false,
+    );
     // Said out loud, in the row the judges are watching. A switch that
     // quietly forged a verdict would cost more than a failed demo.
     const demoNote = overridden ? ` · demo mode (${overridden})` : '';
@@ -1074,6 +1147,36 @@ export class UserAgent extends DurableObject<Env> {
     const profile = await this.ctx.storage.get<Profile>(KEY.profile);
     if (!profile) return fail(404, 'not_found', 'no such user');
 
+    // The same bar every other stake clears. `canCover` says yes when the
+    // chain cannot be reached, so a devnet hiccup still cannot tell someone
+    // they are broke.
+    if (!(await this.canCover(lamports))) {
+      return fail(400, 'insufficient_funds', `their wallet cannot cover ${solText(lamports)}`);
+    }
+
+    // Money first, bookkeeping after. A competition stake is not like a solo
+    // commitment: an entrant recorded as staked whose transfer never landed
+    // is paid their "own stake back" plus a share of the pot at settlement,
+    // all of it out of what the other entrants actually put in. So a failed
+    // transfer is a failed entry, and nothing is written.
+    //
+    // With no escrow configured there is no chain in the loop at all and the
+    // entry is bookkeeping only, exactly as `moveStake` treats a missing seed.
+    const escrowSeed = this.env.SNAP_ESCROW_SEED;
+    let txSig: string | null = null;
+    if (escrowSeed) {
+      txSig = await this.onChain('competition entry', async () => {
+        const wallet = await this.userWallet();
+        const user = await walletFromSeed(wallet.seed);
+        const escrow = await walletFromSeed(escrowSeed);
+        return transferSol(this.rpc(), user, escrow.address, lamports);
+      });
+      if (!txSig) {
+        return fail(503, 'chain_unavailable', 'devnet would not take the stake — try again');
+      }
+      this.balanceCache = null;
+    }
+
     await this.ctx.storage.put(KEY.competition(competitionId), {
       id: competitionId,
       name,
@@ -1086,19 +1189,9 @@ export class UserAgent extends DurableObject<Env> {
       {
         kind: 'stake_held',
         summary: `${solText(lamports)} into "${name}"`,
-        data: { competitionId },
+        data: { competitionId, txSig, ...(txSig ? { explorer: explorerUrl(txSig) } : {}) },
       },
     ]);
-
-    const txSig = await this.onChain('competition entry', async () => {
-      const wallet = await this.userWallet();
-      const user = await walletFromSeed(wallet.seed);
-      const escrowSeed = this.env.SNAP_ESCROW_SEED;
-      if (!escrowSeed) throw new Error('no escrow configured');
-      const escrow = await walletFromSeed(escrowSeed);
-      return transferSol(this.rpc(), user, escrow.address, lamports);
-    });
-    if (txSig) this.balanceCache = null;
 
     await this.recordWalletEntry({
       kind: 'held',
@@ -1132,6 +1225,11 @@ export class UserAgent extends DurableObject<Env> {
 
     const stored = await this.ctx.storage.get<CompetitionEntry>(KEY.competition(competitionId));
     const staked = stored?.stakeLamports ?? 0;
+
+    // Settled once, paid once. The competition object is the one that decides
+    // this, but it pays entrant by entrant across seconds of chain and model
+    // calls, so a retry that gets past it must not find a second payout here.
+    if (stored?.status === 'settled') return ok({ txSig: null });
 
     await this.ctx.storage.put(KEY.competition(competitionId), {
       id: competitionId,
@@ -1191,23 +1289,145 @@ export class UserAgent extends DurableObject<Env> {
    * Sends a burst of texts and traces each one. Every channel is traced the
    * same way, so the brain screen is identical whether or not delivery is real.
    */
-  async sendTexts(texts: string[]): Promise<void> {
+  /**
+   * Says it out loud, unless Snap has already said too much.
+   *
+   * `metered` is on for anything the model wrote and off for the fixed
+   * onboarding copy, which is ten texts sent once and cannot be trimmed
+   * without breaking the one message that explains how money moves.
+   */
+  async sendTexts(texts: string[], metered = true): Promise<void> {
     if (texts.length === 0) return;
 
     const link = await this.ctx.storage.get<Link>(KEY.link);
     if (!link?.linked || !link.chatId || !link.channel) return;
     if (link.optedOut) return;
 
-    await this.appendTraces(texts.map((text) => ({ kind: 'message_sent' as const, summary: text })));
+    const allowed = metered ? await this.claimSendSlots(texts.length) : texts.length;
+    if (allowed === 0) {
+      // Traced, not sent: the brain screen still shows what he meant to say,
+      // which is the difference between a cap and a mystery.
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `held ${texts.length} texts — out of send budget (${SEND_BURST_MAX}/${SEND_WINDOW_MS / 60_000}min, ${SEND_DAY_MAX}/day)`,
+          data: { held: texts },
+        },
+      ]);
+      return;
+    }
+
+    const sending = texts.slice(0, allowed);
+    await this.appendTraces(sending.map((text) => ({ kind: 'message_sent' as const, summary: text })));
+    if (allowed < texts.length) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `held the last ${texts.length - allowed} of ${texts.length} texts — burst cap`,
+          data: { held: texts.slice(allowed) },
+        },
+      ]);
+    }
 
     try {
-      const ids = await this.channelFor(link.channel).send(link.chatId, texts);
-      await this.rememberOutbound(texts, ids);
+      const ids = await this.channelFor(link.channel).send(link.chatId, sending);
+      await this.rememberOutbound(sending, ids);
     } catch (error) {
       // A send failure must not lose the trace or fail the caller's request;
       // the brain screen still shows what Snap decided to say.
       console.error('channel send failed', redact(String(error)));
     }
+  }
+
+  /**
+   * How many of a burst Snap is allowed to actually send right now.
+   *
+   * A turn is capped at five texts, but nothing bounded a burst ACROSS turns —
+   * an alarm, a reply and a follow-up in the same minute are three separate
+   * turns and three separate bursts. A loop that re-entered would have emptied
+   * the Linq sandbox's hundred a day in under a minute, and that budget is the
+   * one the demo runs on: onboarding spends ten of it and a full run spends
+   * another ten, so there are only six to eight runs in a day to begin with.
+   *
+   * Sliding window rather than a daily counter, because the failure this
+   * guards against is a burst, and a daily quota would let a runaway spend the
+   * lot in a minute and then go silent for the rest of the day.
+   */
+  private async claimSendSlots(wanted: number): Promise<number> {
+    const now = this.now();
+    const log = ((await this.ctx.storage.get<number[]>(KEY.sendLog)) ?? []).filter((at) => at > now - DAY_MS);
+    const inWindow = log.filter((at) => at > now - SEND_WINDOW_MS).length;
+
+    const room = Math.min(SEND_BURST_MAX - inWindow, SEND_DAY_MAX - log.length);
+    const take = Math.max(0, Math.min(wanted, room));
+
+    // Always write back the pruned log, so a day's worth of timestamps cannot
+    // accumulate on an account that has stopped talking.
+    await this.ctx.storage.put(KEY.sendLog, [...log, ...Array<number>(take).fill(now)].slice(-SEND_DAY_MAX));
+
+    // The cliff has to be visible BEFORE it arrives. Snap going quiet halfway
+    // through a judge, with nothing in the trace saying why, is the worst way
+    // to find out the sandbox is spent.
+    const after = log.length + take;
+    if (after >= SEND_DAY_WARN && log.length < SEND_DAY_WARN) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `heads up — ${after} of ${SEND_DAY_MAX} texts used in the last 24h`,
+          data: { used: after, ceiling: SEND_DAY_MAX },
+        },
+      ]);
+    }
+    return take;
+  }
+
+  /**
+   * Sends this wallet's spendable balance back to the treasury.
+   *
+   * Every rehearsal onboards somebody, every onboard is a withdrawal from one
+   * devnet treasury, and the faucet gives a single SOL a day across the whole
+   * project. Twenty test users later the treasury could not fund the
+   * twenty-first, which is a thing you discover by onboarding a judge on
+   * stage and watching Snap tell them their wallet is empty.
+   *
+   * So a rehearsal can hand its money back. Refused while a stake is held —
+   * that money is in escrow and the commitment still has to settle — and the
+   * fee headroom stays behind so the emptied wallet can still sign.
+   */
+  async reclaim(token: string): Promise<DoResult<{ returned: number; txSig: string | null }>> {
+    await this.loadClock();
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    const held = await this.heldLamports();
+    if (held > 0) {
+      return fail(400, 'bad_request', `${solText(held)} is still staked — settle it first`);
+    }
+
+    const treasurySeed = this.env.SNAP_TREASURY_SEED;
+    if (!treasurySeed) return fail(503, 'chain_unavailable', 'no treasury configured');
+
+    const balance = await this.balance(true);
+    if (balance === null) return fail(503, 'chain_unavailable', 'could not read the balance');
+    const returned = balance - FEE_HEADROOM_LAMPORTS;
+    if (returned <= 0) return ok({ returned: 0, txSig: null });
+
+    const txSig = await this.onChain('reclaim', async () => {
+      const wallet = await this.userWallet();
+      const user = await walletFromSeed(wallet.seed);
+      const treasury = await walletFromSeed(treasurySeed);
+      return transferSol(this.rpc(), user, treasury.address, returned);
+    });
+    if (!txSig) return fail(503, 'chain_unavailable', 'devnet would not take the transfer');
+
+    this.balanceCache = null;
+    await this.recordWalletEntry({
+      kind: 'slashed',
+      lamports: returned,
+      label: 'returned to the treasury',
+      txSig,
+    });
+    return ok({ returned, txSig });
   }
 
   /** Keeps the last few of Snap's texts addressable, so a tapback can name one. */
@@ -1226,7 +1446,19 @@ export class UserAgent extends DurableObject<Env> {
     } satisfies Link);
   }
 
+  /**
+   * Which adapter actually delivers.
+   *
+   * SNAP_CHANNEL is the master switch and it is checked FIRST, because it was
+   * documented as one in wrangler.toml and read nowhere: a local run with a
+   * LINQ_API_KEY in .dev.vars sent real iMessages against the sandbox's
+   * 100-a-day budget, which is the budget the demo runs on. `trace` writes
+   * what Snap would have said into the brain screen and sends nothing.
+   */
   private channelFor(name: ChannelName): Channel {
+    // Cast: `wrangler types` narrows the var to whatever wrangler.toml says,
+    // and wrangler.local.toml is the file that sets it to 'trace'.
+    if ((this.env.SNAP_CHANNEL as string) === 'trace') return new TraceChannel();
     if (name === 'linq' && this.env.LINQ_API_KEY) return new LinqChannel(this.env.LINQ_API_KEY);
     return new TraceChannel();
   }
@@ -1267,14 +1499,25 @@ export class UserAgent extends DurableObject<Env> {
     const tz = profile.timezone;
     const weekStart = startOfWeek(now, tz);
 
-    // Two sessions earlier in the week, skipping yesterday — that is the day
-    // the story needs empty. Walk back until two days land inside this week.
+    // Three sessions on CONSECUTIVE days, then yesterday skipped — that is the
+    // day the story needs empty.
+    //
+    // Consecutive matters. Two sessions scattered through the week is a
+    // person with no momentum, and the strongest thing Snap can say to
+    // somebody talking themselves out of today is not "you're on 3 days", it
+    // is "you had 3 days going and you binned it yesterday". That line needs
+    // a run behind the skip to be true, and seeded data that cannot support
+    // the sentence is worse than none — see `brokenStreak`.
+    //
+    // They still reach back only as far as the week allows, because
+    // `workoutsThisWeek` counts from Monday and a seeded 3/4 on a Tuesday
+    // would be a lie the goal ring tells on us.
     const workoutDays: number[] = [];
-    for (let back = 2; back <= 6 && workoutDays.length < 2; back++) {
+    for (let back = 2; back <= 4; back++) {
       const at = localTimeToInstant(now, tz, 18, 0, -back);
       if (at >= weekStart && at < now) workoutDays.push(at);
     }
-    // Early in the week there are not two earlier days, so use this morning.
+    // Early in the week there are not three earlier days, so use this morning.
     while (workoutDays.length < 2) {
       const at = localTimeToInstant(now, tz, 7 + workoutDays.length, 0, 0);
       workoutDays.push(at < now ? at : now - 3600_000);
@@ -1610,10 +1853,30 @@ export class UserAgent extends DurableObject<Env> {
    * release transfer will need. `true` when the chain could not be reached:
    * a devnet hiccup must not be able to tell a user they are broke.
    */
+  /**
+   * Can this wallet afford to put that much on the line?
+   *
+   * Unknown is treated as yes, twice over. A devnet hiccup makes the balance
+   * null, and telling somebody they are broke because an RPC was slow is a
+   * far worse failure than offering a stake that turns out not to lock.
+   *
+   * The second case is the first thirty seconds of a wallet's life. Funding
+   * runs in the background at onboard and takes a few seconds on chain, so a
+   * user who texts straight after finishing onboarding has a real balance of
+   * zero — and Snap answered their very first message with "bro your wallet
+   * is empty 💀, add some sol in the app". It is not empty, it is arriving,
+   * and `funded` is exactly the flag that says which. Seen for real: a
+   * competition entry refused two seconds after onboard.
+   */
   private async canCover(lamports: number): Promise<boolean> {
     const balance = await this.balance();
     if (balance === null) return true;
-    return balance >= lamports + FEE_HEADROOM_LAMPORTS;
+    if (balance < lamports + FEE_HEADROOM_LAMPORTS) {
+      const wallet = await this.ctx.storage.get<StoredWallet>(KEY.wallet);
+      if (wallet && !wallet.funded && this.env.SNAP_TREASURY_SEED) return true;
+      return false;
+    }
+    return true;
   }
 
   private async recordWalletEntry(entry: Omit<WalletEntry, 'id' | 'at'> & { ref?: string }): Promise<void> {
@@ -1732,8 +1995,20 @@ export class UserAgent extends DurableObject<Env> {
 
     let fired = 0;
     for (const [key, scheduled] of due) {
-      // Delete first: a wake-up that throws must not fire forever.
-      await this.ctx.storage.delete(key);
+      // Delete first, and only run it if THIS pass is the one that removed it.
+      //
+      // Deleting first stops a wake-up that throws from firing forever. The
+      // returned flag stops the other half: `due` is a snapshot, and a second
+      // invocation can start while this one is inside an agent turn — a turn
+      // is a model call and takes seconds, and a `schedule()` during it
+      // re-arms the object. Both passes then hold the same entry in their own
+      // snapshot, both walk to it, and the user gets the same text twice.
+      //
+      // Seen for real: one commitment, one `commitment_created`, and two
+      // identical last calls in the trace a few seconds apart. On a phone
+      // that is Snap saying the same thing twice; on the Linq sandbox it is
+      // double the messages out of a hundred a day.
+      if (!(await this.ctx.storage.delete(key))) continue;
       await this.runAlarm(scheduled, profile);
       fired++;
     }
@@ -1746,8 +2021,13 @@ export class UserAgent extends DurableObject<Env> {
     switch (scheduled.kind) {
       case 'grace': {
         const commitment = await this.commitment(scheduled.commitmentId);
-        // Already settled, or talked forward — nothing to check on.
-        if (!commitment || commitment.status !== 'pending') return;
+        // Already settled — nothing to check on. A RENEGOTIATED one still
+        // counts: reschedule puts this wake-up on the new deadline so the
+        // warning lands before the money moves, and refusing to run it here
+        // is what left a moved commitment slashed with nothing said first.
+        if (!commitment || (commitment.status !== 'pending' && commitment.status !== 'renegotiated')) {
+          return;
+        }
 
         // A verified photo settles the commitment the moment it lands, so
         // this is belt and braces — but nagging someone who has already sent
@@ -1767,8 +2047,56 @@ export class UserAgent extends DurableObject<Env> {
             data: { commitmentId: commitment.id, kind: 'grace' },
           },
         ]);
+        // A moved deadline IS the slash point, so this wake-up sits ON it and
+        // the money goes when the grace after it closes. An original deadline
+        // is the other way round: the grace has already run and the money
+        // goes at end of day. Saying the wrong one is Snap misreporting the
+        // one number the user is deciding on.
+        const due = clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone);
         await this.runAgent(
-          `you woke yourself up. "${commitment.text}" was due at ${clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone)} and the ${commitment.graceMin} minute grace has passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`,
+          commitment.status === 'renegotiated'
+            ? `you woke yourself up. "${commitment.text}" is the one they already moved once, to ${due}, and that time just passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it in ${commitment.graceMin} minutes, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`
+            : `you woke yourself up. "${commitment.text}" was due at ${due} and the ${commitment.graceMin} minute grace has passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`,
+        );
+        return;
+      }
+
+      /**
+       * The last warning before the money goes.
+       *
+       * Without it the shape of a bad day was: a nudge twenty minutes past the
+       * deadline, then nothing at all, then the stake is gone at midnight.
+       * That silence is the part a real user would never forgive — it reads as
+       * a trap rather than a deal, and the whole product rests on the deal
+       * being one they would take again tomorrow.
+       *
+       * It is deliberately not another nag. It fires once, an hour out, and
+       * only when the money is genuinely still on the line.
+       */
+      case 'last_call': {
+        const commitment = await this.commitment(scheduled.commitmentId);
+        if (!commitment || (commitment.status !== 'pending' && commitment.status !== 'renegotiated')) {
+          return;
+        }
+        if (commitment.proof) return;
+        const coveringNow = findCoveringWorkout(
+          await this.loadWorkouts(),
+          parseIso(commitment.createdAt) ?? 0,
+          this.endOfDayFor(commitment, profile),
+        );
+        if (coveringNow) return;
+
+        const goesAt = this.endOfDayFor(commitment, profile);
+        const minutesLeft = Math.max(1, Math.round((goesAt - this.now()) / 60_000));
+        await this.appendTraces([
+          {
+            kind: 'alarm_fired',
+            summary: `${clockOnly(this.now(), profile.timezone)} — last call on ${commitment.text}`,
+            data: { commitmentId: commitment.id, kind: 'last_call', minutesLeft },
+          },
+        ]);
+        await this.runAgent(
+          `you woke yourself up. this is the LAST time you can say anything before the money moves: "${commitment.text}" is unmet, their ${solText(commitment.stake.lamports)} goes in about ${minutesLeft} minutes and after that it is gone. say the number of minutes and say what gets it back — a pic from the session, them in it. one short push, not a lecture, and do not pretend there is more time than there is. if they have genuinely run out of day, say that plainly instead of pretending.`,
         );
         return;
       }
@@ -1830,6 +2158,9 @@ export class UserAgent extends DurableObject<Env> {
             localDay(parseIso(c.dueAt) ?? 0, profile.timezone) === today,
         );
         if (hasToday) return;
+
+        // Easy asked not to be chased; an unprompted morning text is chasing.
+        if (!settingsFor(profile.intensity).morningCheckIn) return;
 
         const link = await this.ctx.storage.get<Link>(KEY.link);
         if (!link?.linked || link.optedOut) return;
@@ -1941,7 +2272,7 @@ export class UserAgent extends DurableObject<Env> {
     let decision;
     try {
       decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction,
         tools: TOOLS,
@@ -1958,7 +2289,7 @@ export class UserAgent extends DurableObject<Env> {
     await this.appendTraces([
       {
         kind: 'decision',
-        summary: decision.reasoning?.trim() || (names.length ? names.join(' + ') : 'no action'),
+        summary: decision.reasoning?.trim() || describeDecision(names),
         data: { brain: brain.name, tools: names, reasoning: decision.reasoning },
       },
     ]);
@@ -1978,10 +2309,36 @@ export class UserAgent extends DurableObject<Env> {
       if (await this.dispatch(call, profile, refusals)) executed.push(call.name);
     }
 
+    // offer_stake carries its own words and is sent as one action, so a turn
+    // that offered has already said the only thing it needed to.
+    const acted = executed.filter((name) => name !== 'offer_stake');
+
     if (refusals.length > 0) {
       // Whatever it was about to say is now wrong. Say the truth instead.
       await this.correct(brain, profile, instruction, refusals);
       executed.push('send_messages');
+    } else if (acted.length > 0) {
+      // The draft was written in the same breath as the proposal, before any
+      // of it had happened — so it reports intentions, not outcomes. Caught in
+      // rehearsal announcing "already rescheduled once, can't stretch it
+      // twice" on the turn that granted the first reschedule, and "4/4 for the
+      // week" on a week that had just reached 3.
+      //
+      // Throwing the draft away and asking again costs one model call and
+      // makes it impossible for Snap to misreport what it just did, because
+      // the context is rebuilt after the action rather than before it.
+      //
+      // Unless that second call does not come back. Silence on the turn that
+      // just locked or moved someone's money is worse than a draft written a
+      // beat early, so an unreachable model falls back to what it had.
+      if (await this.followUp(brain, profile, instruction, acted, true)) {
+        executed.push('send_messages');
+      } else {
+        for (const call of decision.toolCalls) {
+          if (!isTalking(call.name)) continue;
+          if (await this.dispatch(call, profile)) executed.push(call.name);
+        }
+      }
     } else {
       for (const call of decision.toolCalls) {
         if (!isTalking(call.name)) continue;
@@ -1993,9 +2350,17 @@ export class UserAgent extends DurableObject<Env> {
     // or no — and "did they agree?" against two options is a far easier call
     // than picking one of eight tools. This is the whole reason Snap offers
     // rather than waiting to be told an amount.
+    //
+    // A stake taken HERE was taken after the turn's texts were already
+    // written, so whatever went out was written before the commitment — and
+    // its gesture — existed. That draft cannot have named either, so this
+    // needs the same second pass an in-band accept gets, whether or not Snap
+    // has already said something this turn.
+    let acceptedLate = false;
     if (fromUser && standingOffer && !executed.includes('accept_offer') && !executed.includes('create_commitment')) {
       if (await this.confirmAcceptance(brain, profile, instruction)) {
         executed.push('accept_offer');
+        acceptedLate = true;
       }
     }
 
@@ -2026,10 +2391,11 @@ export class UserAgent extends DurableObject<Env> {
     // A tapback is an answer. Forcing a text on top of one is how a thread
     // ends up with a 👍 and then "👍" typed out underneath it.
     const spoke =
-      executed.includes('send_messages') ||
-      executed.includes('stay_quiet') ||
-      executed.includes('react') ||
-      executed.includes('offer_stake');
+      !acceptedLate &&
+      (executed.includes('send_messages') ||
+        executed.includes('stay_quiet') ||
+        executed.includes('react') ||
+        executed.includes('offer_stake'));
 
     if (!spoke) {
       // Creating a commitment or accepting an offer is a moment that demands
@@ -2062,7 +2428,7 @@ export class UserAgent extends DurableObject<Env> {
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: `${instruction}
 
@@ -2117,7 +2483,7 @@ call stay_quiet — a vague intention is not a session and is not worth offering
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: `${instruction}
 
@@ -2178,7 +2544,7 @@ clear yes.`,
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: `${instruction}
 
@@ -2215,15 +2581,24 @@ not a system rejecting them.`,
     await this.followUp(brain, profile, instruction, [], true);
   }
 
-  /** Second pass: you acted, now say something — or justify not saying it. */
+  /**
+   * Second pass: you acted, now say something — or justify not saying it.
+   *
+   * Returns whether anything actually went out, so a caller that threw its
+   * first draft away can tell "the model chose silence" from "the model was
+   * unreachable" and put the draft back rather than leave a locked stake
+   * unremarked on.
+   */
   private async followUp(
     brain: Brain,
     profile: Profile,
     instruction: string,
     executed: string[],
     mustSpeak = false,
-  ): Promise<void> {
-    const did = executed.length ? `you just called: ${executed.join(', ')}.` : 'you did nothing yet.';
+  ): Promise<boolean> {
+    const did = executed.length
+      ? `you already did this, it is done: ${executed.join(', ')}. the block above is the state AFTER it.`
+      : 'you did nothing yet.';
     const talking = TOOLS.filter(
       (tool) =>
         tool.function.name === 'send_messages' ||
@@ -2233,18 +2608,23 @@ not a system rejecting them.`,
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: mustSpeak
-          ? `${instruction}\n\n${did} text them about it now, in your voice. saying nothing is not an option here — their money is on the line and they need to hear it from you.`
+          ? `${instruction}\n\n${did} text them about it now, in your voice. saying nothing is not an option here — their money is on the line and they need to hear it from you. only say what the block above actually shows: do not invent a number, a deadline or a refusal that is not in it.`
           : `${instruction}\n\n${did} now text them about it, in your voice. if silence is genuinely right, call stay_quiet instead.`,
         tools: talking,
       });
-      for (const call of decision.toolCalls) await this.dispatch(call, profile);
+      let said = false;
+      for (const call of decision.toolCalls) {
+        if (await this.dispatch(call, profile)) said ||= call.name === 'send_messages';
+      }
+      return said;
     } catch (error) {
       await this.appendTraces([
         { kind: 'decision', summary: 'could not reach the brain for a reply', data: { error: redact(String(error)) } },
       ]);
+      return false;
     }
   }
 
@@ -2262,21 +2642,28 @@ not a system rejecting them.`,
       id: `c_${crypto.randomUUID().slice(0, 8)}`,
       text: proposal.text,
       dueAt: proposal.dueAt,
-      graceMin: DEFAULT_GRACE_MIN,
+      graceMin: settingsFor(profile.intensity).graceMin,
       status: 'pending',
       stake: { lamports: proposal.lamports, status: 'held', txSig: null },
       reschedules: [],
       proof: null,
       verifiedBy: null,
+      // Picked here, when the money locks, so it cannot exist before the
+      // commitment does — which is the only reason an old photo cannot have
+      // it in it.
+      challenge: pickChallenge().id,
       createdAt: this.nowIso(),
       renegotiations: 0,
     };
     await this.ctx.storage.put(KEY.commitment(commitment.id), commitment);
 
-    // Grace is the warning; end of day is when the money moves.
+    // Grace is the warning; end of day is when the money moves; last call is
+    // the one in between, so the stake never vanishes out of silence.
     const dueAt = parseIso(commitment.dueAt) ?? now;
+    const goesAt = this.endOfDayFor(commitment, profile);
     await this.schedule(dueAt + commitment.graceMin * 60_000, 'grace', commitment.id);
-    await this.schedule(this.endOfDayFor(commitment, profile), 'end_of_day', commitment.id);
+    await this.scheduleLastCall(commitment, goesAt, dueAt);
+    await this.schedule(goesAt, 'end_of_day', commitment.id);
 
     await this.appendTraces([
       {
@@ -2338,7 +2725,13 @@ not a system rejecting them.`,
 
     switch (call.name) {
       case 'create_commitment': {
-        const guard = guardCreate(call.arguments, now, profile.timezone, open.map(toWireCommitment));
+        const guard = guardCreate(
+          call.arguments,
+          now,
+          profile.timezone,
+          open.map(toWireCommitment),
+          settingsFor(profile.intensity).defaultStakeLamports,
+        );
         if (!guard.ok) return refuse(guard.reason);
         if (!(await this.canCover(guard.value.lamports))) {
           return refuse(await this.brokeReason(guard.value.lamports));
@@ -2352,7 +2745,13 @@ not a system rejecting them.`,
       }
 
       case 'offer_stake': {
-        const guard = guardOffer(call.arguments, now, profile.timezone, open.map(toWireCommitment));
+        const guard = guardOffer(
+          call.arguments,
+          now,
+          profile.timezone,
+          open.map(toWireCommitment),
+          settingsFor(profile.intensity).defaultStakeLamports,
+        );
         if (!guard.ok) return refuse(guard.reason);
         // Offering money they do not have ends with "deal" and no stake, which
         // is the one outcome worse than not offering at all.
@@ -2432,11 +2831,23 @@ not a system rejecting them.`,
 
         // The old grace wake-up is about a deadline that no longer exists.
         await this.unschedule('grace', existing.id);
+        await this.unschedule('last_call', existing.id);
         await this.unschedule('end_of_day', existing.id);
         const newDue = parseIso(moved.dueAt) ?? now;
-        await this.schedule(newDue + moved.graceMin * 60_000, 'grace', moved.id);
-        // A renegotiated deadline IS the slash point, not end of day.
-        await this.schedule(newDue, 'end_of_day', moved.id);
+
+        // A renegotiated deadline IS the slash point, not end of day — they
+        // used their move, so they do not also get the rest of the day.
+        //
+        // But it still gets a warning first. It used to be scheduled the same
+        // way as an original deadline — grace at +20, slash at the deadline —
+        // which put the warning AFTER the money had already gone, and settle()
+        // deleted the alarm on its way past. So the one commitment someone had
+        // already negotiated over was the one that got taken with no "yo, you
+        // are over" at all. Warning lands on the new deadline; the money goes
+        // when that window closes.
+        await this.schedule(newDue, 'grace', moved.id);
+        await this.scheduleLastCall(moved, newDue + moved.graceMin * 60_000, newDue);
+        await this.schedule(newDue + moved.graceMin * 60_000, 'end_of_day', moved.id);
 
         await this.appendTraces([
           {
@@ -2518,8 +2929,12 @@ not a system rejecting them.`,
       stake: { ...commitment.stake, status: stake },
     } satisfies StoredCommitment);
 
-    // Settled: nothing left to wake up about.
+    // Settled: nothing left to wake up about, and that has to mean ALL of
+    // them. The handlers each check the status and would have returned
+    // quietly, but an alarm left booked on a finished commitment is a wake-up
+    // that costs a read and tells the trace a lie about what is pending.
     await this.unschedule('grace', commitment.id);
+    await this.unschedule('last_call', commitment.id);
     await this.unschedule('end_of_day', commitment.id);
     await this.rearm();
 
@@ -2549,10 +2964,45 @@ not a system rejecting them.`,
    * When the money moves for this commitment: the renegotiated deadline if
    * there is one, otherwise end of the local day the commitment was for.
    */
+  /**
+   * When the money moves for this commitment. One answer, used by the guard,
+   * by the covering-workout window and by the alarm, because three answers is
+   * how a stake gets taken while someone is mid-set.
+   *
+   * A renegotiated deadline IS the slash point rather than end of day — they
+   * used their move, so they do not also get the rest of the day. It carries
+   * the same grace as any other deadline, though, and this has to say so: the
+   * reschedule schedules the slash at `dueAt + graceMin`, and while this
+   * returned the bare `dueAt` the two disagreed by exactly that window. A
+   * session started five minutes past a renegotiated deadline fell outside
+   * `findCoveringWorkout`'s window and could not cover the commitment it was
+   * for, and `guardSlash` would have allowed the model to take the money
+   * during the grace it had just been promised.
+   */
+  /**
+   * Books the last warning, if there is room for one.
+   *
+   * Skipped when the money moves within the hour anyway — a commitment made
+   * at 23:30 does not get a last call at 23:00 that has already passed — and
+   * never earlier than the deadline itself, so it can only ever land after
+   * the grace warning rather than ahead of it. Both cases are silence by
+   * design: one warning that arrives in the right order beats two that
+   * contradict each other.
+   */
+  private async scheduleLastCall(
+    commitment: StoredCommitment,
+    goesAt: number,
+    dueAt: number,
+  ): Promise<void> {
+    const at = goesAt - LAST_CALL_MS;
+    if (at <= this.now() || at <= dueAt) return;
+    await this.schedule(at, 'last_call', commitment.id);
+  }
+
   private endOfDayFor(commitment: StoredCommitment | null, profile: Profile): number {
     if (commitment?.status === 'renegotiated') {
       const dueAt = parseIso(commitment.dueAt);
-      if (dueAt !== null) return dueAt;
+      if (dueAt !== null) return dueAt + commitment.graceMin * 60_000;
     }
     const anchor = commitment ? (parseIso(commitment.dueAt) ?? this.now()) : this.now();
     return endOfLocalDay(anchor, profile.timezone);
@@ -2566,18 +3016,34 @@ not a system rejecting them.`,
     ]);
     const now = this.now();
 
+    // Built once over 30 days — the same window /state hands the schedule
+    // screen, so the streak Snap says and the number on their home screen are
+    // one number; seven would quietly cap every streak at a week. The seven
+    // the model reads is the tail of it, oldest first, so one pass over the
+    // workouts answers both.
+    const days = buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment), 30);
+    const progress = countProgress(now, profile.timezone, workouts, commitments);
+
     return {
       now: this.nowIso(),
       localTime: localClock(now, profile.timezone),
       timezone: profile.timezone,
       name: profile.name,
       weeklyGoal: profile.weeklyGoal,
-      workoutsThisWeek: countVerifiedThisWeek(now, profile.timezone, workouts, commitments),
-      lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
+      workoutsThisWeek: progress.week,
+      workoutsThisMonth: progress.month,
+      workoutsThisYear: progress.year,
+      ...(profile.monthlyGoal !== undefined ? { monthlyGoal: profile.monthlyGoal } : {}),
+      ...(profile.yearlyGoal !== undefined ? { yearlyGoal: profile.yearlyGoal } : {}),
+      lastSevenDays: days.slice(-7),
+      streak: currentStreak(days),
+      brokenStreak: brokenStreak(days),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
         .map((c) => ({ ...toWireCommitment(c), renegotiations: rescheduleCount(c) })),
       standingOffer: await this.standingOffer(),
+      defaultStakeLamports: settingsFor(profile.intensity).defaultStakeLamports,
+      targetMin: settingsFor(profile.intensity).targetMin,
       movesThisWeek: countMovesThisWeek(now, profile.timezone, commitments),
       wallet: { balanceLamports: await this.balance(), heldLamports: await this.heldLamports() },
       recentMessages: recentMessages([...events.values()]),
@@ -2709,6 +3175,12 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
       ? { at: stored.proof.at, description: stored.proof.description }
       : null,
     verifiedBy: stored.verifiedBy ?? null,
+    // The gesture has to cross onto the wire, or the half of this feature
+    // that is fair never happens: enforcement reads the STORED commitment and
+    // worked, while the model's context is built from this projection — so
+    // Snap would have refused a photo for missing a gesture he never asked
+    // for. Third time a field-by-field projection has quietly dropped one.
+    ...(stored.challenge ? { challenge: stored.challenge } : {}),
     stake: {
       lamports: stored.stake.lamports,
       status: stored.stake.status,

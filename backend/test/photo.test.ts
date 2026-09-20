@@ -1,9 +1,10 @@
 /**
  * Photos in the thread.
  *
- * A photo is a hype beat: the adapter has to find it in whatever shape Linq
- * sends, the trace has to record that it happened, and the instruction the
- * agent gets has to say, in so many words, that a photo does not count.
+ * The photo is the verifier: the adapter has to find it in whatever shape Linq
+ * sends, the verdict read out of it decides whether a stake releases, and the
+ * instruction the agent gets has to carry what already happened to the money
+ * rather than asking it to decide.
  */
 import { imageUrlsFromParts, normalizeInbound } from '../src/channels/linq';
 import {
@@ -62,6 +63,16 @@ section('normalizing an inbound message');
     data: { direction: 'inbound', sender_handle: { handle: '+1' }, parts: [{ type: 'image', value: 'https://cdn.example/a.jpg' }] },
   });
   eq('the dedupe id falls back to the photo url when there is no text', noId?.eventId, '+1:https://cdn.example/a.jpg');
+
+  // Same sender, same word, two different days. Keyed on sender and text
+  // alone, the second one was written off as a retry and never answered.
+  const said = (at: string) =>
+    normalizeInbound({
+      event_type: 'message.received',
+      data: { direction: 'inbound', sender_handle: { handle: '+1' }, timestamp: at, parts: [{ type: 'text', value: 'done' }] },
+    })?.eventId;
+  isTrue('the same words on another day are not a duplicate', said('2026-09-19T18:00:00Z') !== said('2026-09-21T18:00:00Z'));
+  eq('...but a retry of one delivery is', said('2026-09-19T18:00:00Z'), said('2026-09-19T18:00:00Z'));
 }
 
 section('what the trace and the agent see');
@@ -175,8 +186,19 @@ section('what snap is told to say about a photo');
   isFalse('without turning into a rulebook', rejected.includes('lecture them'));
 
   const unsure = photoInstruction('', 'blurry', { kind: 'unsure', reason: "can't tell" });
-  isTrue('an unsure photo asks for a clearer one', unsure.includes('could not tell'));
+  isTrue('an unsure photo carries the reason', unsure.includes("can't tell"));
+  isTrue('and asks for one that works', unsure.includes('ask for one that works'));
   isTrue('and nothing moved', unsure.includes('still on the line'));
+
+  // A photo that was fine except for the gesture is the common unsure now, and
+  // the ask is useless unless the gesture is repeated in it.
+  const gesture = photoInstruction('', 'mid-set', {
+    kind: 'unsure',
+    reason: "i asked for 3 fingers up in the pic — can't see it",
+  });
+  isTrue('a missing gesture is quoted back', gesture.includes('3 fingers up in the pic'));
+  isTrue('and snap is told to say it again', gesture.includes('NAME THAT GESTURE'));
+  isFalse('nobody is in trouble over it', gesture.includes('roast'));
 
   const replay = photoInstruction('', 'the same gym selfie', { kind: 'replay', reason: 'seen it' });
   isTrue('a reused photo is called out', replay.includes('EXACT photo'));

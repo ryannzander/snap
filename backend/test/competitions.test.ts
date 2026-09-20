@@ -117,7 +117,7 @@ section('progress is measured by the same bar that releases a stake');
     w('2026-09-16T23:00:00Z', 3600), // same local day as the one above
   ];
   const junk = [
-    w('2026-09-15T16:00:00Z', 1200),                              // under the floor
+    w('2026-09-15T16:00:00Z', 300),                               // five minutes
     w('2026-09-15T16:00:00Z', 3600, 'walking'),                   // wrong type
     w('2026-09-15T16:00:00Z', 3600, 'running', true),             // hand-entered
     w('2026-09-01T16:00:00Z', 3600),                              // before the window
@@ -127,6 +127,12 @@ section('progress is measured by the same bar that releases a stake');
   eq('hours are summed from the same set', progressFor({ type: 'activeHours', target: 2 }, [...real, ...junk], from, to, TZ), 2.25);
   eq('days are distinct local days', progressFor({ type: 'activeDays', target: 2 }, [...real, ...junk], from, to, TZ), 2);
   eq('nothing at all is zero, not an error', progressFor({ type: 'workouts', target: 4 }, junk, from, to, TZ), 0);
+
+  // The hours figure is not only read out, it is the number the goal is
+  // compared against — so it is floored. Rounded, 4h 59m 42s met a 5h goal.
+  const nearly = [w('2026-09-15T16:00:00Z', 17_982)];
+  eq('hours never round up into a win', progressFor({ type: 'activeHours', target: 5 }, nearly, from, to, TZ), 4.99);
+  isTrue('...and that is short of the goal', !meetsGoal({ type: 'activeHours', target: 5 }, progressFor({ type: 'activeHours', target: 5 }, nearly, from, to, TZ)));
 
   isTrue('the target is inclusive', meetsGoal({ type: 'workouts', target: 3 }, 3));
   isTrue('and beating it still counts', meetsGoal({ type: 'workouts', target: 3 }, 9));

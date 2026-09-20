@@ -37,24 +37,35 @@ function coerceInt(value: unknown): number | null {
   return parsed !== null && Number.isInteger(parsed) ? parsed : null;
 }
 
-/** A stake below this is not worth a transaction; above it is a fat finger. */
-const MIN_STAKE_LAMPORTS = 1_000_000; // 0.001 SOL
-const MAX_STAKE_LAMPORTS = 1_000_000_000; // 1 SOL
+/**
+ * The floor and the ceiling on what a person can put up.
+ *
+ * The floor is not about transaction cost — 0.001 SOL clears the fee fine. It
+ * is about the stake meaning something: the amount is theirs to choose, and
+ * below a cent there is nothing to lose and the whole product is a streak app
+ * again. Above the ceiling is a fat finger.
+ */
+export const MIN_STAKE_LAMPORTS = 10_000_000; // 0.01 SOL
+export const MAX_STAKE_LAMPORTS = 1_000_000_000; // 1 SOL
 
 const MAX_TEXTS = 5;
 const MAX_TEXT_LENGTH = 300;
 
 /**
- * How long a workout must run to count, and which HealthKit types qualify.
+ * How long a session must run before it can release money.
  *
- * 30 minutes is Ryan's call. The floor is inclusive: a workout of exactly 30
- * minutes counts, so the seeded 30-minute run still does.
+ * This is a fraud floor, not an effort bar. It was 30 minutes, which made it
+ * both: someone who drove to the gym, warmed up, felt terrible and left after
+ * twenty minutes got told *"under 30 min"* and lost their stake — and showing
+ * up is the behaviour the whole product is trying to buy. A workout is a
+ * workout. Fifteen minutes is long enough that nobody taps it by accident and
+ * short enough that a bad day you turned up for still pays.
  *
- * The type filter is still open — any type qualifies, so a 30-minute walk
- * closes a gym commitment. Set ACCEPTED_WORKOUT_TYPES to a list of
- * HKWorkoutActivityType case names to narrow it.
+ * What you were aiming for is still a real number — see `targetMin` on the
+ * intensity dial — but it is something Snap talks to you about, never
+ * something that quietly keeps your money. The floor is inclusive.
  */
-export const MIN_WORKOUT_SEC = 30 * 60;
+export const MIN_WORKOUT_SEC = 15 * 60;
 
 /**
  * HKWorkoutActivityType case names that count, matching what WorkoutSync
@@ -70,6 +81,22 @@ export const MIN_WORKOUT_SEC = 30 * 60;
  * "Traditional Strength Training" and "Functional Strength Training" both
  * are; anything exotic arrives as `other` and will not release the stake.
  */
+/**
+ * Active energy per minute a session has to average to count as training.
+ *
+ * This is the hole the other three checks leave open. Press start on the
+ * Watch, sit in the car for 45 minutes and stop: the type is right, the
+ * duration is right, nothing was typed by hand, and the stake releases.
+ * HealthKit proves a session was *recorded*; it does not prove anyone moved.
+ *
+ * Active energy excludes basal metabolism, so sitting still reads near zero.
+ * Genuine strength work runs 5-8 kcal/min and running 10-15. Two is chosen to
+ * sit far above sitting and far below anything real, because the cost of
+ * failing an honest workout is much higher than the cost of missing a lazy
+ * cheat — someone who trained and got told they didn't will never stake again.
+ */
+export const MIN_KCAL_PER_MIN = 2;
+
 export const ACCEPTED_WORKOUT_TYPES: readonly string[] | null = [
   'traditionalStrengthTraining',
   'functionalStrengthTraining',
@@ -91,6 +118,8 @@ export interface WorkoutWindow {
   durationSec: number;
   type: string;
   wasUserEntered?: boolean;
+  /** Active energy, excluding basal. Null when the source did not record it. */
+  activeKcal?: number | null;
 }
 
 export interface CreateArgs {
@@ -139,8 +168,9 @@ export function guardCreate(
   now: number,
   tz: string,
   openCommitments: Commitment[],
+  defaultStakeLamports = DEFAULT_STAKE_LAMPORTS,
 ): Guard<CreatedCommitment> {
-  return guardProposal(args, now, tz, openCommitments, 'create_commitment');
+  return guardProposal(args, now, tz, openCommitments, 'create_commitment', defaultStakeLamports);
 }
 
 /**
@@ -153,8 +183,9 @@ export function guardOffer(
   now: number,
   tz: string,
   openCommitments: Commitment[],
+  defaultStakeLamports = DEFAULT_STAKE_LAMPORTS,
 ): Guard<CreatedCommitment> {
-  return guardProposal(args, now, tz, openCommitments, 'offer_stake');
+  return guardProposal(args, now, tz, openCommitments, 'offer_stake', defaultStakeLamports);
 }
 
 function guardProposal(
@@ -163,6 +194,7 @@ function guardProposal(
   tz: string,
   openCommitments: Commitment[],
   tool: string,
+  defaultStakeLamports: number = DEFAULT_STAKE_LAMPORTS,
 ): Guard<CreatedCommitment> {
   const text = typeof args.text === 'string' ? args.text.trim() : '';
   if (!text) return deny(`${tool} needs the commitment in the user's words`);
@@ -180,12 +212,12 @@ function guardProposal(
 
   // The stake arrives in SOL, not lamports: asked for lamports the model
   // invented an exchange rate and turned "$5" into 0.15 SOL.
-  let lamports = DEFAULT_STAKE_LAMPORTS;
+  let lamports = defaultStakeLamports;
   if (args.sol !== undefined && args.sol !== null) {
     const sol = coerceNumber(args.sol);
     if (sol === null) return deny('sol must be a number');
     lamports = Math.round(sol * 1_000_000_000);
-    if (lamports < MIN_STAKE_LAMPORTS) return deny('stake is too small to be worth locking');
+    if (lamports < MIN_STAKE_LAMPORTS) return deny('the smallest stake is 0.01 SOL');
     if (lamports > MAX_STAKE_LAMPORTS) return deny('stake is above the 1 SOL ceiling');
   }
 
@@ -279,10 +311,34 @@ export function disqualification(workout: WorkoutWindow): string | null {
   if (workout.durationSec < MIN_WORKOUT_SEC) {
     return `under ${MIN_WORKOUT_SEC / 60} min`;
   }
+
+  // Only ever judged when the source actually recorded something. Strava and
+  // Hevy sometimes send nothing here, and refusing a real workout because its
+  // exporter was quiet would be a far worse failure than letting one slide.
+  //
+  // Exactly zero counts as "nothing recorded" rather than "burned nothing".
+  // Nobody completes 45 minutes of strength training at a true zero, so a
+  // zero means the sensor or the permission failed — and the one place that
+  // would surface is a real workout on stage.
+  if (workout.activeKcal !== undefined && workout.activeKcal !== null && workout.activeKcal > 0) {
+    const minutes = workout.durationSec / 60;
+    if (minutes > 0 && workout.activeKcal / minutes < MIN_KCAL_PER_MIN) {
+      return 'barely moved';
+    }
+  }
   return null;
 }
 
-/** Does a workout actually cover this commitment? HealthKit decides, not the model. */
+/**
+ * Does a workout actually cover this commitment? HealthKit decides, not the
+ * model.
+ *
+ * It asks `disqualification` rather than re-checking the rules, because it
+ * used to keep its own copy of them and the copy fell behind: the effort
+ * floor was added to one and not the other, so a 45-minute session at 40 kcal
+ * released the stake through the watch while the trace said `barely moved`
+ * and the goal dot stayed empty. One bar, in one place.
+ */
 export function findCoveringWorkout(
   workouts: WorkoutWindow[],
   windowStart: number,
@@ -293,9 +349,7 @@ export function findCoveringWorkout(
     // Anyone can open Health -> Workouts -> Add Data and invent one, and
     // "Snap knows rather than asks" has to survive a judge trying exactly
     // that. Stored either way, so the trace can say why it was ignored.
-    if (workout.wasUserEntered) continue;
-    if (workout.durationSec < MIN_WORKOUT_SEC) continue;
-    if (ACCEPTED_WORKOUT_TYPES && !ACCEPTED_WORKOUT_TYPES.includes(workout.type)) continue;
+    if (disqualification(workout) !== null) continue;
 
     const start = parseIso(workout.start);
     if (start === null) continue;

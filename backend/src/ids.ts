@@ -50,19 +50,30 @@ export function newLinkCode(): string {
   return String(n % 10_000).padStart(4, '0');
 }
 
-/** Constant-time string comparison, so token checks do not leak length/prefix. */
 /**
  * A shareable competition code: six characters, no vowels and no 0/1/I/O, so
  * it survives being read aloud in a gym or typed from a screenshot.
  */
 export function newJoinCode(): string {
   const alphabet = '23456789BCDFGHJKLMNPQRSTVWXYZ';
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  // Rejection sampled, like `newLinkCode` above and for the same reason: 256
+  // does not divide 29, so `byte % 29` handed the first 24 characters nine of
+  // the 256 bytes each and the last five only eight — every code was 12.5%
+  // more likely to start with a 2 than a Z. Not an attack on a join code, but
+  // the function three above this one documents the fix, which makes this the
+  // kind of inconsistency that is worth two minutes now and an argument later.
+  const limit = Math.floor(256 / alphabet.length) * alphabet.length;
+  const buf = new Uint8Array(1);
   let code = '';
-  for (const byte of bytes) code += alphabet[byte % alphabet.length];
+  while (code.length < 6) {
+    crypto.getRandomValues(buf);
+    if (buf[0]! >= limit) continue;
+    code += alphabet[buf[0]! % alphabet.length];
+  }
   return code;
 }
 
+/** Constant-time string comparison, so token checks do not leak length/prefix. */
 export function secureEquals(a: string, b: string): boolean {
   const encoder = new TextEncoder();
   const left = encoder.encode(a);

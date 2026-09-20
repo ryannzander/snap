@@ -5,7 +5,7 @@
  * which is why the bulk of it is now a property check over real instants
  * rather than a table of values someone reasoned out.
  */
-import { startOfWeek, endOfLocalDay, localTimeToInstant, parseIso, isValidTimezone } from '../src/time';
+import { startOfMonth, startOfYear, startOfWeek, endOfLocalDay, localTimeToInstant, parseIso, isValidTimezone } from '../src/time';
 import { section, eq, isTrue, isFalse, done } from './harness';
 
 const ZONES = [
@@ -133,6 +133,51 @@ section('parsing and validation');
   isTrue('a real zone', isValidTimezone('America/Toronto'));
   isFalse('a made-up zone', isValidTimezone('Mars/Olympus_Mons'));
   isFalse('empty zone', isValidTimezone(''));
+}
+
+section('month and year boundaries, resolved the same careful way');
+{
+  const TZ = 'America/Toronto';
+  const at = (iso: string) => Date.parse(iso);
+  const localOf = (instant: number, tz: string) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(instant));
+
+  eq('the 1st at midnight local', localOf(startOfMonth(at('2026-09-20T16:00:00Z'), TZ), TZ), '2026-09-01, 00:00');
+  eq('january 1st at midnight local', localOf(startOfYear(at('2026-09-20T16:00:00Z'), TZ), TZ), '2026-01-01, 00:00');
+
+  // March in Toronto contains a DST change, so the offset on the 1st is not
+  // the offset today. This is exactly the bug startOfWeek was shaped to avoid.
+  eq('a month containing a DST change', localOf(startOfMonth(at('2026-03-25T16:00:00Z'), TZ), TZ), '2026-03-01, 00:00');
+  eq('and a year containing two', localOf(startOfYear(at('2026-11-15T16:00:00Z'), TZ), TZ), '2026-01-01, 00:00');
+
+  // Southern hemisphere, DST the other way round.
+  eq('Sydney', localOf(startOfMonth(at('2026-04-20T02:00:00Z'), 'Australia/Sydney'), 'Australia/Sydney'), '2026-04-01, 00:00');
+  // A zone with a half-hour offset, where naive arithmetic lands 30 min out.
+  eq('Kolkata', localOf(startOfMonth(at('2026-09-20T16:00:00Z'), 'Asia/Kolkata'), 'Asia/Kolkata'), '2026-09-01, 00:00');
+
+  // Every boundary is itself a local midnight, in every zone, all year.
+  const zones = ['America/Toronto', 'Europe/London', 'Asia/Kolkata', 'Australia/Sydney', 'Africa/Cairo', 'America/Sao_Paulo'];
+  let offMidnight = 0;
+  for (const tz of zones) {
+    for (let month = 0; month < 12; month++) {
+      const probe = Date.UTC(2026, month, 15, 12);
+      for (const start of [startOfMonth(probe, tz), startOfYear(probe, tz)]) {
+        if (!localOf(start, tz).endsWith('00:00')) offMidnight++;
+      }
+    }
+  }
+  eq('every month and year start is a local midnight', offMidnight, 0);
+
+  // Ordering is the property that actually matters downstream.
+  let broken = 0;
+  for (const tz of zones) {
+    for (let month = 0; month < 12; month++) {
+      const probe = Date.UTC(2026, month, 15, 12);
+      if (!(startOfYear(probe, tz) <= startOfMonth(probe, tz))) broken++;
+      if (!(startOfMonth(probe, tz) <= startOfWeek(probe, tz) || startOfWeek(probe, tz) < startOfMonth(probe, tz))) broken++;
+    }
+  }
+  eq('the year never starts after the month', broken, 0);
 }
 
 done('time');

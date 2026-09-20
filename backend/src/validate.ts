@@ -2,6 +2,7 @@
 
 import { HttpError, badRequest } from './http';
 import { LAMPORTS_PER_SOL, MAX_TOPUP_LAMPORTS, MIN_TOPUP_LAMPORTS } from './money';
+import { isIntensity } from './agent/intensity';
 import { isValidTimezone, parseIso } from './time';
 import type { OnboardRequest, WorkoutInput } from './types';
 
@@ -26,6 +27,23 @@ export async function readJsonBody(request: Request): Promise<unknown> {
   }
 }
 
+/**
+ * A longer-horizon goal, or nothing.
+ *
+ * The ceilings are three a day over the window: 93 in a month, 1095 in a year.
+ * Not a fitness opinion, just the point past which a number is a typo rather
+ * than an ambition, and a goal nobody can hit is a goal that teaches somebody
+ * their stake is pointless.
+ */
+function optionalGoal(value: unknown, field: string, min: number, max: number): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const n = asNumber(value, field);
+  if (!Number.isInteger(n) || n < min || n > max) {
+    throw badRequest(`${field} must be a whole number between ${min} and ${max}`);
+  }
+  return n;
+}
+
 export function parseOnboardRequest(body: unknown): OnboardRequest {
   const input = asObject(body, 'body');
 
@@ -38,12 +56,29 @@ export function parseOnboardRequest(body: unknown): OnboardRequest {
     throw badRequest('weeklyGoal must be a whole number between 1 and 21');
   }
 
+  // Optional: a profile made before the dial existed simply runs at medium.
+  let intensity: OnboardRequest['intensity'];
+  if (input.intensity !== undefined && input.intensity !== null) {
+    if (!isIntensity(input.intensity)) throw badRequest('intensity must be easy, medium or hard');
+    intensity = input.intensity;
+  }
+
   const timezone = asString(input.timezone, 'timezone');
   if (!isValidTimezone(timezone)) {
     throw badRequest(`timezone "${timezone}" is not a known IANA timezone`);
   }
 
-  return { name, weeklyGoal, timezone };
+  const monthlyGoal = optionalGoal(input.monthlyGoal, 'monthlyGoal', 1, 93);
+  const yearlyGoal = optionalGoal(input.yearlyGoal, 'yearlyGoal', 1, 1095);
+
+  return {
+    name,
+    weeklyGoal,
+    timezone,
+    ...(intensity ? { intensity } : {}),
+    ...(monthlyGoal !== undefined ? { monthlyGoal } : {}),
+    ...(yearlyGoal !== undefined ? { yearlyGoal } : {}),
+  };
 }
 
 export function parseWorkoutsRequest(body: unknown): WorkoutInput[] {

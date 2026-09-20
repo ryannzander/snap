@@ -8,6 +8,8 @@
  * would say "3/4 this week" off workouts the release path rejects.
  */
 import {
+  brokenStreak,
+  currentStreak,
   buildDays,
   countMovesThisWeek,
   countThisWeek,
@@ -20,7 +22,7 @@ import {
   type WorkoutLike,
 } from '../src/agent/context';
 import type { Commitment, TraceEvent } from '../src/types';
-import { section, eq, isTrue, done } from './harness';
+import { section, eq, isTrue, isFalse, done } from './harness';
 
 const TZ = 'America/Toronto';
 const NOW = Date.parse('2026-09-19T14:00:00Z'); // Sat 19 Sep, 10:00 EDT
@@ -53,7 +55,7 @@ section('the weekly count uses the same bar as releasing a stake');
 {
   const junk: WorkoutLike[] = [
     workout('2026-09-18T16:00:00Z', 3600, 'walking'),                              // wrong type
-    workout('2026-09-18T16:00:00Z', 1200, 'running'),                              // under the floor
+    workout('2026-09-18T16:00:00Z', 300, 'running'),                               // five minutes
     workout('2026-09-18T16:00:00Z', 2700, 'traditionalStrengthTraining', true),    // hand-entered
     workout('2026-09-18T16:00:00Z', 3600, 'other'),                                // wrong type
   ];
@@ -65,6 +67,12 @@ section('the weekly count uses the same bar as releasing a stake');
     workout('2026-09-17T16:00:00Z', 1800, 'running'),
   ];
   eq('two that can, count for two', countThisWeek(NOW, TZ, [...junk, ...real]), 2);
+
+  // Turning up counts. Someone who drove to the gym, warmed up, felt awful
+  // and left after twenty minutes trained — the floor is there to catch a
+  // fake, not to punish a bad day.
+  const shortDay = [workout('2026-09-16T16:00:00Z', 1200, 'traditionalStrengthTraining')];
+  eq('twenty minutes is a session', countThisWeek(NOW, TZ, shortDay), 1);
 }
 
 section('a verified photo fills a goal dot, because it releases a stake');
@@ -202,6 +210,8 @@ section('what the model actually sees');
     name: 'Ryan',
     weeklyGoal: 4,
     workoutsThisWeek: 2,
+    workoutsThisMonth: 2,
+    workoutsThisYear: 2,
     lastSevenDays: [
       { date: '2026-09-18', workouts: 0, skipped: true },
       { date: '2026-09-19', workouts: 0, skipped: false },
@@ -219,6 +229,10 @@ section('what the model actually sees');
     ] as unknown as Array<Commitment & { renegotiations: number }>,
     standingOffer: null,
     movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    targetMin: 45,
+    streak: 0,
+    brokenStreak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
@@ -272,6 +286,197 @@ section('what the model actually sees');
   );
 }
 
+section('the streak, and it has to be the number on their home screen');
+{
+  const d = (date: string, workouts: number, skipped = false) => ({ date, workouts, skipped });
+
+  eq('nothing at all', currentStreak([]), 0);
+  eq('one day', currentStreak([d('2026-09-19', 1)]), 1);
+  eq('three in a row', currentStreak([d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 1)]), 3);
+  eq(
+    'a gap breaks it, and only the run up to today counts',
+    currentStreak([d('2026-09-15', 1), d('2026-09-16', 1), d('2026-09-17', 0), d('2026-09-18', 1), d('2026-09-19', 1)]),
+    2,
+  );
+
+  // The two that matter, and the reason this is ported rather than reinvented.
+  // Today with nothing logged yet is NOT a break — the day is not over, and a
+  // number that resets at midnight and un-resets when you train is one nobody
+  // would trust.
+  eq(
+    'today being empty does not break it',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 0)]),
+    2,
+  );
+  // But today SKIPPED is a day already decided — the money has moved.
+  eq(
+    'today being skipped does',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 0, true)]),
+    0,
+  );
+  eq(
+    'and yesterday skipped still breaks it behind an empty today',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 0, true), d('2026-09-19', 0)]),
+    0,
+  );
+  // Training today after a skipped commitment yesterday starts a fresh run.
+  eq(
+    'a fresh run starts at one',
+    currentStreak([d('2026-09-17', 1), d('2026-09-18', 0, true), d('2026-09-19', 1)]),
+    1,
+  );
+
+  // Capped by the window it is given: 30 days of history cannot prove 40.
+  const thirty = Array.from({ length: 30 }, (_, i) => d(`2026-09-${String(i + 1).padStart(2, '0')}`, 1));
+  eq('capped by the window', currentStreak(thirty), 30);
+}
+
+section('the run you just lost');
+{
+  const d = (date: string, workouts: number, skipped = false) => ({ date, workouts, skipped });
+
+  // The seeded demo week, and the reason this exists: three consecutive days,
+  // yesterday skipped, today still open. No streak to talk about, but a very
+  // good sentence available.
+  const seeded = [d('2026-09-16', 1), d('2026-09-17', 1), d('2026-09-18', 1), d('2026-09-19', 0, true), d('2026-09-20', 0)];
+  eq('no streak going', currentStreak(seeded), 0);
+  eq('but a three day run just ended', brokenStreak(seeded), 3);
+
+  // Never both. A live streak is the thing to protect; a dead one is the thing
+  // to get back, and Snap talking about both in one breath is incoherent.
+  const alive = [d('2026-09-18', 1), d('2026-09-19', 1), d('2026-09-20', 0)];
+  eq('a live streak silences it', brokenStreak(alive), 0);
+  isTrue('and the live one is still counted', currentStreak(alive) === 2);
+
+  // One session is a Tuesday. Calling it a lost streak is how Snap starts
+  // sounding like an app.
+  eq('one lost day is not a lost run', brokenStreak([d('2026-09-18', 1), d('2026-09-19', 0, true)]), 0);
+  eq('nothing at all', brokenStreak([d('2026-09-19', 0, true)]), 0);
+  eq('no history at all', brokenStreak([]), 0);
+
+  // Only the run immediately before the break, not the best run ever.
+  const older = [d('2026-09-10', 1), d('2026-09-11', 1), d('2026-09-12', 1), d('2026-09-13', 1),
+                 d('2026-09-14', 0), d('2026-09-18', 1), d('2026-09-19', 1), d('2026-09-20', 0, true)];
+  eq('the most recent run, not the longest', brokenStreak(older), 2);
+}
+
+section('snap only mentions a streak when there is one');
+{
+  const base: AgentContext = {
+    now: '2026-09-19T14:00:00Z',
+    localTime: 'Saturday 10:00',
+    timezone: TZ,
+    name: 'Ryan',
+    weeklyGoal: 4,
+    workoutsThisWeek: 2,
+    workoutsThisMonth: 2,
+    workoutsThisYear: 2,
+    lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
+    openCommitments: [],
+    standingOffer: null,
+    movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    targetMin: 45,
+    streak: 0,
+    brokenStreak: 0,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
+    recentMessages: [],
+  };
+
+  // One session is a Tuesday, not a streak, and Snap congratulating someone on
+  // a "1 day streak" is the single most patronising thing he could say.
+  isTrue('none at all is said plainly', renderContext(base).includes('no streak going'));
+  isTrue('and one day is not a streak', renderContext({ ...base, streak: 1 }).includes('no streak going'));
+
+  const five = renderContext({ ...base, streak: 5 });
+  isTrue('five is', five.includes('5 day streak'));
+  isTrue('and he is told it is the number they can see', five.includes('home screen'));
+  isFalse('with no invented number', five.includes('no streak going'));
+}
+
+section('the model is told the gesture it will later enforce');
+{
+  // Enforcement reads the stored commitment; this row is the only place the
+  // model can learn what to ask for. They were wired separately once, and the
+  // projection between them dropped the field — which would have shipped as
+  // Snap refusing a photo for missing a gesture he never mentioned.
+  const withChallenge: AgentContext = {
+    now: '2026-09-19T14:00:00Z',
+    localTime: 'Saturday 10:00',
+    timezone: TZ,
+    name: 'Ryan',
+    weeklyGoal: 4,
+    workoutsThisWeek: 2,
+    workoutsThisMonth: 2,
+    workoutsThisYear: 2,
+    lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
+    openCommitments: [
+      {
+        id: 'c_1',
+        text: 'gym at 7',
+        dueAt: '2026-09-19T23:00:00Z',
+        graceMin: 20,
+        status: 'pending',
+        stake: { lamports: 50_000_000, status: 'held', txSig: null },
+        reschedules: [],
+        proof: null,
+        verifiedBy: null,
+        challenge: 'thumb',
+        renegotiations: 0,
+      },
+    ] as unknown as Array<Commitment & { renegotiations: number }>,
+    standingOffer: null,
+    movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    targetMin: 45,
+    streak: 0,
+    brokenStreak: 0,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
+    recentMessages: [],
+  };
+  const rendered = renderContext(withChallenge);
+  isTrue('the gesture is named', rendered.includes('A THUMBS UP IN THE PIC'));
+  isTrue('and snap is told to repeat it', rendered.includes('tell them, every time'));
+
+  const without = renderContext({
+    ...withChallenge,
+    openCommitments: withChallenge.openCommitments.map((c) => ({ ...c, challenge: undefined })),
+  });
+  isFalse('a commitment from before challenges says nothing', without.includes('THE PIC FOR THIS ONE NEEDS'));
+}
+
+section('the model is told which number to say');
+{
+  // The prompt used to hard-code "5 bucks of sol". With the dial moving the
+  // default per user, a fixed number in the prompt is Snap promising a deal
+  // the guard does not honour — so the amount is rendered, not baked in.
+  const base: AgentContext = {
+    now: '2026-09-19T14:00:00Z',
+    localTime: 'Saturday 10:00',
+    timezone: TZ,
+    name: 'Ryan',
+    weeklyGoal: 4,
+    workoutsThisWeek: 2,
+    workoutsThisMonth: 2,
+    workoutsThisYear: 2,
+    lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
+    openCommitments: [],
+    standingOffer: null,
+    movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    targetMin: 45,
+    streak: 0,
+    brokenStreak: 0,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
+    recentMessages: [],
+  };
+  const easy = renderContext({ ...base, defaultStakeLamports: 20_000_000 });
+  const hard = renderContext({ ...base, defaultStakeLamports: 100_000_000 });
+  isTrue('easy names 0.02', easy.includes('the stake is 0.02 SOL'));
+  isTrue('hard names 0.1', hard.includes('the stake is 0.1 SOL'));
+  isFalse('and it is not a constant', easy.includes('0.1 SOL —'));
+}
+
 section('an offer on the table is something the model must see');
 {
   const base: AgentContext = {
@@ -281,10 +486,16 @@ section('an offer on the table is something the model must see');
     name: 'Ryan',
     weeklyGoal: 4,
     workoutsThisWeek: 2,
+    workoutsThisMonth: 2,
+    workoutsThisYear: 2,
     lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
     openCommitments: [],
     standingOffer: null,
     movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    targetMin: 45,
+    streak: 0,
+    brokenStreak: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };

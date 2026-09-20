@@ -79,6 +79,29 @@ function localDayNumber(instant: number, tz: string): number {
  * UTC instant of the next local midnight in `tz` — the moment "end of day"
  * passes, which is when a stake may be slashed (DESIGN.md → Stake rules).
  */
+/**
+ * Midnight on the 1st of the user's current month, in their zone.
+ *
+ * Same two-pass resolve as `startOfWeek`: the offset on the target midnight
+ * can differ from the offset right now, which is the whole reason that
+ * function is shaped the way it is. A month boundary crosses a DST change
+ * twice a year in most zones, so this is not theoretical.
+ */
+export function startOfMonth(instant: number, tz: string): number {
+  const local = new Date(instant + tzOffsetMs(instant, tz));
+  const localMidnight = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), 1);
+  const firstGuess = localMidnight - tzOffsetMs(instant, tz);
+  return localMidnight - tzOffsetMs(firstGuess, tz);
+}
+
+/** Midnight on January 1st of the user's current year, in their zone. */
+export function startOfYear(instant: number, tz: string): number {
+  const local = new Date(instant + tzOffsetMs(instant, tz));
+  const localMidnight = Date.UTC(local.getUTCFullYear(), 0, 1);
+  const firstGuess = localMidnight - tzOffsetMs(instant, tz);
+  return localMidnight - tzOffsetMs(firstGuess, tz);
+}
+
 export function endOfLocalDay(instant: number, tz: string): number {
   const local = new Date(instant + tzOffsetMs(instant, tz));
   const nextMidnight = Date.UTC(

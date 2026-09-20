@@ -19,6 +19,7 @@ import {
   guardAccept,
   type StandingOffer,
   MIN_WORKOUT_SEC,
+  MIN_KCAL_PER_MIN,
   type WorkoutWindow,
 } from '../src/agent/guards';
 import { endOfLocalDay } from '../src/time';
@@ -46,7 +47,8 @@ const workout = (
   durationSec: number,
   type = 'traditionalStrengthTraining',
   wasUserEntered = false,
-): WorkoutWindow => ({ start, end: null, durationSec, type, wasUserEntered });
+  activeKcal: number | null = null,
+): WorkoutWindow => ({ start, end: null, durationSec, type, wasUserEntered, activeKcal });
 
 section('local time resolution — the model never does timezone maths');
 {
@@ -99,6 +101,12 @@ section('create_commitment');
 
   denies('a stake above the 1 SOL ceiling', guardCreate({ text: 'gym', hour: 20, sol: 99 }, NOW, TZ, []));
   denies('dust', guardCreate({ text: 'gym', hour: 20, sol: 0.0000001 }, NOW, TZ, []));
+  // The amount is the user's to pick, but a stake you cannot feel is a streak
+  // app with extra steps, so the floor is a cent's worth and it is a refusal
+  // rather than a quiet round-up.
+  denies('under the 0.01 floor', guardCreate({ text: 'gym', hour: 20, sol: 0.005 }, NOW, TZ, []));
+  allows('exactly the floor', guardCreate({ text: 'gym', hour: 20, sol: 0.01 }, NOW, TZ, []));
+  allows('anything above it', guardCreate({ text: 'gym', hour: 20, sol: 0.37 }, NOW, TZ, []));
 
   // Regression: asked for lamports, the model invented an exchange rate and
   // turned "$5" into 0.15 SOL. The tool takes SOL and only when SOL is named.
@@ -186,12 +194,50 @@ section('what counts as training');
     "doesn't count as training",
   );
   eq(
-    'under the floor',
-    disqualification(workout('2026-09-19T22:00:00Z', 1200, 'running')),
+    'five minutes is not a session',
+    disqualification(workout('2026-09-19T22:00:00Z', 300, 'running')),
     `under ${MIN_WORKOUT_SEC / 60} min`,
   );
-  // The floor is inclusive: exactly 30 minutes counts.
+  // The floor is inclusive, and it is a fraud floor rather than an effort bar:
+  // twenty minutes of a session you meant to be an hour still pays. Someone
+  // told "doesn't count" after turning up on a bad day never stakes again.
   eq('exactly at the floor', disqualification(workout('2026-09-19T22:00:00Z', MIN_WORKOUT_SEC, 'running')), null);
+  eq('twenty minutes pays', disqualification(workout('2026-09-19T22:00:00Z', 1200, 'running')), null);
+}
+
+section('effort — the hole the other three checks leave open');
+{
+  const at = '2026-09-19T22:00:00Z';
+  // Press start, sit in the car for 45 minutes, press stop. Right type, right
+  // duration, nothing typed by hand — and before this it released the stake.
+  eq(
+    'a 45-minute session that burned 40 kcal',
+    disqualification(workout(at, 2700, 'traditionalStrengthTraining', false, 40)),
+    'barely moved',
+  );
+  eq('a real 45-minute session at 310 kcal', disqualification(workout(at, 2700, 'traditionalStrengthTraining', false, 310)), null);
+  eq('a 30-minute run at 260 kcal', disqualification(workout(at, 1800, 'running', false, 260)), null);
+
+  // Exactly on the floor counts: 30 min x 2 kcal/min.
+  eq('exactly at the floor', disqualification(workout(at, 1800, 'running', false, 30 * MIN_KCAL_PER_MIN)), null);
+  eq('a hair under it', disqualification(workout(at, 1800, 'running', false, 30 * MIN_KCAL_PER_MIN - 1)), 'barely moved');
+
+  // Zero means the sensor recorded nothing, not that nobody moved. Rejecting
+  // a real workout on stage over a permissions hiccup is the expensive way to
+  // be wrong.
+  eq('exactly zero is treated as no data', disqualification(workout(at, 2700, 'running', false, 0)), null);
+
+  // The important half: never punish a source that simply did not say.
+  eq('no calorie data at all is not a rejection', disqualification(workout(at, 2700, 'running', false, null)), null);
+  eq('and neither is the field being absent', disqualification({ start: at, end: null, durationSec: 2700, type: 'running' }), null);
+
+  // Order matters: a hand-typed workout is refused for being hand-typed,
+  // whatever number it claims to have burned.
+  eq(
+    'hand-entered still reads as hand-entered',
+    disqualification(workout(at, 2700, 'running', true, 9999)),
+    'typed in by hand',
+  );
 }
 
 section('does a workout cover the commitment?');

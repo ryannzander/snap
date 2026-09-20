@@ -28,7 +28,16 @@ export type TraceKind =
 export interface OnboardRequest {
   name: string;
   weeklyGoal: number;
+  /**
+   * Longer horizons, both optional. Weekly is the one that drives behaviour;
+   * these are for the people who think in months and years. Omit them and
+   * nothing about the loop changes.
+   */
+  monthlyGoal?: number;
+  yearlyGoal?: number;
   timezone: string;
+  /** `easy | medium | hard`. How hard Snap pushes. Defaults to medium. */
+  intensity?: 'easy' | 'medium' | 'hard';
 }
 
 export interface OnboardResponse {
@@ -110,6 +119,12 @@ export interface Commitment {
    * on a commitment that was missed.
    */
   verifiedBy: 'photo' | 'watch' | null;
+  /**
+   * The gesture this stake's photo has to have in it, picked at random when
+   * the stake locked. `agent/challenge.ts` says why. Absent on a commitment
+   * made before challenges existed, which then verifies on the photo alone.
+   */
+  challenge?: string;
 }
 
 /**
@@ -130,6 +145,11 @@ export interface DayRecord {
 export interface StateResponse {
   weeklyGoal: number;
   workoutsThisWeek: number;
+  /** Absent when the user never set one. */
+  monthlyGoal?: number;
+  yearlyGoal?: number;
+  workoutsThisMonth: number;
+  workoutsThisYear: number;
   linked: boolean;
   commitments: Commitment[];
   /** The last 30 local days, oldest first. What the streak is counted from. */

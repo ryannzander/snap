@@ -230,7 +230,22 @@ final class WorkoutSync {
 
     /// The backend's `MIN_WORKOUT_SEC`. A session under this releases nothing, so
     /// there is no point writing it.
-    static let minimumSessionSec: TimeInterval = 30 * 60
+    ///
+    /// It is a fraud floor, not an effort bar. It was 30 minutes, which made it
+    /// both: someone who drove to the gym, warmed up, felt terrible and left
+    /// after twenty minutes was told their session did not count and lost their
+    /// stake — and turning up is the behaviour the stake exists to buy. What
+    /// they were *aiming* for is the intensity target (30/45/60), which Snap
+    /// says out loud and never enforces with money.
+    static let minimumSessionSec: TimeInterval = 15 * 60
+
+    /// The same number, for anything a person reads.
+    ///
+    /// Every string that quotes the floor interpolates this instead of spelling
+    /// it out. The backend moved to 15 and three hardcoded "30 min" strings in
+    /// the app did not, so the phone spent hours contradicting the pitch, the
+    /// README, and the button it was greying out.
+    static var minimumSessionMinutes: Int { Int(minimumSessionSec / 60) }
 
     enum SessionError: LocalizedError {
         case tooShort(remaining: TimeInterval)

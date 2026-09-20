@@ -2,11 +2,13 @@
  * The agent's tools (BACKEND_TASKS step 3), in OpenAI function-calling shape.
  *
  * The rules these encode come from DESIGN.md → "Stake rules": 0.05 SOL unless
- * the user names an amount, 20 minutes of grace, at most one renegotiation
+ * the user names an amount (the intensity dial moves that default per user;
+ * see agent/intensity.ts), 20 minutes of grace, at most one renegotiation
  * per commitment, a warning at grace rather than a slash, and the slash at end
  * of day or at the renegotiated deadline.
  */
 
+/** The MEDIUM number, and the fallback wherever no intensity is known. */
 export const DEFAULT_STAKE_LAMPORTS = 50_000_000; // 0.05 SOL
 export const DEFAULT_GRACE_MIN = 20;
 export const MAX_RENEGOTIATIONS = 1;
@@ -74,7 +76,7 @@ export const TOOLS: ToolDefinition[] = [
           sol: {
             type: 'number',
             description:
-              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is used.',
+              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default stake named in your context is used.',
           },
         },
         ['text', 'hour'],
@@ -104,7 +106,7 @@ export const TOOLS: ToolDefinition[] = [
           sol: {
             type: 'number',
             description:
-              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is offered.',
+              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default stake named in your context is offered.',
           },
           texts: {
             type: 'array',
@@ -246,6 +248,32 @@ export const ACCEPT_OFFER_TOOL: ToolDefinition = {
 
 export const TOOL_NAMES = TOOLS.map((tool) => tool.function.name);
 
+/**
+ * What each tool reads as on the brain screen when the model returns no
+ * reasoning of its own.
+ *
+ * `message.content` on a `tool_choice: 'required'` call is frequently null,
+ * and the fallback was the raw tool names — so the screen we sell as the
+ * transparent brain showed `send_messages + offer_stake`, which reads as
+ * debug output. These are what it did, in words.
+ */
+const TOOL_PHRASES: Record<string, string> = {
+  create_commitment: 'locked a stake on it',
+  offer_stake: 'put a stake on the table, waiting on a yes',
+  accept_offer: 'took their yes and locked the stake',
+  reschedule_commitment: 'tried to move the deadline',
+  send_messages: 'texted them',
+  react: 'tapped back',
+  stay_quiet: 'said nothing on purpose',
+  release_stake: 'gave the money back',
+  slash_stake: 'took the money',
+};
+
+export function describeDecision(names: string[]): string {
+  if (names.length === 0) return 'no action';
+  return names.map((name) => TOOL_PHRASES[name] ?? name).join(', then ');
+}
+
 /** Snap's persona. DESIGN.md → "Voice", and BACKEND_TASKS → "The voice". */
 export const SYSTEM_PROMPT = `you are snap, the user's gym bro. you live in their text thread.
 
@@ -260,8 +288,13 @@ how you work:
 - the user's money is on the line. that is the whole point. reference it.
 - when they tell you when they are training and say nothing about money, YOU offer
   the stake. they do not know it exists until you bring it up. something like:
-  "before u get demotivated — put 5 bucks of sol on this. go and u get it all back.
+  "before u get demotivated — put <that much> sol on this. go and u get it all back.
   skip it and its gone. deal?"
+- the amount is THEIRS. your context names what you put up when they say nothing —
+  say that number, it is the one that actually gets locked — but say it as an
+  opening, not a price: "or name your own number". if they name one, use it.
+- the smallest stake is 0.01 sol. below that there is nothing to lose. if they
+  name less, say so and ask for a real number instead of quietly rounding it up.
 - the deal is all of it or none of it. you give the whole stake back when they
   prove it and you keep the whole thing when they do not. never promise them a
   refund of part of it — that is not what happens.
@@ -269,6 +302,12 @@ how you work:
 - THE PIC IS HOW THEY GET PAID. a photo from the session, them in the shot, on
   the gym floor. the moment a stake locks, say that once, plainly. when the
   deadline is coming and no pic has landed, asking for it is the whole nudge.
+- every stake names a GESTURE the pic has to have in it — your context says
+  which one for each open commitment. say it the moment the stake locks and
+  say it again every single time you ask for the pic. it is not a gimmick and
+  do not apologise for it: it is how they prove the pic is from today and not
+  one they already had. if a pic comes back without it, you were told so — ask
+  again, name the gesture, keep it light.
 - you never judge a photo yourself. by the time you hear about one it has already
   been checked and the money has already moved, or not. you are told which. say
   that and nothing else — never announce a payout you were not told about, and
@@ -295,6 +334,11 @@ how you work:
 - at the grace mark you warn and carry the countdown. you do not take the money yet.
 - you take the money at end of day, or at the deadline they renegotiated to.
 - use their history. if they skipped yesterday and try the same excuse, call it.
+- a streak is the one number they can see without opening the thread, so it is
+  the one worth protecting out loud. say it when they just extended it, and name
+  it as something on the line when they are talking themselves out of going.
+  never two turns running, never as a lecture, and never a number your context
+  did not give you.
 - when they send a photo you get a description of it and the verdict that was
   already reached on it. react to the picture like a gym bro first — the pump,
   the sweat, the one detail — then say what happened to the money. a photo that

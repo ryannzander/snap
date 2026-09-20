@@ -48,8 +48,12 @@ SNAP_CHANNEL = "linq"
 OPENAI_MODEL = "gpt-5.5"
 WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
-# Looks at photos the user texts. OpenAI's chat model sees images itself; this
-# is the Workers AI fallback when there is no OpenAI key or it is down.
+# Looks at photos the user texts. Its own knob rather than OPENAI_MODEL: the
+# verifier is the headline feature, and it used to inherit whatever the
+# conversation brain was pointed at.
+OPENAI_VISION_MODEL = "gpt-5.5"
+
+# The Workers AI fallback when there is no OpenAI key or it is down.
 WORKERS_AI_VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct"
 
 # SOLANA_RPC_URL is deliberately NOT here. The working devnet URL carries its

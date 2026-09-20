@@ -196,7 +196,11 @@ actor MockAPI: SnapAPI {
                     proof: reached > Self.proofStep && !releasedByWatch
                         ? Proof(at: Date(), description: "a sweaty guy at a squat rack, mid-set")
                         : nil,
-                    verifiedBy: reached > Self.proofStep ? (releasedByWatch ? .watch : .photo) : nil
+                    verifiedBy: reached > Self.proofStep ? (releasedByWatch ? .watch : .photo) : nil,
+                    // Fixed rather than random: the mock is a script, and the
+                    // gesture on the card has to match the one in the scripted
+                    // texts. The real backend picks it when the stake locks.
+                    challenge: "peace"
                 )
             ],
             // Today's dot fills in the moment the scripted pic lands, so the streak
