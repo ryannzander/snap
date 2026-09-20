@@ -41,6 +41,7 @@ import {
 } from './money';
 import { redact } from './redact';
 import {
+  applyPhotoMode,
   describePhoto,
   photoInstruction,
   photoSummary,
@@ -104,6 +105,8 @@ const KEY = {
   walletEntry: (id: number) => `wallet:entry:${String(id).padStart(12, '0')}`,
   /** One photo, one payout: the fingerprint of every picture already spent. */
   proof: (fingerprint: string) => `proof:${fingerprint}`,
+  /** Stage settings. See DemoSettings. */
+  demo: 'demo',
   competition: (id: string) => `competition:${id}`,
   /** The stake Snap has proposed and the user has not answered yet. */
   offer: 'offer',
@@ -234,6 +237,35 @@ interface ScheduledAlarm {
 interface UsedProof {
   at: string;
 }
+
+/**
+ * The demo's safety valve, per user, behind the same DEBUG_KEY as everything
+ * else in /debug.
+ *
+ * The closing beat now depends on a vision model judging a photo live, in a
+ * venue, under whatever lighting — and when OpenAI is unreachable the
+ * fallback is a small Workers AI model that is markedly worse at returning
+ * clean JSON, which `readVerdict` reads as `unsure`. `unsure` does not
+ * release a stake, so the most likely way this demo dies is the verifier
+ * shrugging at a perfectly good photo of Ryan in a gym.
+ *
+ * `lenient` is the one to run on stage: it rescues `unsure` only, so a
+ * screenshot is still refused and the roast beat still works. `always`
+ * accepts anything that loads and exists for the case where the vision model
+ * is down entirely.
+ *
+ * Whenever either of them changes an outcome the trace says so, in the row
+ * judges are watching. The brain screen is the honesty of this product; a
+ * switch that quietly forges a verdict would be worth less than a failed
+ * demo.
+ */
+interface DemoSettings {
+  photoMode: 'strict' | 'lenient' | 'always';
+  /** Lets the same picture be spent twice, so a beat can be rehearsed. */
+  allowReplay: boolean;
+}
+
+const STRICT_DEMO: DemoSettings = { photoMode: 'strict', allowReplay: false };
 
 interface PendingTrace {
   kind: TraceKind;
@@ -586,6 +618,39 @@ export class UserAgent extends DurableObject<Env> {
     return ok({ optedOut });
   }
 
+  /**
+   * Reads the stage settings, or writes them. Demo only — the Worker checks
+   * DEBUG_KEY before this is ever reached.
+   */
+  async demoSettings(
+    token: string,
+    update?: Partial<DemoSettings>,
+  ): Promise<DoResult<DemoSettings>> {
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    const current = (await this.ctx.storage.get<DemoSettings>(KEY.demo)) ?? STRICT_DEMO;
+    if (!update) return ok(current);
+
+    const next: DemoSettings = {
+      photoMode: update.photoMode ?? current.photoMode,
+      allowReplay: update.allowReplay ?? current.allowReplay,
+    };
+    await this.ctx.storage.put(KEY.demo, next);
+    await this.appendTraces([
+      {
+        kind: 'decision',
+        summary: `demo settings — photos ${next.photoMode}${next.allowReplay ? ', replays allowed' : ''}`,
+        data: next,
+      },
+    ]);
+    return ok(next);
+  }
+
+  private async demo(): Promise<DemoSettings> {
+    return (await this.ctx.storage.get<DemoSettings>(KEY.demo)) ?? STRICT_DEMO;
+  }
+
   // --- reactions -----------------------------------------------------------
 
   /**
@@ -838,7 +903,18 @@ export class UserAgent extends DurableObject<Env> {
    * money, and it moves it before the model is asked to speak.
    */
   private async judgePhoto(look: PhotoLook): Promise<PhotoOutcome> {
-    if (look.verdict !== 'training') {
+    const demo = await this.demo();
+
+    // The stage valve. `lenient` rescues only `unsure` — the verdict a good
+    // photo gets when the model hedges or the fallback model mangles its JSON
+    // — so a screenshot is still refused and the roast beat still works.
+    // `always` accepts anything that loaded, for a vision model that is down.
+    const { verdict, overridden } = applyPhotoMode(look.verdict, demo.photoMode);
+    // Said out loud, in the row the judges are watching. A switch that
+    // quietly forged a verdict would cost more than a failed demo.
+    const demoNote = overridden ? ` · demo mode (${overridden})` : '';
+
+    if (verdict !== 'training') {
       const reason = look.rejection ?? 'that is not a workout';
       await this.appendTraces([
         {
@@ -851,9 +927,11 @@ export class UserAgent extends DurableObject<Env> {
     }
 
     // Sending Monday's gym selfie again on Tuesday is the first thing anyone
-    // would try. The bytes are the same, so the fingerprint is.
+    // would try. The bytes are the same, so the fingerprint is. Rehearsing the
+    // beat means sending the same picture over and over, which is what
+    // allowReplay is for.
     const seen = await this.ctx.storage.get<UsedProof>(KEY.proof(look.fingerprint));
-    if (seen) {
+    if (seen && !demo.allowReplay) {
       await this.appendTraces([
         {
           kind: 'photo_rejected',
@@ -879,8 +957,8 @@ export class UserAgent extends DurableObject<Env> {
       await this.appendTraces([
         {
           kind: 'photo_accepted',
-          summary: 'proof · nothing on the line for it',
-          data: { description: look.description },
+          summary: `proof · nothing on the line for it${demoNote}`,
+          data: { description: look.description, demoMode: overridden },
         },
       ]);
       return { kind: 'no_stake' };
@@ -901,8 +979,8 @@ export class UserAgent extends DurableObject<Env> {
     await this.appendTraces([
       {
         kind: 'photo_accepted',
-        summary: `proof · ${solText(open.stake.lamports)} back on "${open.text}"`,
-        data: { commitmentId: open.id, description: look.description },
+        summary: `proof · ${solText(open.stake.lamports)} back on "${open.text}"${demoNote}`,
+        data: { commitmentId: open.id, description: look.description, demoMode: overridden },
       },
     ]);
     await this.settle(verified, 'met', 'released', 'photo');

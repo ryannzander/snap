@@ -211,6 +211,37 @@ function asBoolean(value: unknown): boolean | null {
   return null;
 }
 
+/**
+ * How strict the verifier is being. See DemoSettings in user-agent.ts for why
+ * this exists at all.
+ */
+export type PhotoMode = 'strict' | 'lenient' | 'always';
+
+/**
+ * The stage valve, as a pure function, because it is the one thing in the demo
+ * path that can turn "not proof" into money.
+ *
+ * `lenient` rescues `unsure` and nothing else. That distinction is the whole
+ * design: `unsure` is the verdict a real gym selfie gets when the model hedges
+ * or the Workers AI fallback mangles its JSON, while `not_training` is a
+ * judgement the model actually made — and the screenshot roast is a demo beat
+ * worth keeping.
+ *
+ * `always` is break-glass: the vision model is unreachable and the closing
+ * beat has to happen anyway.
+ */
+export function applyPhotoMode(
+  verdict: PhotoVerdict,
+  mode: PhotoMode,
+): { verdict: PhotoVerdict; overridden: PhotoMode | null } {
+  if (verdict === 'training') return { verdict, overridden: null };
+  if (mode === 'always') return { verdict: 'training', overridden: 'always' };
+  if (mode === 'lenient' && verdict === 'unsure') {
+    return { verdict: 'training', overridden: 'lenient' };
+  }
+  return { verdict, overridden: null };
+}
+
 /** The first `{...}` in the text, parsed, or null. */
 function extractJson(text: string): Record<string, unknown> | null {
   const start = text.indexOf('{');

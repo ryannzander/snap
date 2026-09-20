@@ -14,6 +14,8 @@ protocol SnapAPI: Sendable {
     func timewarp(to date: Date?) async throws
     func seed() async throws
     func forget() async throws
+    /// Reads the stage valve with both arguments nil; writes whatever is set.
+    func demoSettings(photoMode: DemoSettings.PhotoMode?, allowReplay: Bool?) async throws -> DemoSettings
 }
 
 /// Carries what the server said so the debug panel can show it.

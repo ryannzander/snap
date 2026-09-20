@@ -95,6 +95,36 @@ struct Commitment: Decodable, Identifiable, Equatable {
     }
 }
 
+/// The stage valve, read and written through `POST /debug/demo`.
+///
+/// The closing beat depends on a vision model judging a photo live, and the
+/// likeliest failure is that model hedging at a perfectly good picture —
+/// `lenient` rescues exactly that and still refuses screenshots. Every override
+/// is marked in the trace, so the brain screen never claims a verdict that
+/// wasn't reached.
+struct DemoSettings: Decodable, Equatable {
+    enum PhotoMode: String, Decodable, CaseIterable, Identifiable {
+        /// Ship behaviour: the vision model's word, unassisted.
+        case strict
+        /// Rescues only "can't tell" — a screenshot is still refused.
+        case lenient
+        /// Anything that loads counts. For a vision model that is down.
+        case always
+        case unknown
+
+        var id: String { rawValue }
+        /// The three worth offering on stage; `unknown` is a decode fallback.
+        static var allCases: [PhotoMode] { [.strict, .lenient, .always] }
+
+        init(from decoder: Decoder) throws {
+            self = PhotoMode(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
+
+    let photoMode: PhotoMode
+    let allowReplay: Bool
+}
+
 /// One time the session was moved. A list rather than a count because the count
 /// only answers "can they move it again", and the list is the thing worth
 /// showing someone: this is what you did, and when.

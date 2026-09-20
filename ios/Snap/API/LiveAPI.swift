@@ -48,6 +48,23 @@ struct LiveAPI: SnapAPI {
         _ = try await send(try make(.post, "debug/forget", debug: true))
     }
 
+    func demoSettings(
+        photoMode: DemoSettings.PhotoMode?,
+        allowReplay: Bool?
+    ) async throws -> DemoSettings {
+        struct Body: Encodable {
+            let photoMode: String?
+            let allowReplay: Bool?
+        }
+        // Both nil is a read, and the synthesized encoder omits nil keys, so
+        // that lands as `{}` — which is exactly what the route treats as a read.
+        return try await decode(
+            try make(.post, "debug/demo",
+                     body: Body(photoMode: photoMode?.rawValue, allowReplay: allowReplay),
+                     debug: true)
+        )
+    }
+
     // MARK: - Plumbing
 
     private enum Method: String { case get = "GET", post = "POST" }

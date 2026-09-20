@@ -83,6 +83,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'POST');
       return forget(request, env);
 
+    case '/debug/demo':
+      requireMethod(request, 'POST');
+      return demoSettings(request, env);
+
     case '/debug/message':
       requireMethod(request, 'POST');
       return debugMessage(request, env);
@@ -482,6 +486,49 @@ async function debugMessage(request: Request, env: Env): Promise<Response> {
   }
 
   return toResponse(await stub.receiveDebugMessage(token, text.trim(), imageUrls));
+}
+
+/**
+ * The stage valve, per user. Demo only, same guard as the rest of /debug.
+ *
+ * `{}` reads the current settings; anything set writes. It exists because the
+ * closing beat depends on a vision model judging a photo live, and the most
+ * likely failure is that model hedging at a perfectly good picture — see
+ * DemoSettings in user-agent.ts.
+ */
+async function demoSettings(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/demo');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+
+  const { token, stub } = authenticate(request, env);
+  const body = await readJsonBody(request);
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new HttpError(400, 'bad_request', 'body must be a JSON object');
+  }
+  const record = body as Record<string, unknown>;
+
+  const update: { photoMode?: 'strict' | 'lenient' | 'always'; allowReplay?: boolean } = {};
+  if (record.photoMode !== undefined) {
+    if (record.photoMode !== 'strict' && record.photoMode !== 'lenient' && record.photoMode !== 'always') {
+      throw new HttpError(400, 'bad_request', 'photoMode must be strict, lenient or always');
+    }
+    update.photoMode = record.photoMode;
+  }
+  if (record.allowReplay !== undefined) {
+    if (typeof record.allowReplay !== 'boolean') {
+      throw new HttpError(400, 'bad_request', 'allowReplay must be a boolean');
+    }
+    update.allowReplay = record.allowReplay;
+  }
+
+  // An empty body reads rather than writes, so the app can show the switch's
+  // real position instead of guessing it.
+  const wrote = Object.keys(update).length > 0;
+  return toResponse(await stub.demoSettings(token, wrote ? update : undefined));
 }
 
 /** Demo only. Same guard as timewarp: bearer token plus X-Debug-Key. */
