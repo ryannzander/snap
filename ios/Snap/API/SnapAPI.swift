@@ -13,6 +13,7 @@ protocol SnapAPI: Sendable {
     func trace(since: Int?) async throws -> [TraceEvent]
     func timewarp(to date: Date?) async throws
     func seed() async throws
+    func forget() async throws
 }
 
 /// Carries what the server said so the debug panel can show it.

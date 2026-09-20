@@ -863,9 +863,6 @@ export class UserAgent extends DurableObject<Env> {
       ]);
       return { kind: 'replay', reason: 'you already sent me that exact photo' };
     }
-    await this.ctx.storage.put(KEY.proof(look.fingerprint), {
-      at: this.nowIso(),
-    } satisfies UsedProof);
 
     // Whatever stake is open right now. No window check beyond that: the photo
     // arrived now, so it is necessarily after the commitment was made, and a
@@ -888,6 +885,13 @@ export class UserAgent extends DurableObject<Env> {
       ]);
       return { kind: 'no_stake' };
     }
+
+    // Only now is the image spent. Burning the fingerprint before this point
+    // would disqualify a photo that was never paid out for — a pic sent with
+    // nothing on the line, or one sent a beat early in rehearsal.
+    await this.ctx.storage.put(KEY.proof(look.fingerprint), {
+      at: this.nowIso(),
+    } satisfies UsedProof);
 
     const verified: StoredCommitment = {
       ...open,
@@ -1153,11 +1157,19 @@ export class UserAgent extends DurableObject<Env> {
     if (!auth.ok) return auth;
     const profile = auth.value;
 
-    for (const prefix of ['workout:', 'commitment:', 'trace:', ALARM_RANGE_START]) {
+    // 'proof:' belongs in here: the fingerprints outlive the commitments they
+    // were spent on, so without it the second rehearsal of the photo beat gets
+    // "you already sent me that exact photo" and the stake never releases.
+    for (const prefix of ['workout:', 'commitment:', 'trace:', 'proof:', ALARM_RANGE_START]) {
       const keys = await this.ctx.storage.list({ prefix });
       for (const key of keys.keys()) await this.ctx.storage.delete(key);
     }
     await this.ctx.storage.delete(KEY.traceSeq);
+
+    // Clearing ALARM_RANGE_START took the morning check-in with it, and rearm()
+    // only points the alarm at what is left. Re-book it, or the proactive beat
+    // is dead on a seeded account.
+    await this.scheduleMorning(profile, 0);
     await this.rearm();
 
     const now = this.now();
@@ -1237,6 +1249,40 @@ export class UserAgent extends DurableObject<Env> {
     ]);
 
     return ok({ workouts: workoutDays.length, commitments: 1 });
+  }
+
+  /**
+   * Stands this user down for good: everything stored is dropped and the alarm
+   * is disarmed.
+   *
+   * "reset app" used to be a phone-only affair — it threw away the token and
+   * went back to onboarding, and the agent on this side carried on. Its alarms
+   * still fired, so the thread kept getting texts about a commitment made
+   * before the reset, and the chat stayed bound to a user the phone had
+   * forgotten. Whoever resets is starting over; this is the other half of it.
+   *
+   * Returns what the chat was bound to, because unbinding lives in the
+   * directory and only the Worker talks to that.
+   */
+  async forget(
+    token: string,
+  ): Promise<DoResult<{ channel: ChannelName | null; chatId: string | null; linkCode: string }>> {
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    const released = {
+      channel: link?.channel ?? null,
+      chatId: link?.chatId ?? null,
+      linkCode: link?.linkCode ?? '',
+    };
+
+    // deleteAll covers the profile and the token too, so the next request with
+    // this token is a clean 401 rather than a half-erased user.
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.deleteAlarm();
+
+    return ok(released);
   }
 
   /** Like appendTraces, but for history that did not happen just now. */

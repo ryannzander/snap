@@ -154,23 +154,25 @@ export function readVerdict(raw: string): {
     typeof parsed.description === 'string' && parsed.description.trim()
       ? parsed.description.trim()
       : 'a photo';
-  const confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 0;
+  const confidence = asNumber(parsed.confidence);
+  const screenshot = asBoolean(parsed.screenshot);
+  const training = asBoolean(parsed.training);
+  const person = asBoolean(parsed.person);
 
   // A screenshot is the single most likely fake — a workout summary, someone
   // else's post, a watch face — so it is refused before anything else is
   // weighed, however confident the model is about what is in it.
-  if (parsed.screenshot === true) {
+  if (screenshot === true) {
     return { description, verdict: 'not_training', rejection: "that's a screenshot" };
   }
-  if (parsed.training !== true) {
+  if (training !== true) {
     return {
       description,
       verdict: 'not_training',
-      rejection:
-        parsed.person === false ? "you're not even in it" : "that's not you training",
+      rejection: person === false ? "you're not even in it" : "that's not you training",
     };
   }
-  if (parsed.person === false) {
+  if (person === false) {
     return { description, verdict: 'not_training', rejection: "you're not even in it" };
   }
   if (confidence < MIN_VERIFY_CONFIDENCE) {
@@ -178,6 +180,35 @@ export function readVerdict(raw: string): {
   }
 
   return { description, verdict: 'training', rejection: null };
+}
+
+/**
+ * Models are asked for JSON and answer with whatever they feel like: `0.9` and
+ * `"0.9"`, `true` and `"true"`, are all things that come back. The Workers AI
+ * fallback is the one that stringifies, which made a good gym photo score 0
+ * and land on `unsure` precisely when the primary model was already down.
+ *
+ * Unreadable stays unreadable: confidence falls to 0, and a boolean the model
+ * did not really answer stays null so the tri-state below still tells "said
+ * no" apart from "did not say".
+ */
+function asNumber(value: unknown): number {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  if (typeof value === 'string') {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === 'yes' || normalized === '1') return true;
+    if (normalized === 'false' || normalized === 'no' || normalized === '0') return false;
+  }
+  return null;
 }
 
 /** The first `{...}` in the text, parsed, or null. */

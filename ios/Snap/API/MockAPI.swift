@@ -183,8 +183,12 @@ actor MockAPI: SnapAPI {
             balanceLamports: released ? balanceLamports + 50_000_000 : balanceLamports,
             heldLamports: released ? 0 : 50_000_000,
             funded: true,
+            // Not a literal: topUp mints (highest + 1), so a hard-coded 3 collides
+            // with the first added-money row and the wallet history ForEach ends
+            // up with two entries sharing an id.
             entries: released
-                ? [Wallet.Entry(id: 3, kind: .released, lamports: 50_000_000, label: "gym at 7",
+                ? [Wallet.Entry(id: (walletEntries.first?.id ?? 0) + 1, kind: .released,
+                                lamports: 50_000_000, label: "gym at 7",
                                 at: Date(), txSig: MockAPI.mockSignature)] + walletEntries
                 : walletEntries
         )
@@ -220,6 +224,12 @@ actor MockAPI: SnapAPI {
 
     func seed() async throws {
         // The mock's history is already the seeded week.
+    }
+
+    /// No server to stand down, but the mock is a process-wide singleton — without
+    /// this a second run-through opens on a finished loop.
+    func forget() async throws {
+        reset()
     }
 
     // MARK: - Script

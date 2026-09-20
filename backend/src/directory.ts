@@ -41,6 +41,25 @@ export class Directory extends DurableObject<Env> {
     return (await this.ctx.storage.get<string>(`chat:${channel}:${chatId}`)) ?? null;
   }
 
+  /**
+   * Releases a chat, but only if `userId` still owns it. The guard matters on a
+   * reset: by the time the abandoned user stands down, the same thread may
+   * already have been re-linked to the new one, and unbinding then would cut
+   * the live thread loose instead of the dead one.
+   */
+  async releaseChat(channel: string, chatId: string, userId: string): Promise<void> {
+    const key = `chat:${channel}:${chatId}`;
+    if ((await this.ctx.storage.get<string>(key)) !== userId) return;
+    await this.ctx.storage.delete(key);
+  }
+
+  /** Frees a link code that was never used, so it can be drawn again. */
+  async releaseLinkCode(code: string, userId: string): Promise<void> {
+    const key = `code:${code}`;
+    if ((await this.ctx.storage.get<string>(key)) !== userId) return;
+    await this.ctx.storage.delete(key);
+  }
+
   /** Reserves an unused join code for a competition and returns it. */
   async claimJoinCode(competitionId: string): Promise<string> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {

@@ -79,6 +79,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'POST');
       return seed(request, env);
 
+    case '/debug/forget':
+      requireMethod(request, 'POST');
+      return forget(request, env);
+
     case '/debug/message':
       requireMethod(request, 'POST');
       return debugMessage(request, env);
@@ -490,6 +494,32 @@ async function seed(request: Request, env: Env): Promise<Response> {
   }
   const { token, stub } = authenticate(request, env);
   return toResponse(await stub.seed(token));
+}
+
+/**
+ * The server half of "reset app". Without it the phone forgets the user and
+ * the agent does not: its alarms keep firing into a thread the phone has walked
+ * away from, texting about a commitment from before the reset.
+ */
+async function forget(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/forget');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+  const { token, stub, userId } = authenticate(request, env);
+  const result = await stub.forget(token);
+
+  // Unbinding is the directory's to do, and only on the way out of a successful
+  // forget — a 401 here means the token was not this user's to stand down.
+  if (result.ok) {
+    const directory = directoryStub(env);
+    const { channel, chatId, linkCode } = result.value;
+    if (channel && chatId) await directory.releaseChat(channel, chatId, userId);
+    if (linkCode) await directory.releaseLinkCode(linkCode, userId);
+  }
+  return toResponse(result);
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

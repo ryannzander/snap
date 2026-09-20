@@ -208,13 +208,39 @@ final class WorkoutSync {
     /// Writes the session as a strength-training workout from the recorded start to
     /// now, then syncs it. The start is only cleared once the write succeeds, so a
     /// denied HealthKit permission can be fixed and the same session ended again.
+    ///
+    /// Below the floor this refuses instead of writing. "done" used to end the
+    /// session whenever it was tapped: the short workout went to HealthKit, the
+    /// backend dropped it as under 30 min, and the session was gone — nothing to
+    /// resume and nothing on screen to say why. Deliberately throwing the session
+    /// away is what "cancel" is for.
     @discardableResult
     func endSession() async throws -> HKWorkout? {
         guard let start = Self.sessionStartedAt else { return nil }
+        let elapsed = Date().timeIntervalSince(start)
+        guard elapsed >= Self.minimumSessionSec else {
+            throw SessionError.tooShort(remaining: Self.minimumSessionSec - elapsed)
+        }
         let workout = try await saveStrengthTraining(from: start, to: Date())
         Self.sessionStartedAt = nil
         await drain()
         return workout
+    }
+
+    /// The backend's `MIN_WORKOUT_SEC`. A session under this releases nothing, so
+    /// there is no point writing it.
+    static let minimumSessionSec: TimeInterval = 30 * 60
+
+    enum SessionError: LocalizedError {
+        case tooShort(remaining: TimeInterval)
+
+        var errorDescription: String? {
+            switch self {
+            case let .tooShort(remaining):
+                let minutes = Int(ceil(remaining / 60))
+                return "\(minutes) more min before this one counts — or cancel it"
+            }
+        }
     }
 
     func cancelSession() {

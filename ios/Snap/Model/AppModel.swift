@@ -248,17 +248,22 @@ final class AppModel {
     func reset() {
         stopPolling()
         sync.stop()
+
+        // Tell the server to stand this user down before the token goes, or the
+        // agent keeps its alarms and keeps texting the thread about a commitment
+        // made before the reset. The old client is captured deliberately — it is
+        // the only thing still holding the token this needs.
+        //
+        // Best-effort: the reset is local either way, so a failure here leaves a
+        // stale agent behind rather than a half-reset app.
+        let dying = api
+        Task { try? await dying.forget() }
+
         Keychain.token = nil
         WorkoutSync.clearAnchor()
         WorkoutSync.sessionStartedAt = nil
         sessionStartedAt = nil
         Key.all.forEach { defaults.removeObject(forKey: $0) }
-
-        // The mock is a process-wide singleton; without this a second run-through
-        // replays a finished loop instantly.
-        if let mock = api as? MockAPI {
-            Task { await mock.reset() }
-        }
 
         authFailed = false
         token = nil
