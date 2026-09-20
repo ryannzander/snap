@@ -368,4 +368,59 @@ final class ContractTests: XCTestCase {
         let events = try decoder.decode(TraceResponse.self, from: Data(json.utf8)).events
         XCTAssertEqual(events.map(\.kind), [.photoAccepted, .photoRejected])
     }
+
+    // MARK: - Reschedules
+
+    /// Moving a session is allowed; doing it quietly is not. The log is what
+    /// the plan card reads, so it has to survive the wire.
+    func testDecodesTheRescheduleLog() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":2,"linked":true,
+         "commitments":[{"id":"c_1","text":"gym at 7","dueAt":"2026-09-20T00:30:00.000Z",
+         "graceMin":20,"status":"renegotiated","proof":null,"verifiedBy":null,
+         "reschedules":[{"at":"2026-09-19T18:00:00Z","from":"2026-09-19T23:00:00Z","to":"2026-09-20T00:30:00Z"}],
+         "stake":{"lamports":50000000,"status":"held","txSig":null}}]}
+        """
+        let commitment = try XCTUnwrap(
+            try decoder.decode(SnapState.self, from: Data(json.utf8)).commitments.first
+        )
+
+        XCTAssertEqual(commitment.moves.count, 1)
+        XCTAssertEqual(commitment.moves[0].from, ISO8601.date(from: "2026-09-19T23:00:00Z"))
+        XCTAssertEqual(commitment.moves[0].to, ISO8601.date(from: "2026-09-20T00:30:00Z"))
+        // A moved session is still waiting on a picture.
+        XCTAssertTrue(commitment.awaitingProof)
+    }
+
+    /// A commitment nobody moved, and one from a backend that doesn't send the
+    /// key at all, both read as "no moves" rather than failing.
+    func testAnAbsentRescheduleLogIsEmptyNotFatal() throws {
+        let json = """
+        {"weeklyGoal":4,"workoutsThisWeek":2,"linked":true,
+         "commitments":[
+          {"id":"c_1","text":"a","dueAt":"2026-09-20T00:30:00Z","graceMin":20,"status":"pending",
+           "reschedules":[],"stake":{"lamports":50000000,"status":"held","txSig":null}},
+          {"id":"c_2","text":"b","dueAt":"2026-09-20T00:30:00Z","graceMin":20,"status":"pending",
+           "stake":{"lamports":50000000,"status":"held","txSig":null}}]}
+        """
+        let commitments = try decoder.decode(SnapState.self, from: Data(json.utf8)).commitments
+
+        XCTAssertEqual(commitments[0].moves, [])
+        XCTAssertEqual(commitments[1].moves, [], "an absent key is absent, not a failure")
+    }
+
+    func testMoveLineReadsOnTheUsersClock() throws {
+        let move = Reschedule(
+            at: try XCTUnwrap(ISO8601.date(from: "2026-09-19T18:00:00Z")),
+            from: try XCTUnwrap(ISO8601.date(from: "2026-09-19T23:00:00Z")),
+            to: try XCTUnwrap(ISO8601.date(from: "2026-09-20T00:30:00Z"))
+        )
+        let line = BrainView.moveLine(move)
+
+        XCTAssertTrue(line.hasPrefix("moved "))
+        XCTAssertTrue(line.contains("→"))
+        // Rendered through the device's own locale, so this asserts the shape
+        // rather than a fixed string a non-US phone would fail.
+        XCTAssertEqual(line.components(separatedBy: "→").count, 2)
+    }
 }

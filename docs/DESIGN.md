@@ -57,7 +57,8 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 - **Covering the stake:** a stake larger than the wallet is refused before anything is offered or locked, and Snap says so and points at the app. Never a stake that "locked" against money that is not there.
 - **Size:** 0.05 SOL unless the user names an amount.
 - **Timeline:** commitment time + 20 min grace → Snap texts a warning (not a slash). Slash happens at end of day, or at the renegotiated deadline. Texts in between carry the countdown ("36 mins left on your $5").
-- **Renegotiation:** at most one per commitment. Same stake, new deadline. The agent decides whether the excuse earns it, using history — skipped yesterday → "nah. you said that yesterday 😭".
+- **Renegotiation:** at most one per commitment, **and the door shuts an hour before the session**. Same stake, new deadline. Inside the last hour the answer is no, whatever the excuse — an hour out you are rearranging your day, ten minutes out you are weaselling, and that is the window every excuse arrives in. Before that, the agent still decides whether the excuse earns it, using history — skipped yesterday → "nah. you said that yesterday 😭".
+- **The move log:** every accepted move is written down and shown to both sides — on the plan card, and to the agent as a week-wide count. The limit stops one session being moved twice; the log is what lets Snap say "third one this week".
 - **Morning check-in:** if there's no commitment for today, Snap texts first to ask the plan. Same alarm mechanism. No other unprompted texts.
 
 ## Demo
@@ -76,6 +77,6 @@ Nothing outside this loop gets built. No leaderboards, calories, feeds, or setti
 | 0:00 | "Snap is a gym bro who texts you first — and takes your money if you skip." |
 | 0:20 | Text the commitment + stake live. Trace shows the lock on Solana. |
 | 1:00 | Time-warp past the deadline. Phone buzzes. Brain screen shows why it decided to text. |
-| 2:00 | Reply with an excuse. It negotiates or refuses, based on history. |
-| 3:00 | Start the Watch workout. Stake released, hype text. |
+| 2:00 | Reply with an excuse. Past the deadline it refuses to move the session — the door shut an hour out — and says so. |
+| 3:00 | Send a photo. A screenshot gets roasted; the real one releases the stake on the spot. Fall back to the Watch workout if the vision model is unreachable. |
 | 4:00 | 30 seconds of architecture, naming each sponsor's piece. |

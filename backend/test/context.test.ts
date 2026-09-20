@@ -9,6 +9,7 @@
  */
 import {
   buildDays,
+  countMovesThisWeek,
   countThisWeek,
   countVerifiedThisWeek,
   recentMessages,
@@ -112,6 +113,27 @@ section('a verified photo fills a goal dot, because it releases a stake');
   );
 }
 
+section('moving sessions is a pattern, so it is counted across all of them');
+{
+  const moved = (at: string) => ({ reschedules: [{ at }] });
+
+  eq('nothing moved', countMovesThisWeek(NOW, TZ, [{ reschedules: [] }, {}]), 0);
+  eq(
+    'three sessions moved this week',
+    countMovesThisWeek(NOW, TZ, [moved('2026-09-16T16:00:00Z'), moved('2026-09-17T16:00:00Z'), moved('2026-09-18T16:00:00Z')]),
+    3,
+  );
+  // The per-commitment limit answers "can this one move again". This answers
+  // "does this person move all of them", which is the one Snap can roast.
+  eq(
+    'two moves on one commitment still both count',
+    countMovesThisWeek(NOW, TZ, [{ reschedules: [{ at: '2026-09-16T16:00:00Z' }, { at: '2026-09-17T16:00:00Z' }] }]),
+    2,
+  );
+  eq('last week stays in last week', countMovesThisWeek(NOW, TZ, [moved('2026-09-11T16:00:00Z')]), 0);
+  eq('an unreadable timestamp is not a move', countMovesThisWeek(NOW, TZ, [moved('nope')]), 0);
+}
+
 section('a missed commitment marks its local day skipped');
 {
   const missed = [
@@ -177,6 +199,7 @@ section('what the model actually sees');
       },
     ] as unknown as Array<Commitment & { renegotiations: number }>,
     standingOffer: null,
+    movesThisWeek: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
@@ -203,6 +226,24 @@ section('what the model actually sees');
   // to offer — otherwise it proposes 0.05 to a wallet holding 0.01 and the
   // guards refuse a stake the user has already said yes to.
   isTrue('the spendable balance', rendered.includes('0.12 SOL spendable'));
+  isTrue('and how many sessions they have moved', rendered.includes('sessions moved this week: 0'));
+  {
+    const withMove: AgentContext = {
+      ...context,
+      movesThisWeek: 2,
+      openCommitments: [
+        {
+          ...context.openCommitments[0]!,
+          reschedules: [{ at: '2026-09-19T20:00:00Z', from: '2026-09-19T22:00:00Z', to: '2026-09-19T23:00:00Z' }],
+        },
+      ] as unknown as Array<Commitment & { renegotiations: number }>,
+    };
+    const movedOut = renderContext(withMove);
+    // On their clock, both ends — the model is never asked to do timezone
+    // maths, on the way in or the way out.
+    isTrue('a move shows where it came from and went to', movedOut.includes('moved Sat 18:00 → Sat 19:00'));
+    isTrue('and the week total is there to roast', movedOut.includes('sessions moved this week: 2'));
+  }
   isTrue('and what is already locked', rendered.includes('0.05 SOL already locked'));
   isTrue(
     'an unreachable chain is unknown, not empty',
@@ -224,6 +265,7 @@ section('an offer on the table is something the model must see');
     lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
     openCommitments: [],
     standingOffer: null,
+    movesThisWeek: 0,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };

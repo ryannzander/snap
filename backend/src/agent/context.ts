@@ -38,6 +38,12 @@ export interface AgentContext {
   /** A stake Snap has proposed and the user has not answered yet. */
   standingOffer: { text: string; dueAt: string; lamports: number } | null;
   /**
+   * How many sessions they have moved this week, across every commitment.
+   * One is a Tuesday; four is the actual behaviour the stake is meant to
+   * catch, and Snap can only call it out if he can see it.
+   */
+  movesThisWeek: number;
+  /**
    * What is actually in their wallet, so Snap can size an offer to it rather
    * than proposing a stake the guards will then refuse. `balanceLamports` is
    * null when devnet could not be reached — unknown, not empty.
@@ -151,6 +157,29 @@ export function countVerifiedThisWeek(
 }
 
 /**
+ * Sessions moved this week, across every commitment.
+ *
+ * Counted from the log rather than from the per-commitment limit: the limit
+ * says whether THIS session can move again, and that is a different question
+ * from whether this person moves all of them.
+ */
+export function countMovesThisWeek(
+  now: number,
+  tz: string,
+  commitments: Array<{ reschedules?: Array<{ at: string }> }>,
+): number {
+  const weekStart = startOfWeek(now, tz);
+  let moves = 0;
+  for (const commitment of commitments) {
+    for (const move of commitment.reschedules ?? []) {
+      const at = parseIso(move.at);
+      if (at !== null && at >= weekStart) moves++;
+    }
+  }
+  return moves;
+}
+
+/**
  * Pulls the conversation back out of the trace feed, newest last. The trace is
  * already the record of everything said, so there is no second message store
  * to keep in sync.
@@ -199,10 +228,19 @@ export function renderContext(context: AgentContext): string {
 
   const commitments = context.openCommitments.length
     ? context.openCommitments
-        .map(
-          (c) =>
-            `- ${c.id} "${c.text}" due ${localStamp(c.dueAt, context.timezone)} their time (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status} · reschedules used ${c.renegotiations}/${MAX_RENEGOTIATIONS}`,
-        )
+        .map((c) => {
+          const moves = (c.reschedules ?? [])
+            .map(
+              (move) =>
+                `moved ${localStamp(move.from, context.timezone)} → ${localStamp(move.to, context.timezone)}`,
+            )
+            .join('; ');
+          return (
+            `- ${c.id} "${c.text}" due ${localStamp(c.dueAt, context.timezone)} their time (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status} · reschedules used ${c.renegotiations}/${MAX_RENEGOTIATIONS}` +
+            (moves ? ` · ${moves}` : '') +
+            (c.proof ? ' · pic verified' : '')
+          );
+        })
         .join('\n')
     : '- none';
 
@@ -219,6 +257,7 @@ export function renderContext(context: AgentContext): string {
     `their local time right now: ${context.localTime} (${context.timezone})`,
     `user: ${context.name}`,
     `weekly goal: ${context.weeklyGoal}, done this week: ${context.workoutsThisWeek}`,
+    `sessions moved this week: ${context.movesThisWeek}`,
     wallet,
     '',
     'last 7 days:',
