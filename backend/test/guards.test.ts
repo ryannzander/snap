@@ -101,6 +101,12 @@ section('create_commitment');
 
   denies('a stake above the 1 SOL ceiling', guardCreate({ text: 'gym', hour: 20, sol: 99 }, NOW, TZ, []));
   denies('dust', guardCreate({ text: 'gym', hour: 20, sol: 0.0000001 }, NOW, TZ, []));
+  // The amount is the user's to pick, but a stake you cannot feel is a streak
+  // app with extra steps, so the floor is a cent's worth and it is a refusal
+  // rather than a quiet round-up.
+  denies('under the 0.01 floor', guardCreate({ text: 'gym', hour: 20, sol: 0.005 }, NOW, TZ, []));
+  allows('exactly the floor', guardCreate({ text: 'gym', hour: 20, sol: 0.01 }, NOW, TZ, []));
+  allows('anything above it', guardCreate({ text: 'gym', hour: 20, sol: 0.37 }, NOW, TZ, []));
 
   // Regression: asked for lamports, the model invented an exchange rate and
   // turned "$5" into 0.15 SOL. The tool takes SOL and only when SOL is named.

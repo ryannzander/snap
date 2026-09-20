@@ -37,9 +37,16 @@ function coerceInt(value: unknown): number | null {
   return parsed !== null && Number.isInteger(parsed) ? parsed : null;
 }
 
-/** A stake below this is not worth a transaction; above it is a fat finger. */
-const MIN_STAKE_LAMPORTS = 1_000_000; // 0.001 SOL
-const MAX_STAKE_LAMPORTS = 1_000_000_000; // 1 SOL
+/**
+ * The floor and the ceiling on what a person can put up.
+ *
+ * The floor is not about transaction cost — 0.001 SOL clears the fee fine. It
+ * is about the stake meaning something: the amount is theirs to choose, and
+ * below a cent there is nothing to lose and the whole product is a streak app
+ * again. Above the ceiling is a fat finger.
+ */
+export const MIN_STAKE_LAMPORTS = 10_000_000; // 0.01 SOL
+export const MAX_STAKE_LAMPORTS = 1_000_000_000; // 1 SOL
 
 const MAX_TEXTS = 5;
 const MAX_TEXT_LENGTH = 300;
@@ -206,7 +213,7 @@ function guardProposal(
     const sol = coerceNumber(args.sol);
     if (sol === null) return deny('sol must be a number');
     lamports = Math.round(sol * 1_000_000_000);
-    if (lamports < MIN_STAKE_LAMPORTS) return deny('stake is too small to be worth locking');
+    if (lamports < MIN_STAKE_LAMPORTS) return deny('the smallest stake is 0.01 SOL');
     if (lamports > MAX_STAKE_LAMPORTS) return deny('stake is above the 1 SOL ceiling');
   }
 
