@@ -14,7 +14,7 @@ Auth: `Authorization: Bearer <token>` on everything except `/onboard` and `/webh
 ## POST /onboard
 
 ```json
-{ "name": "Ryan", "weeklyGoal": 4, "timezone": "America/Toronto" }
+{ "name": "Ryan", "weeklyGoal": 4, "timezone": "America/Toronto", "intensity": "medium" }
 ```
 →
 ```json
@@ -26,6 +26,18 @@ The app then tells the user to text Snap `yo 4821`. That first inbound message l
 Linking sends the thread's onboarding: what Snap does, that a plan is a text, that the money is theirs and comes back if they train, that a 👍 is how they agree to a stake, that the watch is the referee, and that the wallet lives in the app. It is fixed copy, not a model turn — the one message that explains how money moves can never be improvised. Texting `help` (or "how does this work") replays it without the greeting.
 
 Limits: `name` ≤ 100 characters and non-empty after trimming, `weeklyGoal` a whole number 1–21, `timezone` a zone name the runtime knows. Anything else is a 400.
+
+`intensity` is **optional and additive** — omit it and the user is `medium`, exactly as before. It is `easy`, `medium` or `hard`; anything else is a 400 (`intensity must be easy, medium or hard`). It is the pressure dial, and it moves three things and nothing else:
+
+| | grace before the first "where are you" | default stake when no amount is named | morning check-in |
+|---|---|---|---|
+| `easy` | 45 min | 0.02 SOL | no |
+| `medium` | 20 min | 0.05 SOL | yes |
+| `hard` | 10 min | 0.1 SOL | yes |
+
+It also picks the voice Snap is handed for the turn. It does **not** choose workouts, sets, body parts or a plan — see `ROADMAP.md`, "Anti-coach".
+
+A new wallet is funded to cover the hardest mode's stake plus fees, so picking `hard` never means the first offer is refused for want of money.
 
 `token` is opaque to the app. Store it in the Keychain and send it on everything below.
 

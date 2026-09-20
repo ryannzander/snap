@@ -2,6 +2,7 @@
 
 import { HttpError, badRequest } from './http';
 import { LAMPORTS_PER_SOL, MAX_TOPUP_LAMPORTS, MIN_TOPUP_LAMPORTS } from './money';
+import { isIntensity } from './agent/intensity';
 import { isValidTimezone, parseIso } from './time';
 import type { OnboardRequest, WorkoutInput } from './types';
 
@@ -38,12 +39,19 @@ export function parseOnboardRequest(body: unknown): OnboardRequest {
     throw badRequest('weeklyGoal must be a whole number between 1 and 21');
   }
 
+  // Optional: a profile made before the dial existed simply runs at medium.
+  let intensity: OnboardRequest['intensity'];
+  if (input.intensity !== undefined && input.intensity !== null) {
+    if (!isIntensity(input.intensity)) throw badRequest('intensity must be easy, medium or hard');
+    intensity = input.intensity;
+  }
+
   const timezone = asString(input.timezone, 'timezone');
   if (!isValidTimezone(timezone)) {
     throw badRequest(`timezone "${timezone}" is not a known IANA timezone`);
   }
 
-  return { name, weeklyGoal, timezone };
+  return { name, weeklyGoal, timezone, ...(intensity ? { intensity } : {}) };
 }
 
 export function parseWorkoutsRequest(body: unknown): WorkoutInput[] {

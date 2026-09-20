@@ -38,6 +38,14 @@ export interface AgentContext {
   /** A stake Snap has proposed and the user has not answered yet. */
   standingOffer: { text: string; dueAt: string; lamports: number } | null;
   /**
+   * What goes on the line when the user names no amount — their intensity
+   * dial's number, not a constant. The model has to be told it, because the
+   * words it writes name an amount and the guard picks one independently: a
+   * prompt that says "5 bucks of sol" while the backend locks 0.02 is Snap
+   * promising a deal we do not honour.
+   */
+  defaultStakeLamports: number;
+  /**
    * How many sessions they have moved this week, across every commitment.
    * One is a Tuesday; four is the actual behaviour the stake is meant to
    * catch, and Snap can only call it out if he can see it.
@@ -265,6 +273,8 @@ export function renderContext(context: AgentContext): string {
     '',
     'open commitments:',
     commitments,
+    '',
+    `if you offer and they never named an amount, the stake is ${solText(context.defaultStakeLamports)} SOL — use that number in your texts, it is the one that gets locked`,
     '',
     'stake you have offered and they have not answered:',
     context.standingOffer

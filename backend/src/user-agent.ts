@@ -34,11 +34,14 @@ import { fail, ok, type DoResult } from './http';
 import { asksHowItWorks, onboardingTexts } from './onboarding';
 import { isOptOut } from './optout';
 import {
+  FEE_HEADROOM_LAMPORTS,
   MAX_TOPUP_LAMPORTS,
   MIN_TOPUP_LAMPORTS,
+  USER_FUNDING_LAMPORTS,
   WALLET_CEILING_LAMPORTS,
   solText,
 } from './money';
+import { DEFAULT_INTENSITY, settingsFor, type Intensity } from './agent/intensity';
 import { redact } from './redact';
 import {
   describePhoto,
@@ -141,6 +144,8 @@ interface Profile {
   weeklyGoal: number;
   timezone: string;
   createdAt: string;
+  /** How hard Snap pushes. Absent on profiles created before it existed. */
+  intensity?: Intensity;
 }
 
 /** Which chat Snap talks to this user in. Populated in step 2 by `yo <code>`. */
@@ -178,16 +183,6 @@ interface StoredWallet {
   address: string;
   funded: boolean;
 }
-
-/** Enough to cover a 0.05 SOL stake and the fees around it. */
-const USER_FUNDING_LAMPORTS = 100_000_000;
-
-/**
- * Signing costs lamports, and a wallet emptied to the last one cannot pay for
- * the transfer that releases the stake back into it. Staking leaves this much
- * behind.
- */
-const FEE_HEADROOM_LAMPORTS = 5_000_000;
 
 /**
  * The balance is read from the chain, which is a network call on a path that
@@ -247,6 +242,7 @@ export interface InitializeInput {
   weeklyGoal: number;
   timezone: string;
   linkCode: string;
+  intensity?: Intensity;
 }
 
 export class UserAgent extends DurableObject<Env> {
@@ -329,6 +325,7 @@ export class UserAgent extends DurableObject<Env> {
       weeklyGoal: input.weeklyGoal,
       timezone: input.timezone,
       createdAt: this.nowIso(),
+      intensity: input.intensity ?? DEFAULT_INTENSITY,
     };
     const link: Link = {
       linkCode: input.linkCode,
@@ -1740,6 +1737,9 @@ export class UserAgent extends DurableObject<Env> {
         );
         if (hasToday) return;
 
+        // Easy asked not to be chased; an unprompted morning text is chasing.
+        if (!settingsFor(profile.intensity).morningCheckIn) return;
+
         const link = await this.ctx.storage.get<Link>(KEY.link);
         if (!link?.linked || link.optedOut) return;
 
@@ -1850,7 +1850,7 @@ export class UserAgent extends DurableObject<Env> {
     let decision;
     try {
       decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction,
         tools: TOOLS,
@@ -1987,7 +1987,7 @@ export class UserAgent extends DurableObject<Env> {
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: `${instruction}
 
@@ -2042,7 +2042,7 @@ call stay_quiet — a vague intention is not a session and is not worth offering
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: `${instruction}
 
@@ -2103,7 +2103,7 @@ clear yes.`,
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: `${instruction}
 
@@ -2160,7 +2160,7 @@ not a system rejecting them.`,
     try {
       const context = await this.buildContext(profile);
       const decision = await brain.decide({
-        system: SYSTEM_PROMPT,
+        system: `${SYSTEM_PROMPT}\n\n${settingsFor(profile.intensity).voice}`,
         context: renderContext(context),
         instruction: mustSpeak
           ? `${instruction}\n\n${did} text them about it now, in your voice. saying nothing is not an option here — their money is on the line and they need to hear it from you. only say what the block above actually shows: do not invent a number, a deadline or a refusal that is not in it.`
@@ -2189,7 +2189,7 @@ not a system rejecting them.`,
       id: `c_${crypto.randomUUID().slice(0, 8)}`,
       text: proposal.text,
       dueAt: proposal.dueAt,
-      graceMin: DEFAULT_GRACE_MIN,
+      graceMin: settingsFor(profile.intensity).graceMin,
       status: 'pending',
       stake: { lamports: proposal.lamports, status: 'held', txSig: null },
       reschedules: [],
@@ -2265,7 +2265,13 @@ not a system rejecting them.`,
 
     switch (call.name) {
       case 'create_commitment': {
-        const guard = guardCreate(call.arguments, now, profile.timezone, open.map(toWireCommitment));
+        const guard = guardCreate(
+          call.arguments,
+          now,
+          profile.timezone,
+          open.map(toWireCommitment),
+          settingsFor(profile.intensity).defaultStakeLamports,
+        );
         if (!guard.ok) return refuse(guard.reason);
         if (!(await this.canCover(guard.value.lamports))) {
           return refuse(await this.brokeReason(guard.value.lamports));
@@ -2279,7 +2285,13 @@ not a system rejecting them.`,
       }
 
       case 'offer_stake': {
-        const guard = guardOffer(call.arguments, now, profile.timezone, open.map(toWireCommitment));
+        const guard = guardOffer(
+          call.arguments,
+          now,
+          profile.timezone,
+          open.map(toWireCommitment),
+          settingsFor(profile.intensity).defaultStakeLamports,
+        );
         if (!guard.ok) return refuse(guard.reason);
         // Offering money they do not have ends with "deal" and no stake, which
         // is the one outcome worse than not offering at all.
@@ -2505,6 +2517,7 @@ not a system rejecting them.`,
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
         .map((c) => ({ ...toWireCommitment(c), renegotiations: rescheduleCount(c) })),
       standingOffer: await this.standingOffer(),
+      defaultStakeLamports: settingsFor(profile.intensity).defaultStakeLamports,
       movesThisWeek: countMovesThisWeek(now, profile.timezone, commitments),
       wallet: { balanceLamports: await this.balance(), heldLamports: await this.heldLamports() },
       recentMessages: recentMessages([...events.values()]),

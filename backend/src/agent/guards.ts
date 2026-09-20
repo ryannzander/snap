@@ -157,8 +157,9 @@ export function guardCreate(
   now: number,
   tz: string,
   openCommitments: Commitment[],
+  defaultStakeLamports = DEFAULT_STAKE_LAMPORTS,
 ): Guard<CreatedCommitment> {
-  return guardProposal(args, now, tz, openCommitments, 'create_commitment');
+  return guardProposal(args, now, tz, openCommitments, 'create_commitment', defaultStakeLamports);
 }
 
 /**
@@ -171,8 +172,9 @@ export function guardOffer(
   now: number,
   tz: string,
   openCommitments: Commitment[],
+  defaultStakeLamports = DEFAULT_STAKE_LAMPORTS,
 ): Guard<CreatedCommitment> {
-  return guardProposal(args, now, tz, openCommitments, 'offer_stake');
+  return guardProposal(args, now, tz, openCommitments, 'offer_stake', defaultStakeLamports);
 }
 
 function guardProposal(
@@ -181,6 +183,7 @@ function guardProposal(
   tz: string,
   openCommitments: Commitment[],
   tool: string,
+  defaultStakeLamports: number = DEFAULT_STAKE_LAMPORTS,
 ): Guard<CreatedCommitment> {
   const text = typeof args.text === 'string' ? args.text.trim() : '';
   if (!text) return deny(`${tool} needs the commitment in the user's words`);
@@ -198,7 +201,7 @@ function guardProposal(
 
   // The stake arrives in SOL, not lamports: asked for lamports the model
   // invented an exchange rate and turned "$5" into 0.15 SOL.
-  let lamports = DEFAULT_STAKE_LAMPORTS;
+  let lamports = defaultStakeLamports;
   if (args.sol !== undefined && args.sol !== null) {
     const sol = coerceNumber(args.sol);
     if (sol === null) return deny('sol must be a number');

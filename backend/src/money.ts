@@ -6,6 +6,8 @@
  * amount that reads wrong is worse than one that reads ugly.
  */
 
+import { MAX_DEFAULT_STAKE_LAMPORTS } from './agent/intensity';
+
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
 /**
@@ -24,6 +26,25 @@ export const MAX_TOPUP_LAMPORTS = LAMPORTS_PER_SOL; // 1 SOL
  * other part of the demo depends on.
  */
 export const WALLET_CEILING_LAMPORTS = 2 * LAMPORTS_PER_SOL;
+
+/**
+ * Signing costs lamports, and a wallet emptied to the last one cannot pay for
+ * the transfer that releases the stake back into it. Staking leaves this much
+ * behind.
+ */
+export const FEE_HEADROOM_LAMPORTS = 5_000_000;
+
+/**
+ * What a new wallet starts with: the biggest stake the intensity dial can put
+ * up on its own, its fee headroom, and room for a second one.
+ *
+ * It was a flat 0.1 SOL, written when every default stake was 0.05. HARD puts
+ * up 0.1, so a new HARD user's very first offer was refused for want of funds
+ * — *"their wallet holds 0.1 SOL and this stake needs 0.1 SOL"* — and Snap
+ * said nothing about a stake at all. Derived, so adding a harder mode cannot
+ * quietly bring that back.
+ */
+export const USER_FUNDING_LAMPORTS = 2 * (MAX_DEFAULT_STAKE_LAMPORTS + FEE_HEADROOM_LAMPORTS);
 
 /**
  * "0.05 SOL", "0.025 SOL", "1 SOL", "0.0005 SOL".

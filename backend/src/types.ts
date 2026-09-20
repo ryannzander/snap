@@ -29,6 +29,8 @@ export interface OnboardRequest {
   name: string;
   weeklyGoal: number;
   timezone: string;
+  /** `easy | medium | hard`. How hard Snap pushes. Defaults to medium. */
+  intensity?: 'easy' | 'medium' | 'hard';
 }
 
 export interface OnboardResponse {

@@ -2,11 +2,13 @@
  * The agent's tools (BACKEND_TASKS step 3), in OpenAI function-calling shape.
  *
  * The rules these encode come from DESIGN.md → "Stake rules": 0.05 SOL unless
- * the user names an amount, 20 minutes of grace, at most one renegotiation
+ * the user names an amount (the intensity dial moves that default per user;
+ * see agent/intensity.ts), 20 minutes of grace, at most one renegotiation
  * per commitment, a warning at grace rather than a slash, and the slash at end
  * of day or at the renegotiated deadline.
  */
 
+/** The MEDIUM number, and the fallback wherever no intensity is known. */
 export const DEFAULT_STAKE_LAMPORTS = 50_000_000; // 0.05 SOL
 export const DEFAULT_GRACE_MIN = 20;
 export const MAX_RENEGOTIATIONS = 1;
@@ -74,7 +76,7 @@ export const TOOLS: ToolDefinition[] = [
           sol: {
             type: 'number',
             description:
-              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is used.',
+              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default stake named in your context is used.',
           },
         },
         ['text', 'hour'],
@@ -104,7 +106,7 @@ export const TOOLS: ToolDefinition[] = [
           sol: {
             type: 'number',
             description:
-              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default 0.05 SOL is offered.',
+              'Stake in SOL, only if they named an amount in SOL. A dollar figure is not a SOL amount — omit this and the default stake named in your context is offered.',
           },
           texts: {
             type: 'array',
@@ -260,8 +262,11 @@ how you work:
 - the user's money is on the line. that is the whole point. reference it.
 - when they tell you when they are training and say nothing about money, YOU offer
   the stake. they do not know it exists until you bring it up. something like:
-  "before u get demotivated — put 5 bucks of sol on this. go and u get it all back.
+  "before u get demotivated — put <that much> sol on this. go and u get it all back.
   skip it and its gone. deal?"
+- your context names the stake for someone who did not name an amount themselves.
+  say THAT number. it is the one that actually gets locked, and it is not the same
+  for everyone.
 - the deal is all of it or none of it. you give the whole stake back when they
   prove it and you keep the whole thing when they do not. never promise them a
   refund of part of it — that is not what happens.

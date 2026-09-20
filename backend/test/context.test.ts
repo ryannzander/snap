@@ -20,7 +20,7 @@ import {
   type WorkoutLike,
 } from '../src/agent/context';
 import type { Commitment, TraceEvent } from '../src/types';
-import { section, eq, isTrue, done } from './harness';
+import { section, eq, isTrue, isFalse, done } from './harness';
 
 const TZ = 'America/Toronto';
 const NOW = Date.parse('2026-09-19T14:00:00Z'); // Sat 19 Sep, 10:00 EDT
@@ -200,6 +200,7 @@ section('what the model actually sees');
     ] as unknown as Array<Commitment & { renegotiations: number }>,
     standingOffer: null,
     movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
     wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
     recentMessages: [{ from: 'user', text: 'gym at 7, $5 on it' }],
   };
@@ -253,6 +254,33 @@ section('what the model actually sees');
   );
 }
 
+section('the model is told which number to say');
+{
+  // The prompt used to hard-code "5 bucks of sol". With the dial moving the
+  // default per user, a fixed number in the prompt is Snap promising a deal
+  // the guard does not honour — so the amount is rendered, not baked in.
+  const base: AgentContext = {
+    now: '2026-09-19T14:00:00Z',
+    localTime: 'Saturday 10:00',
+    timezone: TZ,
+    name: 'Ryan',
+    weeklyGoal: 4,
+    workoutsThisWeek: 2,
+    lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
+    openCommitments: [],
+    standingOffer: null,
+    movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
+    recentMessages: [],
+  };
+  const easy = renderContext({ ...base, defaultStakeLamports: 20_000_000 });
+  const hard = renderContext({ ...base, defaultStakeLamports: 100_000_000 });
+  isTrue('easy names 0.02', easy.includes('the stake is 0.02 SOL'));
+  isTrue('hard names 0.1', hard.includes('the stake is 0.1 SOL'));
+  isFalse('and it is not a constant', easy.includes('0.1 SOL —'));
+}
+
 section('an offer on the table is something the model must see');
 {
   const base: AgentContext = {
@@ -266,6 +294,7 @@ section('an offer on the table is something the model must see');
     openCommitments: [],
     standingOffer: null,
     movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
     wallet: { balanceLamports: 120_000_000, heldLamports: 0 },
     recentMessages: [],
   };
