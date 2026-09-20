@@ -261,6 +261,53 @@ section('what the model actually sees');
   );
 }
 
+section('the model is told the gesture it will later enforce');
+{
+  // Enforcement reads the stored commitment; this row is the only place the
+  // model can learn what to ask for. They were wired separately once, and the
+  // projection between them dropped the field — which would have shipped as
+  // Snap refusing a photo for missing a gesture he never mentioned.
+  const withChallenge: AgentContext = {
+    now: '2026-09-19T14:00:00Z',
+    localTime: 'Saturday 10:00',
+    timezone: TZ,
+    name: 'Ryan',
+    weeklyGoal: 4,
+    workoutsThisWeek: 2,
+    lastSevenDays: [{ date: '2026-09-19', workouts: 0, skipped: false }],
+    openCommitments: [
+      {
+        id: 'c_1',
+        text: 'gym at 7',
+        dueAt: '2026-09-19T23:00:00Z',
+        graceMin: 20,
+        status: 'pending',
+        stake: { lamports: 50_000_000, status: 'held', txSig: null },
+        reschedules: [],
+        proof: null,
+        verifiedBy: null,
+        challenge: 'three',
+        renegotiations: 0,
+      },
+    ] as unknown as Array<Commitment & { renegotiations: number }>,
+    standingOffer: null,
+    movesThisWeek: 0,
+    defaultStakeLamports: 50_000_000,
+    targetMin: 45,
+    wallet: { balanceLamports: 120_000_000, heldLamports: 50_000_000 },
+    recentMessages: [],
+  };
+  const rendered = renderContext(withChallenge);
+  isTrue('the gesture is named', rendered.includes('3 FINGERS UP IN THE PIC'));
+  isTrue('and snap is told to repeat it', rendered.includes('tell them, every time'));
+
+  const without = renderContext({
+    ...withChallenge,
+    openCommitments: withChallenge.openCommitments.map((c) => ({ ...c, challenge: undefined })),
+  });
+  isFalse('a commitment from before challenges says nothing', without.includes('THE PIC FOR THIS ONE NEEDS'));
+}
+
 section('the model is told which number to say');
 {
   // The prompt used to hard-code "5 bucks of sol". With the dial moving the

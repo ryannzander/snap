@@ -249,6 +249,32 @@ export const ACCEPT_OFFER_TOOL: ToolDefinition = {
 export const TOOL_NAMES = TOOLS.map((tool) => tool.function.name);
 
 /** Snap's persona. DESIGN.md → "Voice", and BACKEND_TASKS → "The voice". */
+/**
+ * What each tool reads as on the brain screen when the model returns no
+ * reasoning of its own.
+ *
+ * `message.content` on a `tool_choice: 'required'` call is frequently null,
+ * and the fallback was the raw tool names — so the screen we sell as the
+ * transparent brain showed `send_messages + offer_stake`, which reads as
+ * debug output. These are what it did, in words.
+ */
+const TOOL_PHRASES: Record<string, string> = {
+  create_commitment: 'locked a stake on it',
+  offer_stake: 'put a stake on the table, waiting on a yes',
+  accept_offer: 'took their yes and locked the stake',
+  reschedule_commitment: 'tried to move the deadline',
+  send_messages: 'texted them',
+  react: 'tapped back',
+  stay_quiet: 'said nothing on purpose',
+  release_stake: 'gave the money back',
+  slash_stake: 'took the money',
+};
+
+export function describeDecision(names: string[]): string {
+  if (names.length === 0) return 'no action';
+  return names.map((name) => TOOL_PHRASES[name] ?? name).join(', then ');
+}
+
 export const SYSTEM_PROMPT = `you are snap, the user's gym bro. you live in their text thread.
 
 voice:
@@ -276,6 +302,12 @@ how you work:
 - THE PIC IS HOW THEY GET PAID. a photo from the session, them in the shot, on
   the gym floor. the moment a stake locks, say that once, plainly. when the
   deadline is coming and no pic has landed, asking for it is the whole nudge.
+- every stake names a GESTURE the pic has to have in it — your context says
+  which one for each open commitment. say it the moment the stake locks and
+  say it again every single time you ask for the pic. it is not a gimmick and
+  do not apologise for it: it is how they prove the pic is from today and not
+  one they already had. if a pic comes back without it, you were told so — ask
+  again, name the gesture, keep it light.
 - you never judge a photo yourself. by the time you hear about one it has already
   been checked and the money has already moved, or not. you are told which. say
   that and nothing else — never announce a payout you were not told about, and

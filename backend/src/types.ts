@@ -112,6 +112,12 @@ export interface Commitment {
    * on a commitment that was missed.
    */
   verifiedBy: 'photo' | 'watch' | null;
+  /**
+   * The gesture this stake's photo has to have in it, picked at random when
+   * the stake locked. `agent/challenge.ts` says why. Absent on a commitment
+   * made before challenges existed, which then verifies on the photo alone.
+   */
+  challenge?: string;
 }
 
 export interface StateResponse {

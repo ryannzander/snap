@@ -8,7 +8,8 @@
 
 import { startOfWeek, tzOffsetMs, parseIso } from '../time';
 import { disqualification } from './guards';
-import { MAX_RENEGOTIATIONS } from './tools';
+import { challengeById } from './challenge';
+import { MAX_RENEGOTIATIONS, RESCHEDULE_LEAD_MS } from './tools';
 import { solText } from '../money';
 import type { Commitment, TraceEvent } from '../types';
 
@@ -252,8 +253,27 @@ export function renderContext(context: AgentContext): string {
                 `moved ${localStamp(move.from, context.timezone)} → ${localStamp(move.to, context.timezone)}`,
             )
             .join('; ');
+          // Whether the door is still open, said plainly.
+          //
+          // The row used to stop at "reschedules used 0/1", which does not
+          // answer the question the user is actually asking at 18:50. The
+          // model had to call reschedule_commitment and get refused to find
+          // out, so the refusal beat only landed when it guessed wrong first.
+          const due = parseIso(c.dueAt);
+          const used = c.renegotiations >= MAX_RENEGOTIATIONS;
+          const tooLate = due !== null && due - Date.parse(context.now) < RESCHEDULE_LEAD_MS;
+          const door = used
+            ? 'locked — they already used their move'
+            : tooLate
+              ? 'locked — under an hour left, it cannot be moved'
+              : `can still be moved, but only until ${localStamp(
+                  new Date((due ?? 0) - RESCHEDULE_LEAD_MS).toISOString(),
+                  context.timezone,
+                )} their time`;
+          const ask = challengeById(c.challenge);
           return (
-            `- ${c.id} "${c.text}" due ${localStamp(c.dueAt, context.timezone)} their time (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status} · reschedules used ${c.renegotiations}/${MAX_RENEGOTIATIONS}` +
+            `- ${c.id} "${c.text}" due ${localStamp(c.dueAt, context.timezone)} their time (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status} · reschedules used ${c.renegotiations}/${MAX_RENEGOTIATIONS} · ${door}` +
+            (ask ? ` · THE PIC FOR THIS ONE NEEDS ${ask.ask.toUpperCase()} — tell them, every time you ask for the pic` : '') +
             (moves ? ` · ${moves}` : '') +
             (c.proof ? ' · pic verified' : '')
           );
@@ -283,7 +303,7 @@ export function renderContext(context: AgentContext): string {
     'open commitments:',
     commitments,
     '',
-    `if you offer and they never named an amount, the stake is ${solText(context.defaultStakeLamports)} SOL — use that number in your texts, it is the one that gets locked. they can name their own, the floor is 0.01`,
+    `if you offer and they never named an amount, the stake is ${solText(context.defaultStakeLamports)} — use that number in your texts, it is the one that gets locked. they can name their own, the floor is 0.01 SOL`,
     `they asked to be held to ${context.targetMin}-minute sessions. that is the number you hold them to out loud. it is NOT what decides the money — any session they actually turned up for pays out, even a short one. if they come in under it, say something and then pay them anyway.`,
     '',
     'stake you have offered and they have not answered:',

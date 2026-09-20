@@ -21,7 +21,13 @@ import {
   guardSlash,
   type StandingOffer,
 } from './agent/guards';
-import { ACCEPT_OFFER_TOOL, DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
+import {
+  ACCEPT_OFFER_TOOL,
+  DEFAULT_GRACE_MIN,
+  SYSTEM_PROMPT,
+  TOOLS,
+  describeDecision,
+} from './agent/tools';
 import { describeReaction, isAffirmative, isNegative, reactionEmoji, toReaction, type ReactionName } from './reactions';
 import type { Brain, ToolCall } from './brain';
 import { FallbackBrain } from './brains/fallback';
@@ -42,6 +48,7 @@ import {
   solText,
 } from './money';
 import { DEFAULT_INTENSITY, settingsFor, type Intensity } from './agent/intensity';
+import { challengeById, pickChallenge } from './agent/challenge';
 import { redact } from './redact';
 import {
   describePhoto,
@@ -774,9 +781,9 @@ export class UserAgent extends DurableObject<Env> {
   /**
    * The agent's turn on something the user sent. A plain text is handed over
    * as is. A photo is looked at first, the look is traced, and the agent gets
-   * the description in its instruction — it never sees pixels itself, and the
-   * guards never hear about the photo at all: a photo is a hype beat, and the
-   * money still only moves on the watch.
+   * the description AND the verdict in its instruction — it never sees pixels
+   * itself, and it is told what already happened to the money rather than
+   * asked what should. The photo is the verifier; the watch is the backstop.
    */
   async runInboundTurn(text: string, imageUrls: string[] = []): Promise<DoResult<{ ran: boolean }>> {
     if (imageUrls.length === 0) {
@@ -796,16 +803,26 @@ export class UserAgent extends DurableObject<Env> {
 
     await this.loadClock();
     const url = imageUrls[0]!;
+
+    // The gesture this photo has to have in it, if there is a stake waiting on
+    // one. No open commitment means nothing to prove, so nothing is asked for.
+    const openNow = (await this.loadCommitments()).filter(
+      (c) => c.status === 'pending' || c.status === 'renegotiated',
+    );
+    const challenge = challengeById(openNow[0]?.challenge);
+
     let look: PhotoLook | null = null;
     try {
       // The generated `Ai` binding type is model-specific; the vision module
       // only needs `run`, the same loosening `brain()` does.
-      look = await describePhoto(this.env as unknown as VisionEnv, url);
+      look = await describePhoto(this.env as unknown as VisionEnv, url, challenge);
       await this.appendTraces([
         {
           kind: 'context',
-          summary: `looked at the photo · ${look.description}`,
-          data: { via: look.via, imageUrl: url, verdict: look.verdict },
+          summary: challenge
+            ? `looked at the photo · asked for ${challenge.ask} · ${look.description}`
+            : `looked at the photo · ${look.description}`,
+          data: { via: look.via, imageUrl: url, verdict: look.verdict, challenge: challenge?.id ?? null },
         },
       ]);
     } catch (error) {
@@ -1132,7 +1149,19 @@ export class UserAgent extends DurableObject<Env> {
     } satisfies Link);
   }
 
+  /**
+   * Which adapter actually delivers.
+   *
+   * SNAP_CHANNEL is the master switch and it is checked FIRST, because it was
+   * documented as one in wrangler.toml and read nowhere: a local run with a
+   * LINQ_API_KEY in .dev.vars sent real iMessages against the sandbox's
+   * 100-a-day budget, which is the budget the demo runs on. `trace` writes
+   * what Snap would have said into the brain screen and sends nothing.
+   */
   private channelFor(name: ChannelName): Channel {
+    // Cast: `wrangler types` narrows the var to whatever wrangler.toml says,
+    // and wrangler.local.toml is the file that sets it to 'trace'.
+    if ((this.env.SNAP_CHANNEL as string) === 'trace') return new TraceChannel();
     if (name === 'linq' && this.env.LINQ_API_KEY) return new LinqChannel(this.env.LINQ_API_KEY);
     return new TraceChannel();
   }
@@ -1867,7 +1896,7 @@ export class UserAgent extends DurableObject<Env> {
     await this.appendTraces([
       {
         kind: 'decision',
-        summary: decision.reasoning?.trim() || (names.length ? names.join(' + ') : 'no action'),
+        summary: decision.reasoning?.trim() || describeDecision(names),
         data: { brain: brain.name, tools: names, reasoning: decision.reasoning },
       },
     ]);
@@ -2195,6 +2224,10 @@ not a system rejecting them.`,
       reschedules: [],
       proof: null,
       verifiedBy: null,
+      // Picked here, when the money locks, so it cannot exist before the
+      // commitment does — which is the only reason an old photo cannot have
+      // it in it.
+      challenge: pickChallenge().id,
       createdAt: this.nowIso(),
       renegotiations: 0,
     };
@@ -2373,9 +2406,19 @@ not a system rejecting them.`,
         await this.unschedule('grace', existing.id);
         await this.unschedule('end_of_day', existing.id);
         const newDue = parseIso(moved.dueAt) ?? now;
-        await this.schedule(newDue + moved.graceMin * 60_000, 'grace', moved.id);
-        // A renegotiated deadline IS the slash point, not end of day.
-        await this.schedule(newDue, 'end_of_day', moved.id);
+
+        // A renegotiated deadline IS the slash point, not end of day — they
+        // used their move, so they do not also get the rest of the day.
+        //
+        // But it still gets a warning first. It used to be scheduled the same
+        // way as an original deadline — grace at +20, slash at the deadline —
+        // which put the warning AFTER the money had already gone, and settle()
+        // deleted the alarm on its way past. So the one commitment someone had
+        // already negotiated over was the one that got taken with no "yo, you
+        // are over" at all. Warning lands on the new deadline; the money goes
+        // when that window closes.
+        await this.schedule(newDue, 'grace', moved.id);
+        await this.schedule(newDue + moved.graceMin * 60_000, 'end_of_day', moved.id);
 
         await this.appendTraces([
           {
@@ -2650,6 +2693,12 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
       ? { at: stored.proof.at, description: stored.proof.description }
       : null,
     verifiedBy: stored.verifiedBy ?? null,
+    // The gesture has to cross onto the wire, or the half of this feature
+    // that is fair never happens: enforcement reads the STORED commitment and
+    // worked, while the model's context is built from this projection — so
+    // Snap would have refused a photo for missing a gesture he never asked
+    // for. Third time a field-by-field projection has quietly dropped one.
+    ...(stored.challenge ? { challenge: stored.challenge } : {}),
     stake: {
       lamports: stored.stake.lamports,
       status: stored.stake.status,

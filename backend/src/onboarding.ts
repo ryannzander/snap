@@ -29,8 +29,9 @@ export function asksHowItWorks(text: string): boolean {
  * money would be involved, and the thread never mentioned it again until a
  * stake was offered. Everything a person has to know to use Snap safely is
  * here, in his voice, before anything can cost them anything —
- * what he does, that the watch is what counts, where the money lives, and
- * that a 👍 on an offer is what takes it.
+ * what he does, that a pic from the session is what pays them out and the
+ * watch is the backstop under it, where the money lives, and that a 👍 on an
+ * offer is what takes it.
  *
  * `again` is the same explainer asked for on purpose ("help"), so it does not
  * open by greeting someone who has been here for a week.
