@@ -21,6 +21,15 @@ struct LiveAPI: SnapAPI {
         try await decode(try make(.get, "state"))
     }
 
+    func wallet() async throws -> Wallet {
+        try await decode(try make(.get, "wallet"))
+    }
+
+    func topUp(sol: Double) async throws -> Wallet {
+        struct Body: Encodable { let sol: Double }
+        return try await decode(try make(.post, "wallet/topup", body: Body(sol: sol)))
+    }
+
     func trace(since: Int?) async throws -> [TraceEvent] {
         let query = since.map { [URLQueryItem(name: "since", value: String($0))] } ?? []
         let response: TraceResponse = try await decode(try make(.get, "trace", query: query))
@@ -33,6 +42,10 @@ struct LiveAPI: SnapAPI {
 
     func seed() async throws {
         _ = try await send(try make(.post, "debug/seed", debug: true))
+    }
+
+    func forget() async throws {
+        _ = try await send(try make(.post, "debug/forget", debug: true))
     }
 
     // MARK: - Plumbing

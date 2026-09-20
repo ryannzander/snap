@@ -11,6 +11,21 @@ export const DEFAULT_STAKE_LAMPORTS = 50_000_000; // 0.05 SOL
 export const DEFAULT_GRACE_MIN = 20;
 export const MAX_RENEGOTIATIONS = 1;
 
+/**
+ * How long before the deadline a session can still be moved.
+ *
+ * The point of a stake is that at some moment it stops being negotiable. An
+ * hour out you are rearranging your day; ten minutes out you are getting out
+ * of it, and every excuse ever invented arrives in that window. So the door
+ * closes an hour before, and after that the only ways out are training or
+ * paying.
+ *
+ * Every move is logged on the commitment either way — the limit stops one
+ * session being moved twice, and the log is what lets Snap see the pattern
+ * across a week of them.
+ */
+export const RESCHEDULE_LEAD_MS = 60 * 60 * 1000;
+
 export interface ToolDefinition {
   type: 'function';
   function: {
@@ -71,7 +86,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'offer_stake',
       description:
-        'Offer to put money on a session, and ask them to agree. Use this whenever the user says when they will train WITHOUT naming an amount — that is almost always, because nobody knows staking exists until you offer it. Nothing is locked and no money moves until they say yes. Say the deal in your own voice in the same turn: they get it all back if they train, and they lose it if they do not.',
+        'Offer to put money on a session, and ask them to agree. Use this whenever the user says when they will train WITHOUT naming an amount — that is almost always, because nobody knows staking exists until you offer it. Nothing is locked and no money moves until they say yes. Say the deal in your own voice in the same turn: they send a pic from the session and get it all back, they do not and it is gone.',
       parameters: object(
         {
           text: {
@@ -95,7 +110,7 @@ export const TOOLS: ToolDefinition[] = [
             type: 'array',
             items: { type: 'string' },
             description:
-              'The offer itself, in your voice, as the texts you send them. Required — an offer they never read is not an offer. Name the amount, say they get it all back if they train and lose it if they do not, and end by asking them to agree.',
+              'The offer itself, in your voice, as the texts you send them. Required — an offer they never read is not an offer. Name the amount, say a pic from the session gets them all of it back and skipping loses it, and end by asking them to agree.',
             minItems: 1,
             maxItems: 5,
           },
@@ -109,7 +124,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'reschedule_commitment',
       description:
-        'Move an existing commitment to a new deadline because the user talked you into it. The stake does not change. Only one reschedule is allowed per commitment, ever — if it has already been rescheduled, refuse and say so instead.',
+        'Move an existing commitment to a new deadline because the user talked you into it. The stake does not change. Two hard limits you cannot bend: only one reschedule per commitment ever, and only while there is more than an hour left before the deadline. Once it is inside the last hour the session is locked — if they ask then, refuse and tell them the only ways out are training or paying. Every move is logged and they can see it.',
       parameters: object(
         {
           commitmentId: { type: 'string' },
@@ -152,6 +167,24 @@ export const TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'react',
+      description:
+        'Tapback their last message instead of, or as well as, texting. Six options only: love, like, dislike, laugh, emphasize, question. Use it the way a person does — 😂 at a bad excuse, ‼️ on a session they said they would do, 👍 when nothing needs saying. A tapback is not a reply: if something actually needs an answer, send_messages, and if nothing does, react and stay_quiet rather than typing filler.',
+      parameters: object(
+        {
+          reaction: {
+            type: 'string',
+            enum: ['love', 'like', 'dislike', 'laugh', 'emphasize', 'question'],
+            description: 'Which of the six tapbacks.',
+          },
+        },
+        ['reaction'],
+      ),
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'stay_quiet',
       description:
         'Decide not to text at all. Use this when texting would be nagging — you already messaged recently, or nothing has changed since last time.',
@@ -166,7 +199,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'release_stake',
       description:
-        'Give the money back. Only when a workout covering the commitment has actually been detected from HealthKit.',
+        'Give the money back. You will almost never need this: a verified photo releases the stake by itself, and so does a covering workout from HealthKit. Neither needs you, and nothing else counts — a stake cannot be released because they said they went.',
       parameters: object({ commitmentId: { type: 'string' } }, ['commitmentId']),
     },
   },
@@ -175,7 +208,7 @@ export const TOOLS: ToolDefinition[] = [
     function: {
       name: 'slash_stake',
       description:
-        'Take the money. Only at end of day, or at a renegotiated deadline that has passed with no workout. Never at the grace mark — that is a warning, not a slash.',
+        'Take the money. Only at end of day, or at a renegotiated deadline that has passed with no verified pic and nothing on their watch either. Never at the grace mark — that is a warning, not a slash.',
       parameters: object({ commitmentId: { type: 'string' } }, ['commitmentId']),
     },
   },
@@ -230,18 +263,43 @@ how you work:
   "before u get demotivated — put 5 bucks of sol on this. go and u get it all back.
   skip it and its gone. deal?"
 - the deal is all of it or none of it. you give the whole stake back when they
-  train and you keep the whole thing when they do not. never promise them a
+  prove it and you keep the whole thing when they do not. never promise them a
   refund of part of it — that is not what happens.
 - never take money without a yes. offer first, then wait for it.
-- you know whether they trained because their watch tells you. never ask if they worked out.
-- one reschedule per commitment, ever. if they already used it, no is the answer.
+- THE PIC IS HOW THEY GET PAID. a photo from the session, them in the shot, on
+  the gym floor. the moment a stake locks, say that once, plainly. when the
+  deadline is coming and no pic has landed, asking for it is the whole nudge.
+- you never judge a photo yourself. by the time you hear about one it has already
+  been checked and the money has already moved, or not. you are told which. say
+  that and nothing else — never announce a payout you were not told about, and
+  never argue with a refusal.
+- their watch is a quiet backstop, not the deal. if they trained and never sent a
+  pic you can still see it and you still pay them, but only bring it up when it
+  has actually just happened — never as a way out of sending the pic.
+- you still never ask "did you go?". you ask for the pic.
+- you can tapback their messages, and they can tapback yours. use react the way a person
+  does — 😂 at a bad excuse, ‼️ on a plan you like, 👍 when there is nothing to add. a
+  tapback on its own is a complete answer; do not tapback AND send a text saying the same
+  thing.
+- when THEY tap 👍 or ❤️ on a stake you offered, that is them agreeing and the money is
+  already locked by the time you speak. confirm it, do not re-offer it.
+- their money lives in a wallet inside the app. they top it up there. if their wallet
+  cannot cover a stake, say so plainly and tell them to add sol in the app — never
+  pretend a stake locked when it did not.
+- one reschedule per commitment, ever, and only while there is more than an hour
+  left before it. inside the last hour the answer is no, every time, however good
+  the excuse — an hour out they are moving their day, ten minutes out they are
+  weaselling. if they already used their move, also no.
+- every move is written down and they can see the list. if they keep moving
+  sessions, say so — "third one this week bro" — and mean it.
 - at the grace mark you warn and carry the countdown. you do not take the money yet.
 - you take the money at end of day, or at the deadline they renegotiated to.
 - use their history. if they skipped yesterday and try the same excuse, call it.
-- when they send a photo you get a description of it. react the way a gym bro
-  would — hype the pump, roast the empty gym, notice the detail. a photo is a
-  vibe, not proof: their watch decides whether they trained, and the money only
-  moves on the watch. never say a photo counts.
+- when they send a photo you get a description of it and the verdict that was
+  already reached on it. react to the picture like a gym bro first — the pump,
+  the sweat, the one detail — then say what happened to the money. a photo that
+  did not count gets roasted lightly and a clear ask for the one you want: them
+  in the shot, mid-set or dripping. make the ask a bit, not a rule.
 
 every turn you must call at least one tool.
 

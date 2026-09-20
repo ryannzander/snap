@@ -37,6 +37,18 @@ export interface AgentContext {
   openCommitments: Array<Commitment & { renegotiations: number }>;
   /** A stake Snap has proposed and the user has not answered yet. */
   standingOffer: { text: string; dueAt: string; lamports: number } | null;
+  /**
+   * How many sessions they have moved this week, across every commitment.
+   * One is a Tuesday; four is the actual behaviour the stake is meant to
+   * catch, and Snap can only call it out if he can see it.
+   */
+  movesThisWeek: number;
+  /**
+   * What is actually in their wallet, so Snap can size an offer to it rather
+   * than proposing a stake the guards will then refuse. `balanceLamports` is
+   * null when devnet could not be reached — unknown, not empty.
+   */
+  wallet: { balanceLamports: number | null; heldLamports: number };
   recentMessages: Array<{ from: 'snap' | 'user'; text: string }>;
 }
 
@@ -105,6 +117,69 @@ export function countThisWeek(now: number, tz: string, workouts: WorkoutLike[]):
 }
 
 /**
+ * Sessions this week, by either verifier.
+ *
+ * The photo is what releases a stake now, so it has to fill a goal dot too —
+ * the repo's rule is that the bar which returns your money and the bar which
+ * moves "2/4" are the same bar, or the two numbers start disagreeing in front
+ * of the user.
+ *
+ * A photo-verified session only adds a dot on a local day that has no
+ * qualifying workout of its own. Someone who trains with a watch on AND sends
+ * a picture did one session, and counting it twice would make the goal a lie
+ * in the flattering direction.
+ */
+export function countVerifiedThisWeek(
+  now: number,
+  tz: string,
+  workouts: WorkoutLike[],
+  commitments: Array<{ status: string; dueAt: string; proof?: { at: string } | null }>,
+): number {
+  const weekStart = startOfWeek(now, tz);
+
+  const daysWithWorkouts = new Set<string>();
+  for (const workout of workouts) {
+    if (!counts(workout)) continue;
+    const startedAt = parseIso(workout.start);
+    if (startedAt !== null && startedAt >= weekStart) daysWithWorkouts.add(localDate(startedAt, tz));
+  }
+
+  const photoDays = new Set<string>();
+  for (const commitment of commitments) {
+    if (commitment.status !== 'met' || !commitment.proof) continue;
+    const at = parseIso(commitment.proof.at);
+    if (at === null || at < weekStart) continue;
+    const day = localDate(at, tz);
+    if (!daysWithWorkouts.has(day)) photoDays.add(day);
+  }
+
+  return countThisWeek(now, tz, workouts) + photoDays.size;
+}
+
+/**
+ * Sessions moved this week, across every commitment.
+ *
+ * Counted from the log rather than from the per-commitment limit: the limit
+ * says whether THIS session can move again, and that is a different question
+ * from whether this person moves all of them.
+ */
+export function countMovesThisWeek(
+  now: number,
+  tz: string,
+  commitments: Array<{ reschedules?: Array<{ at: string }> }>,
+): number {
+  const weekStart = startOfWeek(now, tz);
+  let moves = 0;
+  for (const commitment of commitments) {
+    for (const move of commitment.reschedules ?? []) {
+      const at = parseIso(move.at);
+      if (at !== null && at >= weekStart) moves++;
+    }
+  }
+  return moves;
+}
+
+/**
  * Pulls the conversation back out of the trace feed, newest last. The trace is
  * already the record of everything said, so there is no second message store
  * to keep in sync.
@@ -153,10 +228,19 @@ export function renderContext(context: AgentContext): string {
 
   const commitments = context.openCommitments.length
     ? context.openCommitments
-        .map(
-          (c) =>
-            `- ${c.id} "${c.text}" due ${localStamp(c.dueAt, context.timezone)} their time (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status} · reschedules used ${c.renegotiations}/${MAX_RENEGOTIATIONS}`,
-        )
+        .map((c) => {
+          const moves = (c.reschedules ?? [])
+            .map(
+              (move) =>
+                `moved ${localStamp(move.from, context.timezone)} → ${localStamp(move.to, context.timezone)}`,
+            )
+            .join('; ');
+          return (
+            `- ${c.id} "${c.text}" due ${localStamp(c.dueAt, context.timezone)} their time (+${c.graceMin}m grace) · ${c.status} · stake ${c.stake.lamports} lamports ${c.stake.status} · reschedules used ${c.renegotiations}/${MAX_RENEGOTIATIONS}` +
+            (moves ? ` · ${moves}` : '') +
+            (c.proof ? ' · pic verified' : '')
+          );
+        })
         .join('\n')
     : '- none';
 
@@ -164,10 +248,17 @@ export function renderContext(context: AgentContext): string {
     ? context.recentMessages.map((m) => `${m.from}: ${m.text}`).join('\n')
     : '(nothing yet)';
 
+  const wallet =
+    context.wallet.balanceLamports === null
+      ? 'wallet: balance unknown right now — do not tell them how much they have'
+      : `wallet: ${solText(context.wallet.balanceLamports)} spendable, ${solText(context.wallet.heldLamports)} already locked in stakes. they top it up in the app.`;
+
   return [
     `their local time right now: ${context.localTime} (${context.timezone})`,
     `user: ${context.name}`,
     `weekly goal: ${context.weeklyGoal}, done this week: ${context.workoutsThisWeek}`,
+    `sessions moved this week: ${context.movesThisWeek}`,
+    wallet,
     '',
     'last 7 days:',
     days,

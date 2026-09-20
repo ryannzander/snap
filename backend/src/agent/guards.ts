@@ -12,7 +12,7 @@
 
 import type { Commitment } from '../types';
 import { localTimeToInstant, parseIso } from '../time';
-import { DEFAULT_STAKE_LAMPORTS, MAX_RENEGOTIATIONS } from './tools';
+import { DEFAULT_STAKE_LAMPORTS, MAX_RENEGOTIATIONS, RESCHEDULE_LEAD_MS } from './tools';
 
 export type Guard<T> = { ok: true; value: T } | { ok: false; reason: string };
 
@@ -227,12 +227,31 @@ export function guardReschedule(
     return deny('this commitment has already been rescheduled once — that is the limit');
   }
 
+  // And the door closes an hour out. Every excuse ever invented arrives in the
+  // last ten minutes; an hour ahead you are rearranging your day. Measured
+  // against the CURRENT deadline, so a commitment already past due — which is
+  // exactly when someone starts negotiating — can never be moved.
+  const currentDue = parseIso(commitment.dueAt);
+  if (currentDue === null) return deny('commitment has an unreadable dueAt');
+  if (currentDue - now < RESCHEDULE_LEAD_MS) {
+    return deny(
+      currentDue <= now
+        ? 'that session is already due — it is too late to move it'
+        : 'there is less than an hour left — it is too late to move it',
+    );
+  }
+
   const resolved = resolveLocalTime(args, now, tz);
   if (!resolved.ok) return resolved;
   const dueAt = resolved.value;
   // Same stake, new deadline — but the slash still lands at end of day, so a
   // reschedule past midnight would move the goalposts past the consequence.
   if (dueAt > endOfDay) return deny('the new deadline is after end of day');
+  // Moving it to a time that is itself inside the closed window would hand
+  // back in one move what the window takes away.
+  if (dueAt - now < RESCHEDULE_LEAD_MS) {
+    return deny('that is less than an hour away — pick a time further out');
+  }
 
   const reason = typeof args.reason === 'string' ? args.reason.trim() : '';
   if (!reason) return deny('reschedule_commitment needs a reason for the trace');
@@ -355,18 +374,29 @@ export function guardAccept(
   return allow(offer);
 }
 
+/**
+ * Releasing a stake. Two ways in, and the model's say-so is neither.
+ *
+ * The photo is the verifier: a picture that passed `readVerdict` is recorded
+ * on the commitment as `proof`, and that is what releases the money. The
+ * watch is the silent fallback underneath — someone who trained and forgot to
+ * send a picture still gets paid, they just do not get told that is why.
+ *
+ * What has not changed is that a release needs evidence that arrived from
+ * outside the conversation. A model that decides someone trained because they
+ * said so is the failure this guard exists to prevent.
+ */
 export function guardRelease(
   commitment: Commitment | null,
   covering: WorkoutWindow | null,
-): Guard<WorkoutWindow> {
+): Guard<{ via: 'photo' | 'watch'; covering: WorkoutWindow | null }> {
   if (!commitment) return deny('no such commitment');
   if (commitment.stake.status !== 'held') {
     return deny(`stake is ${commitment.stake.status}, not held`);
   }
-  // The whole product claim is that Snap knows rather than asks. Releasing on
-  // the model's say-so would make that a lie.
-  if (!covering) return deny('no workout covers this commitment yet');
-  return allow(covering);
+  if (commitment.proof) return allow({ via: 'photo', covering });
+  if (covering) return allow({ via: 'watch', covering });
+  return deny('no verified photo and no workout covers this commitment yet');
 }
 
 export function guardSlash(
@@ -379,6 +409,9 @@ export function guardSlash(
   if (commitment.stake.status !== 'held') {
     return deny(`stake is ${commitment.stake.status}, not held`);
   }
+  // Either verifier saves them. Taking money off someone who sent a picture
+  // from the gym floor is the single worst thing this product could do.
+  if (commitment.proof) return deny('a verified photo covers this commitment — it cannot be slashed');
   if (covering) return deny('a workout covers this commitment — it cannot be slashed');
 
   const dueAt = parseIso(commitment.dueAt);

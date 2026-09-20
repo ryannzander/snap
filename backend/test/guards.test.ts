@@ -108,21 +108,54 @@ section('create_commitment');
   eq('a dollar figure does not become a stake', dollars.ok ? dollars.value.lamports : null, 50_000_000);
 }
 
-section('reschedule — DESIGN.md allows exactly one');
+section('reschedule — one per session, and only while the door is open');
 {
+  // NOW is 19:24 local. A session due at 21:00 is still movable; the one due
+  // at 19:00 is not, because it is already past.
+  const later = commitment({ dueAt: '2026-09-20T01:00:00Z' });   // 21:00 local
+  const soon = commitment({ dueAt: '2026-09-20T00:00:00Z' });    // 20:00 local, 36 min out
+
   allows(
-    'first reschedule, later the same day',
-    guardReschedule({ hour: 22, reason: 'homework' }, commitment(), NOW, TZ, EOD),
+    'asked well before it, moved later the same day',
+    guardReschedule({ hour: 22, reason: 'homework' }, later, NOW, TZ, EOD),
+  );
+
+  // The rule the whole change is about. Every excuse ever invented arrives in
+  // the last ten minutes, so the door shuts an hour out.
+  denies(
+    'inside the last hour',
+    guardReschedule({ hour: 22, reason: 'homework' }, soon, NOW, TZ, EOD),
   );
   denies(
+    'after the deadline has already passed',
+    guardReschedule({ hour: 22, reason: 'homework' }, commitment(), NOW, TZ, EOD),
+  );
+  // Exactly an hour out is still open — the boundary is "less than an hour".
+  allows(
+    'exactly an hour before',
+    guardReschedule(
+      { hour: 22, reason: 'homework' },
+      commitment({ dueAt: new Date(NOW + 60 * 60 * 1000).toISOString() }),
+      NOW,
+      TZ,
+      EOD,
+    ),
+  );
+  // Otherwise one move hands back everything the window takes away.
+  denies(
+    'moving it to a time inside the closed window',
+    guardReschedule({ hour: 19, minute: 50, reason: 'ten more minutes' }, later, NOW, TZ, EOD),
+  );
+
+  denies(
     'a second reschedule',
-    guardReschedule({ hour: 22, reason: 'again' }, commitment({ renegotiations: 1 }), NOW, TZ, EOD),
+    guardReschedule({ hour: 22, reason: 'again' }, commitment({ dueAt: '2026-09-20T01:00:00Z', renegotiations: 1 }), NOW, TZ, EOD),
   );
   denies(
     'past end of local day',
-    guardReschedule({ hour: 9, reason: 'tomorrow' }, commitment(), NOW, TZ, EOD),
+    guardReschedule({ hour: 9, reason: 'tomorrow' }, later, NOW, TZ, EOD),
   );
-  denies('without a reason for the trace', guardReschedule({ hour: 22 }, commitment(), NOW, TZ, EOD));
+  denies('without a reason for the trace', guardReschedule({ hour: 22 }, later, NOW, TZ, EOD));
   denies(
     'a commitment already met',
     guardReschedule({ hour: 22, reason: 'x' }, commitment({ status: 'met' }), NOW, TZ, EOD),
@@ -218,13 +251,31 @@ section('does a workout cover the commitment?');
   isFalse('an unreadable start', covers(workout('not-a-date', 2700)));
 }
 
-section('release — Snap knows rather than asks');
+section('release — the pic pays, the watch covers, the model does neither');
 {
   const covering = workout('2026-09-19T22:00:00Z', 2700);
-  allows('with a workout that covers it', guardRelease(commitment(), covering));
+  const proof = { at: '2026-09-19T23:10:00Z', description: 'sweaty at a squat rack' };
+
+  // The photo is the verifier now: it releases on its own, with nothing on
+  // the watch at all.
+  allows('with a verified photo and no workout', guardRelease(commitment({ proof }), null));
+  // And the watch is the silent fallback underneath it — someone who trained
+  // and forgot to send a picture still gets paid.
+  allows('with a workout and no photo', guardRelease(commitment(), covering));
+  allows('with both', guardRelease(commitment({ proof }), covering));
+
   denies('on the model\'s say-so alone', guardRelease(commitment(), null));
   denies('a stake already released', guardRelease(commitment({ stake: stake('released') }), covering));
   denies('no such commitment', guardRelease(null, covering));
+
+  const viaPhoto = guardRelease(commitment({ proof }), null);
+  eq('a photo release says it was the photo', viaPhoto.ok && viaPhoto.value.via, 'photo');
+  const viaWatch = guardRelease(commitment(), covering);
+  eq('a watch release says it was the watch', viaWatch.ok && viaWatch.value.via, 'watch');
+  // Which one paid is not cosmetic: the app tells the user, and "your watch
+  // covered you" is the line that teaches them to send the pic next time.
+  const both = guardRelease(commitment({ proof }), covering);
+  eq('the photo wins when both are there', both.ok && both.value.via, 'photo');
 }
 
 section('slash — the rule both models tried to break');
@@ -233,6 +284,17 @@ section('slash — the rule both models tried to break');
   denies('AT THE GRACE MARK (grace is a warning, not a charge)', guardSlash(commitment(), NOW, EOD, null));
   allows('after end of local day', guardSlash(commitment(), EOD + 1000, EOD, null));
   denies('when a workout covers it', guardSlash(commitment(), EOD + 1000, EOD, covering));
+  // Taking money off someone who sent a picture from the gym floor is the
+  // single worst thing this product could do.
+  denies(
+    'when a verified photo covers it',
+    guardSlash(
+      commitment({ proof: { at: '2026-09-19T23:10:00Z', description: 'mid-set' } }),
+      EOD + 1000,
+      EOD,
+      null,
+    ),
+  );
   denies(
     'before a renegotiated deadline',
     guardSlash(commitment({ status: 'renegotiated', dueAt: '2026-09-20T01:00:00Z' }), NOW, EOD, null),

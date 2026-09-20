@@ -11,6 +11,7 @@ final class AppModel {
 
     private(set) var phase: Phase = .onboarding
     private(set) var state: SnapState?
+    private(set) var wallet: Wallet?
     private(set) var events: [TraceEvent] = []
     private(set) var name = ""
     private(set) var linkCode = ""
@@ -19,6 +20,12 @@ final class AppModel {
 
     /// Shown in the debug panel only. The main screen never puts an error in front of a judge.
     var lastError: String?
+
+    /// True while a top-up is in flight, and the reason the last one failed.
+    /// Unlike `lastError` this one IS shown: a button that takes your money
+    /// and says nothing is the worst screen in the app.
+    private(set) var isToppingUp = false
+    private(set) var topUpError: String?
 
     #if DEBUG
     /// Verdict from the `SNAP_HKDIAG` launch hook, read by the UI test. Nil in every
@@ -113,6 +120,7 @@ final class AppModel {
 
         observeLifecycle()
         refreshHealthAccess()
+        sessionStartedAt = WorkoutSync.sessionStartedAt
 
         #if DEBUG
         // `SNAP_PHASE=linking|live` drops straight onto a screen against MockAPI, and
@@ -233,25 +241,35 @@ final class AppModel {
         sync.setAPI(api)
         clearFeed()
         state = nil
+        wallet = nil
         startPolling()
     }
 
     func reset() {
         stopPolling()
         sync.stop()
+
+        // Tell the server to stand this user down before the token goes, or the
+        // agent keeps its alarms and keeps texting the thread about a commitment
+        // made before the reset. The old client is captured deliberately — it is
+        // the only thing still holding the token this needs.
+        //
+        // Best-effort: the reset is local either way, so a failure here leaves a
+        // stale agent behind rather than a half-reset app.
+        let dying = api
+        Task { try? await dying.forget() }
+
         Keychain.token = nil
         WorkoutSync.clearAnchor()
+        WorkoutSync.sessionStartedAt = nil
+        sessionStartedAt = nil
         Key.all.forEach { defaults.removeObject(forKey: $0) }
-
-        // The mock is a process-wide singleton; without this a second run-through
-        // replays a finished loop instantly.
-        if let mock = api as? MockAPI {
-            Task { await mock.reset() }
-        }
 
         authFailed = false
         token = nil
         state = nil
+        wallet = nil
+        topUpError = nil
         name = ""
         linkCode = ""
         contact = nil
@@ -294,6 +312,40 @@ final class AppModel {
         }
     }
 
+    // MARK: - Sessions (no Watch)
+
+    /// When the in-app session started; nil when none is running. Mirrors the value
+    /// `WorkoutSync` persists so the plan card can show a live clock.
+    private(set) var sessionStartedAt: Date?
+
+    func startSession() {
+        sync.startSession()
+        sessionStartedAt = WorkoutSync.sessionStartedAt
+    }
+
+    /// Writes the session to HealthKit and syncs it. On failure the session is kept so
+    /// the reason can be read in the debug panel and the same session ended again.
+    func endSession() async {
+        do {
+            try await sync.endSession()
+            sessionStartedAt = nil
+        } catch {
+            lastError = describe(error)
+        }
+    }
+
+    func cancelSession() {
+        sync.cancelSession()
+        sessionStartedAt = nil
+    }
+
+    /// Demo only: the session has been running 31 minutes longer than it has. Starts one
+    /// if none is running. Tap "done" on the plan card afterwards.
+    func warpSession() {
+        sync.warpSession(back: 31 * 60)
+        sessionStartedAt = WorkoutSync.sessionStartedAt
+    }
+
     // MARK: - Polling
 
     private func startPolling() {
@@ -306,6 +358,7 @@ final class AppModel {
             while !Task.isCancelled {
                 guard let self else { break }
                 await self.refreshState()
+                await self.refreshWallet()
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -345,6 +398,38 @@ final class AppModel {
             }
         } catch {
             handle(error)
+        }
+    }
+
+    /// The wallet rides the state poll rather than a loop of its own: it changes
+    /// exactly when a stake locks or settles, which is when `/state` changes too.
+    private func refreshWallet() async {
+        do {
+            let wallet = try await api.wallet()
+            guard !Task.isCancelled else { return }
+            if wallet != self.wallet { self.wallet = wallet }
+        } catch {
+            // A wallet that will not load must not stop the brain screen or the
+            // countdown. The debug panel keeps the reason.
+            if !Self.isCancellation(error) { lastError = describe(error) }
+        }
+    }
+
+    /// Adds money, then shows what the server says the wallet holds — never a
+    /// locally guessed balance. A top-up that failed on the chain and an
+    /// optimistic number on screen is how someone stakes money they do not have.
+    func topUp(sol: Double) async {
+        guard !isToppingUp else { return }
+        isToppingUp = true
+        topUpError = nil
+        defer { isToppingUp = false }
+
+        do {
+            wallet = try await api.topUp(sol: sol)
+        } catch {
+            let message = (error as? APIError)?.message ?? error.localizedDescription
+            topUpError = message
+            lastError = describe(error)
         }
     }
 

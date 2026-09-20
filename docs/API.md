@@ -23,6 +23,8 @@ Auth: `Authorization: Bearer <token>` on everything except `/onboard` and `/webh
 
 The app then tells the user to text Snap `yo 4821`. That first inbound message links the chat to the user (and satisfies Linq's text-first rule), after which `/state` reports `linked: true`.
 
+Linking sends the thread's onboarding: what Snap does, that a plan is a text, that the money is theirs and comes back if they train, that a 👍 is how they agree to a stake, that the watch is the referee, and that the wallet lives in the app. It is fixed copy, not a model turn — the one message that explains how money moves can never be improvised. Texting `help` (or "how does this work") replays it without the greeting.
+
 Limits: `name` ≤ 100 characters and non-empty after trimming, `weeklyGoal` a whole number 1–21, `timezone` a zone name the runtime knows. Anything else is a 400.
 
 `token` is opaque to the app. Store it in the Keychain and send it on everything below.
@@ -64,7 +66,10 @@ Everything the app needs to draw its one screen.
       "dueAt": "…",
       "graceMin": 20,
       "status": "pending",
-      "stake": { "lamports": 50000000, "status": "held", "txSig": "…" }
+      "stake": { "lamports": 50000000, "status": "held", "txSig": "…" },
+      "reschedules": [],
+      "proof": null,
+      "verifiedBy": null
     }
   ]
 }
@@ -72,19 +77,107 @@ Everything the app needs to draw its one screen.
 
 `commitment.status`: `pending | met | missed | renegotiated`
 `stake.status`: `none | held | released | slashed`
+`commitment.verifiedBy`: `photo | watch | null`
+
+`reschedules` is every time the session was moved, oldest first: `{ "at", "from", "to" }`. The app prints the list on the plan card — moving a session is allowed, doing it quietly is not. It may be absent on a commitment stored before the log existed; treat that as empty.
+
+**The photo is the verifier.** `proof` is null until a photo the user texted passes verification, and then it is `{ "at": "…", "description": "one sentence of what the model saw" }`. An open commitment with `proof: null` is the app's cue to ask for a picture; a settled one carries `verifiedBy` so the app can say which verifier paid. `description` is shown to the user — being told what Snap thought he was looking at is the difference between a verdict and a black box.
+
+`verifiedBy: "watch"` means they trained, never sent a picture, and HealthKit covered them anyway (see **Verification** below). It is worth surfacing: that line is the only place a user learns the fallback exists. An unknown value degrades to null rather than failing the response.
 `stake` is always sent. `stake.txSig` is null until the chain transaction lands, stays null while `stake.status` is `none`, and stays null indefinitely if the chain call failed — the loop continues without it and the trace says so.
 
 **`slashed` means the whole stake is forfeited, to Snap's treasury wallet.** A half-back-to-the-user split was briefly built and then withdrawn; nothing on the wire describes a partial refund, and nothing should imply one in copy.
 
 Commitments come back oldest first, ordered by `dueAt`. The app shows the open one (`pending` or `renegotiated`), or the last one when none is open.
 
-`workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts only workouts that *qualify* — not every workout posted. A workout qualifies when it runs 30 minutes or longer, averages at least **2 active kcal/min**, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
+`workoutsThisWeek` counts from **Monday 00:00 in the user's own timezone**, not UTC, and counts a session verified by *either* verifier. Qualifying workouts count, and a photo-verified commitment adds one more **only on a local day that has no qualifying workout of its own** — someone who trains with a watch on and also sends a picture did one session, and counting it twice would flatter the goal.
 
-This is deliberately the same bar that releases a stake: if a 30-minute walk cannot release your money, it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`, `barely moved`).
+A workout qualifies when it runs 30 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
 
-**`barely moved`** is the effort floor. Type, duration and `wasUserEntered` together still let someone press start on the Watch, sit in a car for 45 minutes and release a stake — the session is genuinely *recorded*, nobody typed it, and nobody moved. Active energy excludes basal metabolism, so sitting reads near zero while real strength work runs 5-8 kcal/min and running 10-15.
+A workout also has to average at least **2 active kcal/min**. Type, duration and `wasUserEntered` together still let someone press start on the Watch, sit in a car for 45 minutes and release a stake — the session is genuinely *recorded*, nobody typed it, and nobody moved. Active energy excludes basal metabolism, so sitting reads near zero while real strength work runs 5-8 kcal/min and running 10-15.
 
-It is only ever applied when `activeKcal` is actually present. A source that records no calories (some Strava and Hevy exports) is never rejected for it — failing an honest workout costs far more than missing a lazy cheat.
+That floor is only applied when `activeKcal` is actually present **and above zero**. A source that records no calories (some Strava and Hevy exports) is never rejected for it, and an exact zero is read as "the sensor recorded nothing" rather than "nobody moved" — failing an honest workout costs far more than missing a lazy cheat.
+
+This is deliberately the same bar that releases a stake: if a thing cannot release your money it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`, `barely moved`).
+
+## Rescheduling
+
+One move per commitment, ever, **and only while more than an hour is left before the deadline**. Inside the last hour — or at any point after it has passed — the answer is no, whatever the excuse. An hour out you are rearranging your day; ten minutes out you are getting out of it, and that is the window every excuse ever invented arrives in.
+
+The new time must also be more than an hour away, or one move would hand back exactly what the window takes away, and it must still land before end of local day — the slash lands there regardless, so a move past midnight would put the deadline after the consequence.
+
+Refusals come back through the normal refusal path: the trace says `refused reschedule_commitment — <reason>` and Snap tells the user, rather than silently agreeing and then slashing on the original deadline.
+
+Every accepted move is appended to `commitment.reschedules` and shown to both sides — the app prints it on the plan card, and the agent sees each move on their clock plus a week-wide `sessions moved this week: N`, so a pattern can be called out ("third one this week bro") instead of only a per-commitment limit being enforced.
+
+## Verification
+
+A stake is released by a **verified photo**, or by a covering HealthKit workout as a silent fallback. Nothing else — a model that decides someone trained because they said so is the failure the guards exist to prevent.
+
+### The photo
+
+The user texts a picture. The backend fetches it, asks the vision model for a verdict, and **moves the money before the agent says a word** — a turn that decides for itself whether a picture counts is a turn that can be talked into paying out.
+
+A photo is proof only when a real person is visibly in it, in a setting that reads as training. These are refused, in this order:
+
+| refused | because |
+|---|---|
+| a screenshot, or a photo of a screen | a workout summary, a watch face, somebody else's post — the likeliest fake, refused however confident the model is about what is in it |
+| nobody in the shot | an empty rack is a room, not a session |
+| not training | a meal, a pet, a selfie somewhere that is not a gym |
+| below 0.6 confidence | a coin flip must not release a stake — this is `unsure`, which gets a second chance in Snap's voice rather than a roast |
+| a photo already counted | every image is fingerprinted (SHA-256 of the bytes); the same picture cannot release two stakes |
+
+The fingerprint catches the obvious attack — sending Monday's gym selfie again on Tuesday — and nothing else. A re-crop, a re-save or a screenshot of the same photo hashes differently and gets through. This raises the cost of cheating; it does not close it. The honest defence is that the watch is still there underneath.
+
+Each outcome writes a trace event (`photo_accepted` / `photo_rejected`) and hands the agent what already happened, so Snap says what the backend did rather than deciding it.
+
+### The watch
+
+HealthKit is the fallback, not the pitch. A covering workout still releases the stake for someone who trained and forgot to send a picture, and the app then says `verifiedBy: "watch"` — "no pic, but your watch covered you". It is deliberately **not** mentioned in the thread's onboarding: a user told up front that the watch will cover them hears "the pic is optional", which is the one thing it must not sound like. They find out the first time it saves them.
+
+A commitment with either verifier can never be slashed.
+
+## GET /wallet
+
+The money, from the app's side. Everything a stake comes out of and goes back into.
+
+```json
+{
+  "address": "7Xc…",
+  "cluster": "devnet",
+  "balanceLamports": 150000000,
+  "heldLamports": 50000000,
+  "funded": true,
+  "entries": [
+    { "id": 3, "kind": "held", "lamports": 50000000, "label": "gym at 7", "at": "…", "txSig": "…" },
+    { "id": 2, "kind": "funded", "lamports": 200000000, "label": "you added money", "at": "…", "txSig": "…" }
+  ]
+}
+```
+
+`balanceLamports` is read from the chain and is **null when the RPC could not be reached**. Null is not zero, and the app must not draw it as one: one means "we can't see it", the other means "it's empty", and under a stake those read very differently.
+
+`heldLamports` is what has already *left* the wallet into escrow — the sum of open commitments whose `stake.status` is `held`, plus competition entries that have not settled. It is never part of `balanceLamports`; adding the two is what the user thinks of as "my money", and the app says so rather than showing one number.
+
+`entries` is the ledger, newest first, at most 40: `kind` is `funded | held | released | slashed`, `lamports` is always positive (the kind says which way it went), and `txSig` is null until the chain confirms — same rule as `stake.txSig`. An unknown `kind` still renders as a row.
+
+The wallet is **custodial on devnet**: the backend holds the key, and the address is the one it holds. It is created at `/onboard` and funded from Snap's treasury in the background, so a new user can stake within seconds of linking.
+
+## POST /wallet/topup
+
+Adds money. On devnet the source is Snap's treasury — there is no card to charge, and the public faucet rate-limits too hard to put on a stage.
+
+```json
+{ "sol": 0.1 }
+```
+→ the same body as `GET /wallet`, plus `addedLamports` and `txSig`.
+
+Limits: 0.01 to 1 SOL per call, and the call is refused if it would put the wallet over a 2 SOL ceiling (a 400 either way). **The response is the wallet as it actually is afterwards** — the app must draw that, never a locally guessed balance, because a top-up that failed on-chain plus an optimistic number on screen is how someone agrees to a stake they cannot cover.
+
+`503 chain_unavailable` means the transfer did not land and no money moved. Nothing is recorded in that case.
+
+**A stake is refused when the wallet cannot cover it**, leaving 0.005 SOL of fee headroom: the agent's `create_commitment`, `offer_stake` and `accept_offer` all fail the guard, the trace says how much is there and how much was needed, and Snap tells the user to top up instead of pretending the money locked. When the chain is unreachable the check passes rather than telling a user they are broke on a devnet hiccup.
 
 ## GET /trace?since=<eventId>
 
@@ -99,11 +192,13 @@ The "Snap's brain" feed. Poll every 1–2 s. (WebSocket at `/trace/ws` is a stre
 ] }
 ```
 
-`kind`: `commitment_created | alarm_fired | context | decision | message_sent | message_received | workout_detected | stake_held | stake_released | stake_slashed`
+`kind`: `commitment_created | alarm_fired | context | decision | message_sent | message_received | reaction_sent | reaction_received | photo_accepted | photo_rejected | workout_detected | stake_held | stake_released | stake_slashed | wallet_funded`
 
 A turn where the agent looked and chose not to text is **not** its own kind — it arrives as a `decision` whose summary reads `stayed quiet — <reason>`.
 
-A photo the user texts arrives as a `message_received` whose summary starts with `📷` (the caption, or `sent a photo`), with the URLs in `data.imageUrls`, followed by a `context` row `looked at the photo · <description>` (or a `decision` saying the photo could not be seen). The agent's reply follows as usual.
+A tapback is `reaction_sent` (Snap reacted to them) or `reaction_received` (they reacted to Snap). The summary is `<emoji> on: <the message it was aimed at>`, or just `<emoji>` when the backend does not know which message. Snap's own tapbacks always name the user's last message, because that is the only one he reacts to. An inbound tapback is matched against the last ten texts Snap sent, by the id the channel returned for each — a tapback on something older, or delivered through a channel that does not return ids, arrives unlabelled rather than mislabelled. A removed tapback reads `<emoji> took back on: …`. `data` carries `{ emoji, name, targetMessageId, removed }`, where `name` is one of the six iMessage slots (`love | like | dislike | laugh | emphasize | question`) or null for an emoji outside them. The app draws these as a small capsule tucked against the bubble they belong to — Snap's on the right, the user's on the left.
+
+A photo the user texts arrives as a `message_received` whose summary starts with `📷` (the caption, or `sent a photo`), with the URLs in `data.imageUrls`, followed by a `context` row `looked at the photo · <description>` (or a `decision` saying the photo could not be seen). Then the verdict: `photo_accepted` (`proof · 0.05 SOL back on "gym at 7"`, or `proof · nothing on the line for it`) or `photo_rejected` (`not proof · that's a screenshot`). The agent's reply follows as usual, and it is told which of those happened rather than deciding it.
 
 `summary` is always display-ready. `data` is optional detail, and its contents are not part of this contract with one exception: on `decision`, `data.reasoning` is the agent's own words and the app shows it under the summary when present. Anything else in `data`, or a `data` that isn't an object, must be ignored rather than treated as fatal. An unknown `kind` still renders as a plain row, and one malformed event is dropped without losing the rest of the page.
 
@@ -131,10 +226,24 @@ Sets the agent's clock for this user and fires any alarm that is now due. `{ "no
 
 Demo only. Requires header `X-Debug-Key` **and** the bearer token; 404 when `DEBUG_KEY` is unset. No body.
 
-Seeds a plausible week of history for this user (2/4 done, skipped yesterday, one earlier excuse). Clears that user's workouts, commitments, trace and alarms first, so the demo can be rehearsed from the same starting point repeatedly. The chat link and the token survive.
+Seeds a plausible week of history for this user (2/4 done, skipped yesterday, one earlier excuse). Clears that user's workouts, commitments, trace, spent photo fingerprints and alarms first, so the demo can be rehearsed from the same starting point repeatedly, then re-books the morning check-in. The chat link and the token survive.
 
 ```json
 { "workouts": 2, "commitments": 1 }
+```
+
+## POST /debug/forget
+
+Demo only. Requires header `X-Debug-Key` **and** the bearer token; 404 when `DEBUG_KEY` is unset. No body.
+
+The server half of the app's "reset app". Deletes everything stored for this user — profile, token, commitments, workouts, trace, fingerprints — disarms the alarm, and releases the chat binding and link code so the thread is free for whoever onboards next.
+
+Unlike `/debug/seed`, nothing survives: the bearer token used to call it is invalid immediately afterwards. Without it a phone-side reset leaves the agent running — its alarms keep firing and it keeps texting the thread about a commitment made before the reset.
+
+The chat is only released if it is still bound to this user, so a reset that races a re-link cannot cut the new thread loose.
+
+```json
+{ "channel": "linq", "chatId": "+15555550123", "linkCode": "4821" }
 ```
 
 ## POST /debug/message
@@ -161,13 +270,13 @@ Unlike the webhook, this **waits for the turn to finish** before responding — 
 { "text": "pump check", "imageUrl": "https://example.com/gym.jpg" }
 ```
 
-`imageUrl` makes it a **photo turn**: the backend fetches the image, describes it with the vision model, traces the look, and the agent reacts to the description. This is how the photo beat is rehearsed without spending the sandbox message budget. A photo never releases a stake — release still needs a covering HealthKit workout.
+`imageUrl` makes it a **photo turn**: the backend fetches the image, verifies it with the vision model, traces the verdict, settles the stake if it passed, and the agent reacts. This is how the photo beat is rehearsed without spending the sandbox message budget — and it is the only way to drive verification from a script, since there is no upload endpoint. **It moves real money**, so the same picture will not work twice.
 
 ## Competitions
 
 `ROADMAP.md` → "Competitions": a pot, a rule, a set of entrants, and an oracle that settles it from HealthKit. Three kinds — `solo`, `h2h`, `group` — differ only in how many people are in the entrant list.
 
-**Verification is the same bar as a stake.** A workout counts toward a goal only if it would release a stake: 30 minutes or longer, `wasUserEntered` false, and an accepted type. A competition that counts a walk while the core loop refuses it would make "it knows" untrue the moment money is involved.
+**Verification is the same bar as a stake.** A session counts toward a goal only if it would release a stake — a verified photo, or a qualifying workout (30 minutes or longer, `wasUserEntered` false, an accepted type). A competition that counts a walk while the core loop refuses it would make "it knows" untrue the moment money is involved.
 
 ### POST /competitions
 
@@ -262,6 +371,7 @@ Every non-2xx response has the same body:
 | 409 | `already_onboarded` | `/onboard` for a user that already exists |
 | 413 | `payload_too_large` | body over 1 MB |
 | 500 | `internal_error` | anything unhandled |
+| 503 | `chain_unavailable` | `/wallet/topup` only — devnet would not take the transfer, or no treasury is configured. No money moved. |
 
 `message` is for the debug panel, not the user.
 
@@ -270,4 +380,8 @@ Every non-2xx response has the same body:
 ## Webhooks (backend only)
 
 - `POST /webhooks/linq` — Linq `message.received` (text parts, and image parts as photos), Standard Webhooks signature (`webhook-id` / `webhook-timestamp` / `webhook-signature`), 5-minute replay window, deliveries de-duplicated by event id. Always answers 200 for anything it cannot route, because a retry of an unroutable message is no more routable the second time.
+
+  Tapbacks arrive here too, as `message.reaction` / `reaction.received` / `reaction.removed`, or as a `reaction`/`tapback` part inside an ordinary delivery — Linq has used both shapes, so both are read. A reaction is routed apart from messages: it can never carry a link code, an unlinked chat is ignored, and the agent's turn on one is told plainly that a tapback is usually not worth answering.
+
+  **A 👍 or ❤️ on a standing stake offer is an acceptance** and locks the money, decided in the backend rather than by the model — "did they agree?" is not a judgement call when the answer is a thumbs up. Nothing else about the six reaction slots moves money. This is said out loud in the thread's onboarding, because a tapback that quietly takes money and was never explained is a trap.
 - `POST /webhooks/telegram` — planned, **not routed yet** (currently 404).

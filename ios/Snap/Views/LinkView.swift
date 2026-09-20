@@ -143,8 +143,11 @@ enum ThreadLink {
         return nil
     }
 
-    static func open(contact: OnboardResponse.Contact?) {
-        guard let url = url(contact: contact) else { return }
+    /// Opens the thread, optionally with the message already typed. Nothing is ever
+    /// sent for the user — Messages opens on a filled compose box and they hit send,
+    /// which is the only honest way for the app to put words in their mouth.
+    static func open(contact: OnboardResponse.Contact?, body: String? = nil) {
+        guard let url = url(contact: contact, body: body) else { return }
         UIApplication.shared.open(url)
     }
 

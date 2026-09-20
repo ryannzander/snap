@@ -1,6 +1,7 @@
 /** Request parsing for the endpoints in API.md. Rejects loudly on bad input. */
 
 import { HttpError, badRequest } from './http';
+import { LAMPORTS_PER_SOL, MAX_TOPUP_LAMPORTS, MIN_TOPUP_LAMPORTS } from './money';
 import { isValidTimezone, parseIso } from './time';
 import type { OnboardRequest, WorkoutInput } from './types';
 
@@ -191,4 +192,25 @@ export function parseCompetitionRequest(body: unknown): {
   }
 
   return { kind, name, goal: { type, target }, sol, days };
+}
+
+/**
+ * POST /wallet/topup — `{ "sol": 0.1 }`.
+ *
+ * Returns lamports, because that is the only unit anything below this line
+ * uses. Float SOL exists exactly once, here, where a person typed it: 0.1 SOL
+ * is not representable in binary and rounding it at every layer is how a
+ * balance ends up one lamport short of what was deposited.
+ */
+export function parseTopUpRequest(body: unknown): number {
+  const raw = asObject(body, 'body');
+  const sol = asNumber(raw.sol, 'sol');
+  if (!Number.isFinite(sol) || sol <= 0) {
+    throw badRequest('sol must be a positive number');
+  }
+  const lamports = Math.round(sol * LAMPORTS_PER_SOL);
+  if (lamports < MIN_TOPUP_LAMPORTS || lamports > MAX_TOPUP_LAMPORTS) {
+    throw badRequest('top up between 0.01 and 1 SOL at a time');
+  }
+  return lamports;
 }

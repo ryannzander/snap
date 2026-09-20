@@ -129,7 +129,7 @@ The live app: two screens and a bottom bar — **today · + · brain**. The `+` 
 
 1. **Header.** Streak pill (`flame 2/4`, workouts this week over the goal), the greeting (`good evening.`, by hour), and an ink circle with the first letter of your name. Long-press anywhere in the header for the debug panel; nothing on screen advertises it.
 2. **Week strip.** Sunday to Saturday with today in a hairline box. It's a calendar, not a scoreboard.
-3. **Plan card.** The dark gradient card. Kicker (`today's plan`), the commitment text in white, then a live countdown to `checkAt` using `TimelineView(.periodic(from: .now, by: 1))` — white, then counting **up** in red with "late" once passed. `met` shows `done.`, `missed` shows `missed.` in red. A white "text snap" pill at the bottom. With no open commitment: "no plan yet / what's the move today?".
+3. **Plan card.** The dark gradient card. Kicker (`today's plan`), the commitment text in white, then a live countdown to `checkAt` using `TimelineView(.periodic(from: .now, by: 1))` — white, then counting **up** in red with "late" once passed. `met` shows `done.`, `missed` shows `missed.` in red. While the plan is open, a "start session" pill: Snap times the session itself for a phone without a Watch, shows the running clock with "done" and "cancel", and on done writes it to HealthKit as a real strength-training workout and syncs it (same evidence tier as Hevy or Strava; the backend's 30-minute floor still applies, and the caption says so). Then a white "text snap" pill at the bottom. With no open commitment: "no plan yet / what's the move today?".
 4. **Stake card.** White, only when a stake exists: `0.05 SOL on the line.`, where it is (`held · solana devnet`, `released · back in your wallet`, or `slashed · gone`), a status pill (the gradient for `held`, ink for `released`, red for `slashed`), one line of what happens next, and the explorer receipt as an outline pill when the backend sent a signature (labelled `mock` on the mock).
 5. **`SNAP'S BRAIN`** section label, the last three trace rows, and a "see everything" pill that switches to the brain tab.
 
@@ -137,7 +137,7 @@ The live app: two screens and a bottom bar — **today · + · brain**. The `+` 
 
 ### `Views/DebugPanel.swift`
 
-Sheet from the long-press. Server URL and debug key fields (save → `reloadAPI()`), then: **Time-warp to check time** (`timewarp(to: checkAt + 60 s)`), **Reset clock** (`timewarp(to: nil)`), **Seed demo history**, **Save simulated workout**, **Reset app**. Last error string at the bottom.
+Sheet from the long-press. Server URL and debug key fields (save → `reloadAPI()`), then: **Time-warp to check time** (`timewarp(to: checkAt + 60 s)`), **Reset clock** (`timewarp(to: nil)`), **Seed demo history**, **Save simulated workout**, **Time-warp session** (moves the in-app session's start back 31 minutes, starting one if none is running, so "done" on the plan card clears the 30-minute floor), **Reset app**. Last error string at the bottom.
 
 ## Look
 

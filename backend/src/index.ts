@@ -8,7 +8,7 @@
  * /webhooks/* needs `Authorization: Bearer <token>`.
  */
 
-import type { ChannelName } from './channel';
+import type { ChannelName, InboundMessage } from './channel';
 import { normalizeInbound, verifySignature } from './channels/linq';
 import { competitionStub } from './competitions/competition';
 import { MAX_ENTRY_LAMPORTS, MIN_ENTRY_LAMPORTS } from './competitions/rules';
@@ -21,6 +21,7 @@ import {
   parseCompetitionRequest,
   parseOnboardRequest,
   parseSince,
+  parseTopUpRequest,
   parseWorkoutsRequest,
   readJsonBody,
 } from './validate';
@@ -58,6 +59,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       requireMethod(request, 'GET');
       return getState(request, env);
 
+    case '/wallet':
+      requireMethod(request, 'GET');
+      return getWallet(request, env);
+
+    case '/wallet/topup':
+      requireMethod(request, 'POST');
+      return topUpWallet(request, env);
+
     case '/trace':
       requireMethod(request, 'GET');
       return getTrace(request, url, env);
@@ -69,6 +78,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     case '/debug/seed':
       requireMethod(request, 'POST');
       return seed(request, env);
+
+    case '/debug/forget':
+      requireMethod(request, 'POST');
+      return forget(request, env);
 
     case '/debug/message':
       requireMethod(request, 'POST');
@@ -242,6 +255,22 @@ async function getState(request: Request, env: Env): Promise<Response> {
   return toResponse(await stub.getState(token));
 }
 
+/** The money, where it is, and how it got there. See docs/API.md → GET /wallet. */
+async function getWallet(request: Request, env: Env): Promise<Response> {
+  const { token, stub } = authenticate(request, env);
+  return toResponse(await stub.getWallet(token));
+}
+
+/**
+ * Adds money. On devnet the treasury is the funding source, so this is the
+ * "add money" button doing exactly what it says without a card in the loop.
+ */
+async function topUpWallet(request: Request, env: Env): Promise<Response> {
+  const { token, stub } = authenticate(request, env);
+  const lamports = parseTopUpRequest(await readJsonBody(request));
+  return toResponse(await stub.topUpWallet(token, lamports));
+}
+
 async function getTrace(request: Request, url: URL, env: Env): Promise<Response> {
   const { token, stub } = authenticate(request, env);
   const since = parseSince(url.searchParams.get('since'));
@@ -284,7 +313,63 @@ async function linqWebhook(request: Request, env: Env, ctx: ExecutionContext): P
     return json({ ok: true, ignored: 'duplicate delivery' });
   }
 
-  return deliver(env, ctx, inbound.channel, inbound.chatId, inbound.text, inbound.imageUrls);
+  // A tapback arrives on its own — it has no text and no photo. A delivery
+  // that carries both is a message that happens to mention a reaction, and the
+  // words are the part worth answering.
+  if (inbound.reaction && inbound.text === '' && inbound.imageUrls.length === 0) {
+    return deliverReaction(env, ctx, inbound);
+  }
+
+  return deliver(
+    env,
+    ctx,
+    inbound.channel,
+    inbound.chatId,
+    inbound.text,
+    inbound.imageUrls,
+    inbound.messageId,
+  );
+}
+
+/**
+ * A tapback on one of Snap's texts.
+ *
+ * Routed apart from messages because it is not one: there is no link code to
+ * read out of it, an unlinked chat has nothing to react to, and the reply —
+ * when there is one at all — is a different kind of turn.
+ */
+async function deliverReaction(
+  env: Env,
+  ctx: ExecutionContext,
+  inbound: InboundMessage,
+): Promise<Response> {
+  const reaction = inbound.reaction;
+  if (!reaction) return json({ ok: true, ignored: 'not a reaction' });
+
+  const userId = await directoryStub(env).lookupChat(inbound.channel, inbound.chatId);
+  if (!userId) return json({ ok: true, ignored: 'chat not linked' });
+
+  const stub = userStub(env, userId);
+  const received = await stub.receiveReaction(
+    reaction.emoji,
+    reaction.name,
+    reaction.targetMessageId,
+    reaction.removed,
+  );
+  if (!received.ok) return json({ ok: true, ignored: 'no such user' });
+
+  // Accepting an offer already says everything: the acceptance path sends its
+  // own confirmation, and a second turn on top would talk over it.
+  if (!received.value.optedOut && !received.value.accepted && !reaction.removed) {
+    ctx.waitUntil(
+      stub.runReactionTurn(
+        reaction.emoji,
+        reaction.name,
+        reaction.targetMessageId,
+      ) as unknown as Promise<unknown>,
+    );
+  }
+  return json({ ok: true, reaction: reaction.emoji, accepted: received.value.accepted });
 }
 
 /** `yo <code>` links a chat to a user; anything else goes to the linked user. */
@@ -295,6 +380,7 @@ async function deliver(
   chatId: string,
   text: string,
   imageUrls: string[] = [],
+  messageId: string | null = null,
 ): Promise<Response> {
   const code = /^\s*yo[\s,]+(\d{4})\s*[.!]?\s*$/i.exec(text)?.[1];
 
@@ -313,7 +399,7 @@ async function deliver(
   if (!userId) return json({ ok: true, ignored: 'chat not linked' });
 
   const stub = userStub(env, userId);
-  const received = await stub.receiveMessage(text, imageUrls);
+  const received = await stub.receiveMessage(text, imageUrls, messageId);
 
   // The model, then a paced burst of texts, is far longer than a webhook
   // should be held open — and Linq retries anything slow. Acknowledge now and
@@ -408,6 +494,32 @@ async function seed(request: Request, env: Env): Promise<Response> {
   }
   const { token, stub } = authenticate(request, env);
   return toResponse(await stub.seed(token));
+}
+
+/**
+ * The server half of "reset app". Without it the phone forgets the user and
+ * the agent does not: its alarms keep firing into a thread the phone has walked
+ * away from, texting about a commitment from before the reset.
+ */
+async function forget(request: Request, env: Env): Promise<Response> {
+  if (!env.DEBUG_KEY) {
+    return errorResponse(404, 'not_found', 'no route for POST /debug/forget');
+  }
+  if (!timingSafeEqual(request.headers.get('x-debug-key') ?? '', env.DEBUG_KEY)) {
+    return errorResponse(401, 'unauthorized', 'bad X-Debug-Key');
+  }
+  const { token, stub, userId } = authenticate(request, env);
+  const result = await stub.forget(token);
+
+  // Unbinding is the directory's to do, and only on the way out of a successful
+  // forget — a 401 here means the token was not this user's to stand down.
+  if (result.ok) {
+    const directory = directoryStub(env);
+    const { channel, chatId, linkCode } = result.value;
+    if (channel && chatId) await directory.releaseChat(channel, chatId, userId);
+    if (linkCode) await directory.releaseLinkCode(linkCode, userId);
+  }
+  return toResponse(result);
 }
 
 function timingSafeEqual(a: string, b: string): boolean {

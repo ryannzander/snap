@@ -2,7 +2,8 @@ import { DurableObject } from 'cloudflare:workers';
 
 import {
   buildDays,
-  countThisWeek,
+  countMovesThisWeek,
+  countVerifiedThisWeek,
   recentMessages,
   renderContext,
   summarizeContext,
@@ -21,6 +22,7 @@ import {
   type StandingOffer,
 } from './agent/guards';
 import { ACCEPT_OFFER_TOOL, DEFAULT_GRACE_MIN, SYSTEM_PROMPT, TOOLS } from './agent/tools';
+import { describeReaction, isAffirmative, isNegative, reactionEmoji, toReaction, type ReactionName } from './reactions';
 import type { Brain, ToolCall } from './brain';
 import { FallbackBrain } from './brains/fallback';
 import { OpenAIBrain } from './brains/openai';
@@ -29,10 +31,23 @@ import type { Channel, ChannelName } from './channel';
 import { LinqChannel } from './channels/linq';
 import { TraceChannel } from './channels/trace';
 import { fail, ok, type DoResult } from './http';
+import { asksHowItWorks, onboardingTexts } from './onboarding';
 import { isOptOut } from './optout';
-import { solText } from './money';
+import {
+  MAX_TOPUP_LAMPORTS,
+  MIN_TOPUP_LAMPORTS,
+  WALLET_CEILING_LAMPORTS,
+  solText,
+} from './money';
 import { redact } from './redact';
-import { describePhoto, photoInstruction, photoSummary, type VisionEnv } from './vision';
+import {
+  describePhoto,
+  photoInstruction,
+  photoSummary,
+  type PhotoLook,
+  type PhotoOutcome,
+  type VisionEnv,
+} from './vision';
 import {
   explorerUrl,
   getBalanceLamports,
@@ -45,9 +60,13 @@ import { issueToken, secureEquals } from './ids';
 import { endOfLocalDay, localTimeToInstant, parseIso, startOfWeek } from './time';
 import type {
   Commitment,
+  Reschedule,
   StateResponse,
+  TopUpResponse,
   TraceEvent,
   TraceKind,
+  WalletEntry,
+  WalletResponse,
   WorkoutInput,
   WorkoutsResponse,
 } from './types';
@@ -80,6 +99,11 @@ const KEY = {
   traceSeq: 'traceSeq',
   clockOffset: 'clockOffset',
   wallet: 'wallet',
+  /** Like `traceSeq`: no colon, so it sits outside the `wallet:` scan range. */
+  walletSeq: 'walletSeq',
+  walletEntry: (id: number) => `wallet:entry:${String(id).padStart(12, '0')}`,
+  /** One photo, one payout: the fingerprint of every picture already spent. */
+  proof: (fingerprint: string) => `proof:${fingerprint}`,
   competition: (id: string) => `competition:${id}`,
   /** The stake Snap has proposed and the user has not answered yet. */
   offer: 'offer',
@@ -93,6 +117,10 @@ const KEY = {
 /** '~' sorts above every digit, so it caps a range scan. */
 const TRACE_RANGE_END = 'trace:~';
 const ALARM_RANGE_START = 'alarm:';
+const WALLET_ENTRY_PREFIX = 'wallet:entry:';
+
+/** How much of the wallet's history the app gets. It is a receipt, not a bank. */
+const WALLET_ENTRY_LIMIT = 40;
 
 /** Snap asks about the day at this hour, local, when nothing is committed. */
 const MORNING_HOUR = 9;
@@ -123,7 +151,22 @@ interface Link {
   chatId: string | null;
   /** Set by an inbound STOP. Nothing is ever sent again while true. */
   optedOut: boolean;
+  /**
+   * The provider's id for the last thing they sent. A tapback has to name the
+   * message it hangs off, and the only one Snap ever reacts to is their most
+   * recent — reacting to something three texts back reads as a glitch.
+   */
+  lastInboundMessageId?: string | null;
+  /**
+   * The last few texts Snap sent, with the ids the channel gave them. An
+   * inbound tapback names one of these, and without them a reaction can only
+   * be shown as a bare emoji pointing at nothing.
+   */
+  recentOutbound?: Array<{ id: string; text: string }>;
 }
+
+/** How many of Snap's own texts stay addressable for a tapback. */
+const RECENT_OUTBOUND = 10;
 
 /**
  * The user's devnet wallet. Custodial — the backend holds the key, and we say
@@ -139,6 +182,20 @@ interface StoredWallet {
 /** Enough to cover a 0.05 SOL stake and the fees around it. */
 const USER_FUNDING_LAMPORTS = 100_000_000;
 
+/**
+ * Signing costs lamports, and a wallet emptied to the last one cannot pay for
+ * the transfer that releases the stake back into it. Staking leaves this much
+ * behind.
+ */
+const FEE_HEADROOM_LAMPORTS = 5_000_000;
+
+/**
+ * The balance is read from the chain, which is a network call on a path that
+ * runs inside an agent turn. Re-reading it every few seconds is what the RPC
+ * rate limit is for, so it is held briefly in memory.
+ */
+const BALANCE_CACHE_MS = 15_000;
+
 interface StoredWorkout extends WorkoutInput {
   firstSeenAt: string;
   updatedAt: string;
@@ -147,7 +204,16 @@ interface StoredWorkout extends WorkoutInput {
 /** A commitment plus the bookkeeping the agent needs but the app never sees. */
 interface StoredCommitment extends Commitment {
   createdAt: string;
+  /**
+   * Kept for commitments stored before the log existed. `rescheduleCount`
+   * prefers the log and falls back to this, so nothing needs migrating.
+   */
   renegotiations: number;
+}
+
+/** How many times this session has been moved — the log, or the old counter. */
+function rescheduleCount(commitment: { reschedules?: Reschedule[]; renegotiations?: number }): number {
+  return commitment.reschedules?.length ?? commitment.renegotiations ?? 0;
 }
 
 /**
@@ -162,6 +228,11 @@ interface ScheduledAlarm {
   at: number;
   kind: AlarmKind;
   commitmentId?: string;
+}
+
+/** A photo fingerprint that has already been counted. See `judgePhoto`. */
+interface UsedProof {
+  at: string;
 }
 
 interface PendingTrace {
@@ -189,6 +260,9 @@ export class UserAgent extends DurableObject<Env> {
    */
   private clockOffsetMs = 0;
   private clockLoaded = false;
+
+  /** See BALANCE_CACHE_MS. Dropped whenever this object moves money itself. */
+  private balanceCache: { lamports: number; at: number } | null = null;
 
   private now(): number {
     return Date.now() + this.clockOffsetMs;
@@ -375,10 +449,10 @@ export class UserAgent extends DurableObject<Env> {
             // something HealthKit answered, not something to ask a model — and
             // a turn where it simply forgets to call release_stake leaves the
             // stake held forever with the loop looking finished.
-            await this.settle(closing, 'met', 'released');
+            await this.settle(closing, 'met', 'released', 'watch');
             await this.announce(
               profile,
-              `a workout just showed up on their watch and it covers "${closing.text}". you already gave them their ${solText(closing.stake.lamports)} back. tell them, and hype them up.`,
+              `a workout just showed up on their watch and it covers "${closing.text}". they never sent a pic, but you could see it anyway, so you gave them their ${solText(closing.stake.lamports)} back. tell them — and tell them the pic is still the quicker way to get paid.`,
             );
           })() as unknown as Promise<unknown>,
         );
@@ -402,12 +476,14 @@ export class UserAgent extends DurableObject<Env> {
       this.ctx.storage.list<StoredCommitment>({ prefix: 'commitment:' }),
     ]);
 
-    // Same bar as releasing a stake, so the dots on the screen and the
-    // agent's "2/4 this week" never disagree.
-    const workoutsThisWeek = countThisWeek(
+    // Same bar as releasing a stake — a verified photo or a qualifying
+    // workout — so the dots on the screen and the agent's "2/4 this week"
+    // never disagree.
+    const workoutsThisWeek = countVerifiedThisWeek(
       this.now(),
       profile.timezone,
       [...workouts.values()],
+      [...commitments.values()],
     );
 
     return ok({
@@ -456,12 +532,33 @@ export class UserAgent extends DurableObject<Env> {
     if (alreadyHere) return ok({ greeted: false });
 
     const profile = await this.ctx.storage.get<Profile>(KEY.profile);
-    await this.sendTexts([`yo ${profile?.name?.toLowerCase() ?? 'bro'}`, 'im in. what are we doing today']);
+    // Nine texts a second apart is nine seconds, and this runs inside the Linq
+    // webhook, which retries anything slow — so it finishes in the background
+    // while the webhook answers now. Same reason the inbound turn does.
+    this.ctx.waitUntil(
+      this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null)),
+    );
     return ok({ greeted: true });
   }
 
+  /**
+   * The same explainer, on demand. "help", "how does this work", "what do you
+   * do" — the three things anyone types at a number they just met.
+   *
+   * Deliberately not a model turn: the one question whose answer must never
+   * be improvised is how the money works.
+   */
+  private async explainAgain(): Promise<void> {
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    await this.sendTexts(onboardingTexts(profile?.name ?? null, profile?.weeklyGoal ?? null, true));
+  }
+
   /** Records an inbound text, or a photo. The agent acts on it in `runInboundTurn`. */
-  async receiveMessage(text: string, imageUrls: string[] = []): Promise<DoResult<{ optedOut: boolean }>> {
+  async receiveMessage(
+    text: string,
+    imageUrls: string[] = [],
+    messageId: string | null = null,
+  ): Promise<DoResult<{ optedOut: boolean }>> {
     await this.loadClock();
     const link = await this.ctx.storage.get<Link>(KEY.link);
     if (!link) return fail(404, 'not_found', 'no such user');
@@ -479,10 +576,202 @@ export class UserAgent extends DurableObject<Env> {
     // anything that is not itself a keyword, so mirror that rather than
     // keeping our own permanent block — otherwise one STOP kills the user
     // forever even after they text back.
-    if (optedOut !== link.optedOut) {
-      await this.ctx.storage.put(KEY.link, { ...link, optedOut } satisfies Link);
+    if (optedOut !== link.optedOut || (messageId && messageId !== link.lastInboundMessageId)) {
+      await this.ctx.storage.put(KEY.link, {
+        ...link,
+        optedOut,
+        lastInboundMessageId: messageId ?? link.lastInboundMessageId ?? null,
+      } satisfies Link);
     }
     return ok({ optedOut });
+  }
+
+  // --- reactions -----------------------------------------------------------
+
+  /**
+   * A tapback on one of Snap's texts.
+   *
+   * Reactions are the cheapest thing a person can send, which is exactly why
+   * they matter: the user who will not type "ok" will still tap 👍, and a
+   * thread where only one side reacts feels like a broadcast. So they run a
+   * real turn — but a narrow one, and Snap is told plainly that silence is
+   * usually the right answer to a thumbs up.
+   *
+   * The one case that is not conversational: a 👍 or ❤️ on a standing offer
+   * is a yes, and takes their money. That is deliberate and it is said out
+   * loud in onboarding, because a tapback that quietly moves money and was
+   * never explained is a trap.
+   */
+  async receiveReaction(
+    emoji: string,
+    name: ReactionName | null,
+    targetMessageId: string | null,
+    removed = false,
+  ): Promise<DoResult<{ optedOut: boolean; accepted: boolean }>> {
+    await this.loadClock();
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    if (!link) return fail(404, 'not_found', 'no such user');
+
+    const target = await this.outboundText(targetMessageId);
+    await this.appendTraces([
+      {
+        kind: 'reaction_received',
+        summary: describeReaction(emoji, target, removed),
+        data: { emoji, name, targetMessageId, removed },
+      },
+    ]);
+
+    if (link.optedOut) return ok({ optedOut: true, accepted: false });
+    // Taking a tapback back is not a new thing to say. It is recorded and
+    // that is all — answering it would make un-tapping something a way to
+    // summon Snap.
+    if (removed) return ok({ optedOut: false, accepted: false });
+
+    // A yes on a standing offer, decided here rather than by the model: the
+    // answer to "did they agree?" is not a judgement call when the answer is
+    // a thumbs up, and money should not move on a model's reading of an
+    // emoji when it does not have to.
+    if (name && isAffirmative(name)) {
+      const accepted = await this.acceptStandingOffer(`tapped ${emoji}`);
+      if (accepted) return ok({ optedOut: false, accepted: true });
+    }
+
+    return ok({ optedOut: false, accepted: false });
+  }
+
+  /**
+   * The conversational half of a reaction: Snap gets a turn, with the tapback
+   * described to it the way a person would read it.
+   *
+   * Run after `receiveReaction`, and skipped entirely when the reaction
+   * already did something (accepting an offer says everything it needs to).
+   */
+  async runReactionTurn(emoji: string, name: ReactionName | null, targetMessageId: string | null): Promise<DoResult<{ ran: boolean }>> {
+    await this.loadClock();
+    const target = await this.outboundText(targetMessageId);
+    const sentiment = name
+      ? isAffirmative(name)
+        ? 'that is agreement'
+        : isNegative(name)
+          ? 'that is a no'
+          : name === 'laugh'
+            ? 'they thought it was funny'
+            : name === 'question'
+              ? 'they are confused'
+              : 'they are emphasising it'
+      : 'you cannot tell exactly which tapback it was';
+
+    // Not `fromUser`: the two narrow passes that flag is for are both wrong
+    // here. An affirmative tapback was already taken as agreement above, by
+    // the backend, before this turn ran — and letting the acceptance pass see
+    // a 😂 on a standing offer would let a laugh take someone's money. A
+    // tapback never names a session time either, so there is nothing for the
+    // offer pass to find.
+    return this.runAgent(
+      `they just tapped ${emoji} on ${target ? `your text "${target}"` : 'one of your texts'}. ${sentiment}. ` +
+        'a tapback is not a conversation — stay_quiet unless it actually changes something, ' +
+        'and if you do answer, one short text or a tapback of your own, never a speech.',
+      false,
+    );
+  }
+
+  /** Tapbacks Snap sends. The trace row is written whether or not it lands. */
+  private async sendReaction(name: ReactionName): Promise<boolean> {
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    if (!link?.linked || !link.chatId || !link.channel) return false;
+    if (link.optedOut) return false;
+
+    const emoji = reactionEmoji(name);
+    const target = await this.lastInboundText();
+    await this.appendTraces([
+      {
+        kind: 'reaction_sent',
+        summary: describeReaction(emoji, target),
+        data: { emoji, name, targetMessageId: link.lastInboundMessageId ?? null },
+      },
+    ]);
+
+    await this.channelFor(link.channel).react(
+      link.chatId,
+      name,
+      link.lastInboundMessageId ?? null,
+    );
+    return true;
+  }
+
+  /**
+   * Which of Snap's texts an inbound tapback was aimed at.
+   *
+   * Only the ids the channel handed back are addressable, and only the last
+   * few of those. A tapback on anything older, or sent through a channel that
+   * does not return ids, still shows — as the bare emoji. An unlabelled
+   * reaction is better than one labelled with the wrong line.
+   */
+  private async outboundText(messageId: string | null): Promise<string | null> {
+    if (!messageId) return null;
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    return link?.recentOutbound?.find((entry) => entry.id === messageId)?.text ?? null;
+  }
+
+  /**
+   * The last thing the user said. Snap only ever tapbacks their most recent
+   * message, so this is always the line his own reaction hangs off.
+   */
+  private async lastInboundText(): Promise<string | null> {
+    const events = await this.ctx.storage.list<TraceEvent>({
+      start: KEY.trace(1),
+      end: TRACE_RANGE_END,
+      reverse: true,
+      limit: 20,
+    });
+    for (const event of events.values()) {
+      if (event.kind === 'message_received') return event.summary;
+    }
+    return null;
+  }
+
+  /**
+   * Turns a standing offer into a held stake without a model in the loop, and
+   * says so. Used by the affirmative tapback; the guards are the same ones
+   * the `accept_offer` tool goes through, so there is no second path to
+   * someone's money.
+   */
+  private async acceptStandingOffer(how: string): Promise<boolean> {
+    const profile = await this.ctx.storage.get<Profile>(KEY.profile);
+    if (!profile) return false;
+
+    const offer = await this.standingOffer();
+    const open = (await this.loadCommitments())
+      .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
+      .map(toWireCommitment);
+    const guard = guardAccept(offer, this.now(), open);
+    if (!guard.ok) return false;
+
+    if (!(await this.canCover(guard.value.lamports))) {
+      await this.appendTraces([
+        {
+          kind: 'decision',
+          summary: `${how} — but the wallet cannot cover ${solText(guard.value.lamports)}`,
+        },
+      ]);
+      await this.sendTexts([
+        'bro your wallet is empty 💀',
+        'add some sol in the app and tap it again',
+      ]);
+      return false;
+    }
+
+    await this.ctx.storage.delete(KEY.offer);
+    await this.appendTraces([
+      { kind: 'decision', summary: `${how} — that's a yes`, data: { lamports: guard.value.lamports } },
+    ]);
+    const commitment = await this.startCommitment(guard.value, profile, this.now());
+    await this.announce(
+      profile,
+      `they just agreed to the stake by tapping a reaction on your text. ${solText(commitment.stake.lamports)} is now locked on "${commitment.text}". ` +
+        'confirm it in one or two short texts so they know the money is actually on the line, and tell them to send a pic from the gym.',
+    );
+    return true;
   }
 
   /**
@@ -494,22 +783,32 @@ export class UserAgent extends DurableObject<Env> {
    */
   async runInboundTurn(text: string, imageUrls: string[] = []): Promise<DoResult<{ ran: boolean }>> {
     if (imageUrls.length === 0) {
+      // "how does this work" is the one question that gets the same answer
+      // every time, and it is the answer the model is least allowed to
+      // improvise — it is about money.
+      if (asksHowItWorks(text)) {
+        await this.loadClock();
+        await this.appendTraces([
+          { kind: 'decision', summary: 'they asked how it works — said it straight, no model' },
+        ]);
+        await this.explainAgain();
+        return ok({ ran: true });
+      }
       return this.runAgent(`the user just texted you: "${text}". decide what to do.`, true);
     }
 
     await this.loadClock();
     const url = imageUrls[0]!;
-    let description: string | null = null;
+    let look: PhotoLook | null = null;
     try {
       // The generated `Ai` binding type is model-specific; the vision module
       // only needs `run`, the same loosening `brain()` does.
-      const look = await describePhoto(this.env as unknown as VisionEnv, url);
-      description = look.description;
+      look = await describePhoto(this.env as unknown as VisionEnv, url);
       await this.appendTraces([
         {
           kind: 'context',
           summary: `looked at the photo · ${look.description}`,
-          data: { via: look.via, imageUrl: url },
+          data: { via: look.via, imageUrl: url, verdict: look.verdict },
         },
       ]);
     } catch (error) {
@@ -521,7 +820,94 @@ export class UserAgent extends DurableObject<Env> {
         },
       ]);
     }
-    return this.runAgent(photoInstruction(text, description), true);
+
+    // The money moves here, in code, before the model says a word. A turn
+    // that decides for itself whether a picture counts is a turn that can be
+    // talked into paying out, and this is the verifier now.
+    const outcome = look ? await this.judgePhoto(look) : { kind: 'unseen' as const };
+
+    return this.runAgent(photoInstruction(text, look?.description ?? null, outcome), true);
+  }
+
+  /**
+   * Is this photo proof, and does it close anything?
+   *
+   * Three ways to fail, in the order someone would actually try them: it is
+   * not a training photo, it is a photo we have already been paid for, or it
+   * is a fine photo with nothing on the line. Only the fourth case moves
+   * money, and it moves it before the model is asked to speak.
+   */
+  private async judgePhoto(look: PhotoLook): Promise<PhotoOutcome> {
+    if (look.verdict !== 'training') {
+      const reason = look.rejection ?? 'that is not a workout';
+      await this.appendTraces([
+        {
+          kind: 'photo_rejected',
+          summary: `not proof · ${reason}`,
+          data: { verdict: look.verdict, description: look.description },
+        },
+      ]);
+      return { kind: look.verdict === 'unsure' ? 'unsure' : 'rejected', reason };
+    }
+
+    // Sending Monday's gym selfie again on Tuesday is the first thing anyone
+    // would try. The bytes are the same, so the fingerprint is.
+    const seen = await this.ctx.storage.get<UsedProof>(KEY.proof(look.fingerprint));
+    if (seen) {
+      await this.appendTraces([
+        {
+          kind: 'photo_rejected',
+          summary: 'not proof · you already sent me that exact photo',
+          data: { fingerprint: look.fingerprint, firstSeenAt: seen.at },
+        },
+      ]);
+      return { kind: 'replay', reason: 'you already sent me that exact photo' };
+    }
+
+    // Whatever stake is open right now. No window check beyond that: the photo
+    // arrived now, so it is necessarily after the commitment was made, and a
+    // deadline that has already passed has been settled by the end-of-day
+    // alarm and is no longer open. Someone who trains early and sends the pic
+    // before the hour they named gets paid early, which is the right answer —
+    // the stake is on training, not on punctuality.
+    const open = (await this.loadCommitments()).find(
+      (c) =>
+        (c.status === 'pending' || c.status === 'renegotiated') && c.stake.status === 'held',
+    );
+
+    if (!open) {
+      await this.appendTraces([
+        {
+          kind: 'photo_accepted',
+          summary: 'proof · nothing on the line for it',
+          data: { description: look.description },
+        },
+      ]);
+      return { kind: 'no_stake' };
+    }
+
+    // Only now is the image spent. Burning the fingerprint before this point
+    // would disqualify a photo that was never paid out for — a pic sent with
+    // nothing on the line, or one sent a beat early in rehearsal.
+    await this.ctx.storage.put(KEY.proof(look.fingerprint), {
+      at: this.nowIso(),
+    } satisfies UsedProof);
+
+    const verified: StoredCommitment = {
+      ...open,
+      proof: { at: this.nowIso(), description: look.description },
+    };
+    await this.ctx.storage.put(KEY.commitment(open.id), verified);
+    await this.appendTraces([
+      {
+        kind: 'photo_accepted',
+        summary: `proof · ${solText(open.stake.lamports)} back on "${open.text}"`,
+        data: { commitmentId: open.id, description: look.description },
+      },
+    ]);
+    await this.settle(verified, 'met', 'released', 'photo');
+
+    return { kind: 'released', text: open.text, lamports: open.stake.lamports };
   }
 
   /**
@@ -621,6 +1007,15 @@ export class UserAgent extends DurableObject<Env> {
       const escrow = await walletFromSeed(escrowSeed);
       return transferSol(this.rpc(), user, escrow.address, lamports);
     });
+    if (txSig) this.balanceCache = null;
+
+    await this.recordWalletEntry({
+      kind: 'held',
+      lamports,
+      label: name,
+      txSig,
+      ref: competitionId,
+    });
 
     return ok({ name: profile.name, txSig });
   }
@@ -669,7 +1064,16 @@ export class UserAgent extends DurableObject<Env> {
         const escrow = await walletFromSeed(escrowSeed);
         return transferSol(this.rpc(), escrow, user.address, payoutLamports);
       });
+      if (txSig) this.balanceCache = null;
     }
+
+    await this.recordWalletEntry({
+      kind: met ? 'released' : 'slashed',
+      lamports: met ? payoutLamports : staked,
+      label: name,
+      txSig,
+      ref: competitionId,
+    });
 
     const won = payoutLamports > staked;
     await this.appendTraces([
@@ -706,12 +1110,29 @@ export class UserAgent extends DurableObject<Env> {
     await this.appendTraces(texts.map((text) => ({ kind: 'message_sent' as const, summary: text })));
 
     try {
-      await this.channelFor(link.channel).send(link.chatId, texts);
+      const ids = await this.channelFor(link.channel).send(link.chatId, texts);
+      await this.rememberOutbound(texts, ids);
     } catch (error) {
       // A send failure must not lose the trace or fail the caller's request;
       // the brain screen still shows what Snap decided to say.
       console.error('channel send failed', redact(String(error)));
     }
+  }
+
+  /** Keeps the last few of Snap's texts addressable, so a tapback can name one. */
+  private async rememberOutbound(texts: string[], ids: Array<string | null>): Promise<void> {
+    const fresh = texts
+      .map((text, index) => ({ id: ids[index] ?? null, text }))
+      .filter((entry): entry is { id: string; text: string } => entry.id !== null);
+    if (fresh.length === 0) return;
+
+    // Re-read: the send took a second per text and the agent may have moved on.
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    if (!link) return;
+    await this.ctx.storage.put(KEY.link, {
+      ...link,
+      recentOutbound: [...(link.recentOutbound ?? []), ...fresh].slice(-RECENT_OUTBOUND),
+    } satisfies Link);
   }
 
   private channelFor(name: ChannelName): Channel {
@@ -736,11 +1157,19 @@ export class UserAgent extends DurableObject<Env> {
     if (!auth.ok) return auth;
     const profile = auth.value;
 
-    for (const prefix of ['workout:', 'commitment:', 'trace:', ALARM_RANGE_START]) {
+    // 'proof:' belongs in here: the fingerprints outlive the commitments they
+    // were spent on, so without it the second rehearsal of the photo beat gets
+    // "you already sent me that exact photo" and the stake never releases.
+    for (const prefix of ['workout:', 'commitment:', 'trace:', 'proof:', ALARM_RANGE_START]) {
       const keys = await this.ctx.storage.list({ prefix });
       for (const key of keys.keys()) await this.ctx.storage.delete(key);
     }
     await this.ctx.storage.delete(KEY.traceSeq);
+
+    // Clearing ALARM_RANGE_START took the morning check-in with it, and rearm()
+    // only points the alarm at what is left. Re-book it, or the proactive beat
+    // is dead on a seeded account.
+    await this.scheduleMorning(profile, 0);
     await this.rearm();
 
     const now = this.now();
@@ -794,6 +1223,12 @@ export class UserAgent extends DurableObject<Env> {
       graceMin: DEFAULT_GRACE_MIN,
       status: 'missed',
       stake: { lamports: 50_000_000, status: 'slashed', txSig: null },
+      reschedules: [],
+      // No pic yesterday and nothing on the watch either — which is exactly
+      // why the money went. The agent reads this back as "you said that
+      // yesterday".
+      proof: null,
+      verifiedBy: null,
       createdAt: new Date(yesterdayDue - 6 * 3600_000).toISOString(),
       renegotiations: 0,
     };
@@ -814,6 +1249,40 @@ export class UserAgent extends DurableObject<Env> {
     ]);
 
     return ok({ workouts: workoutDays.length, commitments: 1 });
+  }
+
+  /**
+   * Stands this user down for good: everything stored is dropped and the alarm
+   * is disarmed.
+   *
+   * "reset app" used to be a phone-only affair — it threw away the token and
+   * went back to onboarding, and the agent on this side carried on. Its alarms
+   * still fired, so the thread kept getting texts about a commitment made
+   * before the reset, and the chat stayed bound to a user the phone had
+   * forgotten. Whoever resets is starting over; this is the other half of it.
+   *
+   * Returns what the chat was bound to, because unbinding lives in the
+   * directory and only the Worker talks to that.
+   */
+  async forget(
+    token: string,
+  ): Promise<DoResult<{ channel: ChannelName | null; chatId: string | null; linkCode: string }>> {
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    const link = await this.ctx.storage.get<Link>(KEY.link);
+    const released = {
+      channel: link?.channel ?? null,
+      chatId: link?.chatId ?? null,
+      linkCode: link?.linkCode ?? '',
+    };
+
+    // deleteAll covers the profile and the token too, so the next request with
+    // this token is a clean 401 rather than a half-erased user.
+    await this.ctx.storage.deleteAll();
+    await this.ctx.storage.deleteAlarm();
+
+    return ok(released);
   }
 
   /** Like appendTraces, but for history that did not happen just now. */
@@ -892,10 +1361,196 @@ export class UserAgent extends DurableObject<Env> {
         await this.ctx.storage.put(KEY.wallet, { ...wallet, funded: true });
         return;
       }
+      const topUp = USER_FUNDING_LAMPORTS - balance;
       const treasury = await walletFromSeed(treasurySeed);
-      await transferSol(rpc, treasury, wallet.address as never, USER_FUNDING_LAMPORTS - balance);
+      const txSig = await transferSol(rpc, treasury, wallet.address as never, topUp);
       await this.ctx.storage.put(KEY.wallet, { ...wallet, funded: true });
+      this.balanceCache = null;
+      await this.recordWalletEntry({
+        kind: 'funded',
+        lamports: topUp,
+        label: 'starting balance from snap',
+        txSig,
+      });
     });
+  }
+
+  // --- wallet --------------------------------------------------------------
+
+  /**
+   * What the app's wallet screen draws.
+   *
+   * Two numbers, because they are two different things and conflating them is
+   * how "where did my money go" happens: `balanceLamports` is what is actually
+   * in the user's wallet on devnet, and `heldLamports` is what has already
+   * left it for escrow against an open commitment or a competition entry.
+   */
+  async getWallet(token: string): Promise<DoResult<WalletResponse>> {
+    await this.loadClock();
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+    return ok(await this.walletView());
+  }
+
+  /**
+   * Puts money in. On devnet that is a transfer from Snap's treasury — there
+   * is nothing to charge a card for, and the public faucet rate-limits hard
+   * enough that a demo cannot depend on it (see fundUserWallet).
+   *
+   * Real money is the production path and nothing above this line changes
+   * when it arrives: the app asks for an amount, the wallet gets it, and the
+   * stake comes out of the same balance.
+   */
+  async topUpWallet(token: string, lamports: number): Promise<DoResult<TopUpResponse>> {
+    await this.loadClock();
+    const auth = await this.authenticate(token);
+    if (!auth.ok) return auth;
+
+    if (!Number.isInteger(lamports) || lamports < MIN_TOPUP_LAMPORTS || lamports > MAX_TOPUP_LAMPORTS) {
+      return fail(400, 'bad_request', 'top up between 0.01 and 1 SOL at a time');
+    }
+
+    const treasurySeed = this.env.SNAP_TREASURY_SEED;
+    if (!treasurySeed) {
+      return fail(503, 'chain_unavailable', 'no treasury configured — nothing can be topped up');
+    }
+
+    const wallet = await this.userWallet();
+    const balance = await this.balance(true);
+    if (balance !== null && balance + lamports > WALLET_CEILING_LAMPORTS) {
+      return fail(400, 'bad_request', 'that would put the wallet over its 2 SOL ceiling');
+    }
+
+    const txSig = await this.onChain('top up', async () => {
+      const treasury = await walletFromSeed(treasurySeed);
+      return transferSol(this.rpc(), treasury, wallet.address as never, lamports);
+    });
+
+    if (!txSig) {
+      // The money did not move. Saying it did, and then showing an unchanged
+      // balance a second later, is worse than a plain no.
+      return fail(503, 'chain_unavailable', 'devnet would not take the transfer — try again');
+    }
+
+    this.balanceCache = null;
+    await this.ctx.storage.put(KEY.wallet, { ...wallet, funded: true });
+    await this.recordWalletEntry({
+      kind: 'funded',
+      lamports,
+      label: 'you added money',
+      txSig,
+    });
+    await this.appendTraces([
+      {
+        kind: 'wallet_funded',
+        summary: `${solText(lamports)} added to your wallet`,
+        data: { txSig, explorer: explorerUrl(txSig) },
+      },
+    ]);
+
+    const view = await this.walletView();
+    return ok({ ...view, addedLamports: lamports, txSig });
+  }
+
+  private async walletView(): Promise<WalletResponse> {
+    const wallet = await this.userWallet();
+    const [balance, held, entries] = await Promise.all([
+      this.balance(),
+      this.heldLamports(),
+      this.walletEntries(),
+    ]);
+    return {
+      address: wallet.address,
+      cluster: 'devnet',
+      balanceLamports: balance,
+      heldLamports: held,
+      funded: wallet.funded,
+      entries,
+    };
+  }
+
+  /** Everything that has left this wallet and not come back yet. */
+  private async heldLamports(): Promise<number> {
+    const [commitments, competitions] = await Promise.all([
+      this.loadCommitments(),
+      this.ctx.storage.list<CompetitionEntry>({ prefix: 'competition:' }),
+    ]);
+    let held = 0;
+    for (const commitment of commitments) {
+      if (commitment.stake.status === 'held') held += commitment.stake.lamports;
+    }
+    for (const entry of competitions.values()) {
+      if (entry.status === 'entered') held += entry.stakeLamports;
+    }
+    return held;
+  }
+
+  private async walletEntries(): Promise<WalletEntry[]> {
+    const stored = await this.ctx.storage.list<WalletEntry>({
+      prefix: WALLET_ENTRY_PREFIX,
+      reverse: true,
+      limit: WALLET_ENTRY_LIMIT,
+    });
+    return [...stored.values()];
+  }
+
+  /**
+   * The on-chain balance, or null when devnet could not be reached. Null is
+   * not zero: the app shows "can't reach the chain" for one and an empty
+   * wallet for the other, and they are very different sentences to read
+   * under a stake.
+   */
+  private async balance(fresh = false): Promise<number | null> {
+    const cached = this.balanceCache;
+    if (!fresh && cached && Date.now() - cached.at < BALANCE_CACHE_MS) return cached.lamports;
+
+    const wallet = await this.userWallet();
+    const lamports = await this.onChain('balance', async () =>
+      getBalanceLamports(this.rpc(), wallet.address as never),
+    );
+    if (lamports === null) return cached?.lamports ?? null;
+
+    this.balanceCache = { lamports, at: Date.now() };
+    return lamports;
+  }
+
+  /**
+   * Whether the wallet can cover a stake of this size, leaving the fees the
+   * release transfer will need. `true` when the chain could not be reached:
+   * a devnet hiccup must not be able to tell a user they are broke.
+   */
+  private async canCover(lamports: number): Promise<boolean> {
+    const balance = await this.balance();
+    if (balance === null) return true;
+    return balance >= lamports + FEE_HEADROOM_LAMPORTS;
+  }
+
+  private async recordWalletEntry(entry: Omit<WalletEntry, 'id' | 'at'> & { ref?: string }): Promise<void> {
+    const seq = ((await this.ctx.storage.get<number>(KEY.walletSeq)) ?? 0) + 1;
+    await this.ctx.storage.put({
+      [KEY.walletSeq]: seq,
+      [KEY.walletEntry(seq)]: { ...entry, id: seq, at: this.nowIso() },
+    });
+  }
+
+  /**
+   * Hangs the signature on an entry once the chain confirms it, which is
+   * seconds after the money is recorded as moved. Scans the recent entries
+   * rather than keying by reference: the ledger is short by construction and
+   * one linear pass is cheaper than a second index to keep in sync.
+   */
+  private async attachWalletTx(ref: string, kind: WalletEntry['kind'], txSig: string): Promise<void> {
+    const stored = await this.ctx.storage.list<WalletEntry & { ref?: string }>({
+      prefix: WALLET_ENTRY_PREFIX,
+      reverse: true,
+      limit: WALLET_ENTRY_LIMIT,
+    });
+    for (const [key, entry] of stored) {
+      if (entry.ref === ref && entry.kind === kind && !entry.txSig) {
+        await this.ctx.storage.put(key, { ...entry, txSig });
+        return;
+      }
+    }
   }
 
   /**
@@ -942,6 +1597,14 @@ export class UserAgent extends DurableObject<Env> {
       ...current,
       stake: { ...current.stake, txSig: signature },
     } satisfies StoredCommitment);
+
+    // The money actually moved, so whatever balance was cached is stale.
+    this.balanceCache = null;
+    await this.attachWalletTx(
+      commitmentId,
+      direction === 'stake' ? 'held' : direction === 'release' ? 'released' : 'slashed',
+      signature,
+    );
 
     await this.appendTraces([
       {
@@ -995,6 +1658,10 @@ export class UserAgent extends DurableObject<Env> {
         // Already settled, or talked forward — nothing to check on.
         if (!commitment || commitment.status !== 'pending') return;
 
+        // A verified photo settles the commitment the moment it lands, so
+        // this is belt and braces — but nagging someone who has already sent
+        // the picture is the one mistake this alarm must never make.
+        if (commitment.proof) return;
         const covering = findCoveringWorkout(
           await this.loadWorkouts(),
           parseIso(commitment.createdAt) ?? 0,
@@ -1010,7 +1677,7 @@ export class UserAgent extends DurableObject<Env> {
           },
         ]);
         await this.runAgent(
-          `you woke yourself up. "${commitment.text}" was due at ${clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone)} and the ${commitment.graceMin} minute grace has passed with no workout. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. decide whether to text them.`,
+          `you woke yourself up. "${commitment.text}" was due at ${clockOnly(parseIso(commitment.dueAt) ?? this.now(), profile.timezone)} and the ${commitment.graceMin} minute grace has passed with no pic from them. their ${solText(commitment.stake.lamports)} is still locked and you take it at end of day, not now. if you text, ask for the pic — that is how they get it back. decide whether to text them.`,
         );
         return;
       }
@@ -1019,35 +1686,41 @@ export class UserAgent extends DurableObject<Env> {
         const commitment = await this.commitment(scheduled.commitmentId);
         if (!commitment || (commitment.status !== 'pending' && commitment.status !== 'renegotiated')) return;
 
-        const covering = findCoveringWorkout(
-          await this.loadWorkouts(),
-          parseIso(commitment.createdAt) ?? 0,
-          this.endOfDayFor(commitment, profile),
-        );
+        const covering = commitment.proof
+          ? null
+          : findCoveringWorkout(
+              await this.loadWorkouts(),
+              parseIso(commitment.createdAt) ?? 0,
+              this.endOfDayFor(commitment, profile),
+            );
+        const met = commitment.proof ? 'photo' : covering ? 'watch' : null;
 
         await this.appendTraces([
           {
             kind: 'alarm_fired',
-            summary: covering
+            summary: met
               ? `end of day — ${commitment.text} was met`
               : `end of day — ${commitment.text} is unmet`,
-            data: { commitmentId: commitment.id, kind: 'end_of_day' },
+            data: { commitmentId: commitment.id, kind: 'end_of_day', verifiedBy: met },
           },
         ]);
-        // The clock and HealthKit decide this, not the model. It used to be
-        // asked to "decide", which meant a turn that chose the wrong tool left
-        // a missed commitment sitting held and the demo's last beat missing.
-        if (covering) {
-          await this.settle(commitment, 'met', 'released');
+        // The clock and the two verifiers decide this, not the model. It used
+        // to be asked to "decide", which meant a turn that chose the wrong
+        // tool left a missed commitment sitting held and the demo's last beat
+        // missing.
+        if (met) {
+          await this.settle(commitment, 'met', 'released', met);
           await this.announce(
             profile,
-            `end of day. "${commitment.text}" got done and you already gave them their ${solText(commitment.stake.lamports)} back. tell them.`,
+            met === 'photo'
+              ? `end of day. "${commitment.text}" got done — they sent the pic — and you already gave them their ${solText(commitment.stake.lamports)} back. tell them.`
+              : `end of day. they never sent a pic for "${commitment.text}", but their watch shows they trained anyway, so you gave them their ${solText(commitment.stake.lamports)} back. tell them, and tell them the pic is the quicker way.`,
           );
         } else {
           await this.settle(commitment, 'missed', 'slashed');
           await this.announce(
             profile,
-            `end of day. "${commitment.text}" never happened, so you just took their ${solText(commitment.stake.lamports)}. tell them straight — no lecture.`,
+            `end of day. no pic, nothing on their watch either, so "${commitment.text}" never happened and you just took their ${solText(commitment.stake.lamports)}. tell them straight — no lecture.`,
           );
         }
         return;
@@ -1204,7 +1877,8 @@ export class UserAgent extends DurableObject<Env> {
     // word is sent: a reschedule the guards threw out was being announced to
     // the user as "alright, push it to tomorrow then", and then the stake was
     // slashed on the original deadline anyway.
-    const isTalking = (name: string) => name === 'send_messages' || name === 'stay_quiet';
+    const isTalking = (name: string) =>
+      name === 'send_messages' || name === 'stay_quiet' || name === 'react';
     const executed: string[] = [];
     const refusals: string[] = [];
 
@@ -1274,9 +1948,12 @@ export class UserAgent extends DurableObject<Env> {
     // and the user hears nothing — which is the product failing silently.
     // Ask once more, with only the two talking tools available.
     // offer_stake carries its own words, so a turn that offered has spoken.
+    // A tapback is an answer. Forcing a text on top of one is how a thread
+    // ends up with a 👍 and then "👍" typed out underneath it.
     const spoke =
       executed.includes('send_messages') ||
       executed.includes('stay_quiet') ||
+      executed.includes('react') ||
       executed.includes('offer_stake');
 
     if (!spoke) {
@@ -1515,6 +2192,9 @@ not a system rejecting them.`,
       graceMin: DEFAULT_GRACE_MIN,
       status: 'pending',
       stake: { lamports: proposal.lamports, status: 'held', txSig: null },
+      reschedules: [],
+      proof: null,
+      verifiedBy: null,
       createdAt: this.nowIso(),
       renegotiations: 0,
     };
@@ -1534,10 +2214,29 @@ not a system rejecting them.`,
       { kind: 'stake_held', summary: `${solText(commitment.stake.lamports)} locked`, data: { id: commitment.id } },
     ]);
 
+    await this.recordWalletEntry({
+      kind: 'held',
+      lamports: commitment.stake.lamports,
+      label: commitment.text,
+      txSig: null,
+      ref: commitment.id,
+    });
+
     // Confirming on devnet takes seconds. The commitment is already real and
     // Snap can already text about it; the signature catches up.
     this.ctx.waitUntil(this.moveStake(commitment.id, 'stake'));
     return commitment;
+  }
+
+  /**
+   * Why a stake cannot be taken, in words the correction pass can turn into a
+   * text. It names the number on purpose: "you're broke" is a joke, "you have
+   * 0.01 and this needs 0.05" is something the user can act on.
+   */
+  private async brokeReason(lamports: number): Promise<string> {
+    const balance = await this.balance();
+    const have = balance === null ? 'nothing spendable' : solText(balance);
+    return `their wallet holds ${have} and this stake needs ${solText(lamports)} — they have to add sol in the app first, so nothing was locked`;
   }
 
   /** Runs one proposed tool call, or records why it was refused. */
@@ -1568,6 +2267,9 @@ not a system rejecting them.`,
       case 'create_commitment': {
         const guard = guardCreate(call.arguments, now, profile.timezone, open.map(toWireCommitment));
         if (!guard.ok) return refuse(guard.reason);
+        if (!(await this.canCover(guard.value.lamports))) {
+          return refuse(await this.brokeReason(guard.value.lamports));
+        }
 
         // Naming an amount outright is itself agreement, so nothing is being
         // taken unasked — but any standing offer is now moot.
@@ -1579,6 +2281,11 @@ not a system rejecting them.`,
       case 'offer_stake': {
         const guard = guardOffer(call.arguments, now, profile.timezone, open.map(toWireCommitment));
         if (!guard.ok) return refuse(guard.reason);
+        // Offering money they do not have ends with "deal" and no stake, which
+        // is the one outcome worse than not offering at all.
+        if (!(await this.canCover(guard.value.lamports))) {
+          return refuse(await this.brokeReason(guard.value.lamports));
+        }
 
         // Nothing is locked and nothing moves. The only effect is that a yes
         // now means something — which is the whole point of asking first.
@@ -1613,6 +2320,9 @@ not a system rejecting them.`,
         const offer = (await this.ctx.storage.get<StandingOffer>(KEY.offer)) ?? null;
         const guard = guardAccept(offer, now, open.map(toWireCommitment));
         if (!guard.ok) return refuse(guard.reason);
+        if (!(await this.canCover(guard.value.lamports))) {
+          return refuse(await this.brokeReason(guard.value.lamports));
+        }
 
         // One offer, one acceptance: drop it before creating anything, so a
         // repeated yes cannot stake twice.
@@ -1626,7 +2336,7 @@ not a system rejecting them.`,
         const existing = commitments.find((c) => c.id === id) ?? null;
         const guard = guardReschedule(
           call.arguments,
-          existing,
+          existing && { ...toWireCommitment(existing), renegotiations: rescheduleCount(existing) },
           now,
           profile.timezone,
           this.endOfDayFor(existing, profile),
@@ -1637,7 +2347,13 @@ not a system rejecting them.`,
           ...existing,
           dueAt: guard.value.dueAt,
           status: 'renegotiated',
-          renegotiations: existing.renegotiations + 1,
+          // Both: the log is the record, the counter keeps working for
+          // anything still reading it.
+          reschedules: [
+            ...(existing.reschedules ?? []),
+            { at: this.nowIso(), from: existing.dueAt, to: guard.value.dueAt },
+          ],
+          renegotiations: rescheduleCount(existing) + 1,
         };
         await this.ctx.storage.put(KEY.commitment(existing.id), moved);
 
@@ -1664,6 +2380,13 @@ not a system rejecting them.`,
         const guard = guardMessages(call.arguments, link?.linked ?? false, link?.optedOut ?? false);
         if (!guard.ok) return refuse(guard.reason);
         await this.sendTexts(guard.value);
+        return true;
+      }
+
+      case 'react': {
+        const name = toReaction(call.arguments.reaction);
+        if (!name) return refuse('that is not one of the six tapbacks');
+        if (!(await this.sendReaction(name))) return refuse('no chat is linked yet — nothing to react to');
         return true;
       }
 
@@ -1707,10 +2430,18 @@ not a system rejecting them.`,
     commitment: StoredCommitment,
     status: 'met' | 'missed',
     stake: 'released' | 'slashed',
+    /**
+     * Which verifier closed it. The photo is the one Snap asks for and talks
+     * about; the watch is the fallback that pays people who trained and
+     * forgot, and the app says which so nobody has to guess why their money
+     * came back.
+     */
+    verifiedBy: 'photo' | 'watch' | null = null,
   ): Promise<void> {
     await this.ctx.storage.put(KEY.commitment(commitment.id), {
       ...commitment,
       status,
+      verifiedBy,
       stake: { ...commitment.stake, status: stake },
     } satisfies StoredCommitment);
 
@@ -1729,6 +2460,14 @@ not a system rejecting them.`,
         data: { id: commitment.id },
       },
     ]);
+
+    await this.recordWalletEntry({
+      kind: stake,
+      lamports: commitment.stake.lamports,
+      label: commitment.text,
+      txSig: null,
+      ref: commitment.id,
+    });
 
     this.ctx.waitUntil(this.moveStake(commitment.id, stake === 'released' ? 'release' : 'slash'));
   }
@@ -1760,12 +2499,14 @@ not a system rejecting them.`,
       timezone: profile.timezone,
       name: profile.name,
       weeklyGoal: profile.weeklyGoal,
-      workoutsThisWeek: countThisWeek(now, profile.timezone, workouts),
+      workoutsThisWeek: countVerifiedThisWeek(now, profile.timezone, workouts, commitments),
       lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
-        .map((c) => ({ ...toWireCommitment(c), renegotiations: c.renegotiations })),
+        .map((c) => ({ ...toWireCommitment(c), renegotiations: rescheduleCount(c) })),
       standingOffer: await this.standingOffer(),
+      movesThisWeek: countMovesThisWeek(now, profile.timezone, commitments),
+      wallet: { balanceLamports: await this.balance(), heldLamports: await this.heldLamports() },
       recentMessages: recentMessages([...events.values()]),
     };
   }
@@ -1886,6 +2627,15 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
     status: stored.status,
     // Projected field by field too: step 6 hangs Solana vault bookkeeping off
     // the stake record, and none of that belongs on the wire.
+    reschedules: (stored.reschedules ?? []).map((move) => ({
+      at: move.at,
+      from: move.from,
+      to: move.to,
+    })),
+    proof: stored.proof
+      ? { at: stored.proof.at, description: stored.proof.description }
+      : null,
+    verifiedBy: stored.verifiedBy ?? null,
     stake: {
       lamports: stored.stake.lamports,
       status: stored.stake.status,

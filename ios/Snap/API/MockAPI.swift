@@ -28,27 +28,59 @@ actor MockAPI: SnapAPI {
         Step(.commitmentCreated, "gym at 7 · 0.05 SOL on it"),
         Step(.stakeHeld,         "0.05 SOL locked · 4xK…9fQ"),
         Step(.alarmFired,        "7:24 — checking on gym at 7"),
-        Step(.context,           "no workout today · skipped yesterday · 2/4 this week · 0.05 SOL staked"),
+        Step(.context,           "no pic today · skipped yesterday · 2/4 this week · 0.05 SOL staked"),
         Step(.decision,          "intervene — firm"),
         Step(.messageSent,       "bro"),
-        Step(.messageSent,       "7:24 and no workout 😭"),
+        Step(.messageSent,       "7:24 and no pic 😭"),
         Step(.messageSent,       "you said no excuses today"),
         Step(.messageReceived,   "homework bro"),
-        Step(.decision,          "one reschedule left · allow 30 min"),
-        Step(.messageSent,       "30 mins then. push day. go."),
-        Step(.workoutDetected,   "strength training started"),
+        Step(.reactionSent,      "😂 on: homework bro"),
+        // The door shut an hour before the session, and they already used their
+        // one move earlier in the day. Both limits, refused out loud.
+        Step(.decision,          "refused reschedule_commitment — that session is already due"),
+        Step(.messageSent,       "nah. you moved it once already. go now"),
+        Step(.reactionReceived,  "👍 on: nah. you moved it once already. go now"),
+        // The first pic is the one everybody tries. It does not pass.
+        Step(.messageReceived,   "📷 sent a photo"),
+        Step(.context,           "looked at the photo · a screenshot of a workout app"),
+        Step(.photoRejected,     "not proof · that's a screenshot"),
+        Step(.messageSent,       "nice try 💀 you in the shot, on the floor"),
+        Step(.messageReceived,   "📷 sent a photo"),
+        Step(.context,           "looked at the photo · a sweaty guy at a squat rack, mid-set"),
+        Step(.photoAccepted,     "proof · 0.05 SOL back on \"gym at 7\""),
         Step(.stakeReleased,     "0.05 SOL back in your wallet"),
         Step(.messageSent,       "that's my guy"),
     ]
 
     private static let stepInterval: TimeInterval = 1.2
+    // Indices into `script`. Named rather than inlined because inserting a step
+    // silently moved the stake's release two beats away from where the state
+    // said it happened.
     private static let alarmStep = 2
-    private static let workoutStep = 11
+    /// The pic that passes — the mock's stand-in for the workout beat, and what
+    /// `postWorkouts` jumps to when a real HealthKit sample arrives early.
+    private static let proofStep = 19
+    private static let releaseStep = 20
 
     /// The link screen "receives the text" this long after onboarding. Anchored to the
     /// onboard call, not process launch: the mock is a singleton built at launch, and
     /// clicking through onboarding takes longer than any delay measured from there.
     private static let linkDelay: TimeInterval = 6
+
+    /// The mock's wallet. Money moves here the same way it does on the server —
+    /// a top-up adds to it, and the staked 0.05 is shown as held — so the wallet
+    /// screen can be built and demoed with no backend at all.
+    private var balanceLamports = 150_000_000
+    private var walletEntries: [Wallet.Entry] = [
+        Wallet.Entry(id: 2, kind: .held, lamports: 50_000_000, label: "gym at 7",
+                     at: Date().addingTimeInterval(-600), txSig: MockAPI.mockSignature),
+        Wallet.Entry(id: 1, kind: .funded, lamports: 200_000_000, label: "starting balance from snap",
+                     at: Date().addingTimeInterval(-86_400), txSig: MockAPI.mockSignature),
+    ]
+
+    /// Set when a HealthKit workout, rather than the scripted photo, closed the
+    /// loop. See `postWorkouts`.
+    private var releasedByWatch = false
 
     private var dueAt: Date
     private var onboardedAt: Date?
@@ -66,6 +98,14 @@ actor MockAPI: SnapAPI {
         scriptStartedAt = nil
         onboardedAt = nil
         dueAt = Date().addingTimeInterval(120)
+        releasedByWatch = false
+        balanceLamports = 150_000_000
+        walletEntries = [
+            Wallet.Entry(id: 2, kind: .held, lamports: 50_000_000, label: "gym at 7",
+                         at: Date().addingTimeInterval(-600), txSig: MockAPI.mockSignature),
+            Wallet.Entry(id: 1, kind: .funded, lamports: 200_000_000, label: "starting balance from snap",
+                         at: Date().addingTimeInterval(-86_400), txSig: MockAPI.mockSignature),
+        ]
     }
 
     // MARK: - SnapAPI
@@ -82,16 +122,20 @@ actor MockAPI: SnapAPI {
     }
 
     func postWorkouts(_ workouts: [WorkoutDTO]) async throws {
-        // A workout arriving early pulls the script forward to the moment Snap sees it.
+        // A real workout is the watch covering them, not the pic. It pulls the
+        // script forward to the same closing beat, but the commitment then says
+        // it was the watch that paid — which is the only way to see that copy
+        // offline, since the mock has no way to receive an actual photo.
         guard !workouts.isEmpty else { return }
-        advance(to: Self.workoutStep)
+        releasedByWatch = true
+        advance(to: Self.proofStep)
     }
 
     func state() async throws -> SnapState {
         let reached = emitted.count
         return SnapState(
             weeklyGoal: 4,
-            workoutsThisWeek: reached > Self.workoutStep ? 3 : 2,
+            workoutsThisWeek: reached > Self.proofStep ? 3 : 2,
             // Never onboarded through the mock (SNAP_PHASE=live, a reconnect) → already
             // linked, so the brain screen is reachable. Onboarded → the text "arrives"
             // a few seconds after the link screen appears.
@@ -110,10 +154,55 @@ actor MockAPI: SnapAPI {
                         lamports: 50_000_000,
                         status: stakeStatus(reached),
                         txSig: Self.mockSignature
-                    )
+                    ),
+                    // One legal move, made early in the day, so the plan card has a
+                    // log line to show. The late one the script refuses is not in
+                    // here — a refused move is not a move.
+                    reschedules: [
+                        Reschedule(
+                            at: dueAt.addingTimeInterval(-3 * 3600),
+                            from: dueAt.addingTimeInterval(-3600),
+                            to: dueAt
+                        )
+                    ],
+                    proof: reached > Self.proofStep && !releasedByWatch
+                        ? Proof(at: Date(), description: "a sweaty guy at a squat rack, mid-set")
+                        : nil,
+                    verifiedBy: reached > Self.proofStep ? (releasedByWatch ? .watch : .photo) : nil
                 )
             ]
         )
+    }
+
+    func wallet() async throws -> Wallet {
+        let released = emitted.count > Self.releaseStep
+        return Wallet(
+            address: "SnapMockWa11etAddre55xxxxxxxxxxxxxxxxxxxxxxx",
+            // Once the script releases the stake it is back in the balance and
+            // no longer held, exactly as it would be for real.
+            balanceLamports: released ? balanceLamports + 50_000_000 : balanceLamports,
+            heldLamports: released ? 0 : 50_000_000,
+            funded: true,
+            // Not a literal: topUp mints (highest + 1), so a hard-coded 3 collides
+            // with the first added-money row and the wallet history ForEach ends
+            // up with two entries sharing an id.
+            entries: released
+                ? [Wallet.Entry(id: (walletEntries.first?.id ?? 0) + 1, kind: .released,
+                                lamports: 50_000_000, label: "gym at 7",
+                                at: Date(), txSig: MockAPI.mockSignature)] + walletEntries
+                : walletEntries
+        )
+    }
+
+    func topUp(sol: Double) async throws -> Wallet {
+        let lamports = Int((sol * 1_000_000_000).rounded())
+        balanceLamports += lamports
+        walletEntries.insert(
+            Wallet.Entry(id: (walletEntries.first?.id ?? 0) + 1, kind: .funded, lamports: lamports,
+                         label: "you added money", at: Date(), txSig: MockAPI.mockSignature),
+            at: 0
+        )
+        return try await wallet()
     }
 
     func trace(since: Int?) async throws -> [TraceEvent] {
@@ -135,6 +224,12 @@ actor MockAPI: SnapAPI {
 
     func seed() async throws {
         // The mock's history is already the seeded week.
+    }
+
+    /// No server to stand down, but the mock is a process-wide singleton — without
+    /// this a second run-through opens on a finished loop.
+    func forget() async throws {
+        reset()
     }
 
     // MARK: - Script
@@ -168,13 +263,14 @@ actor MockAPI: SnapAPI {
     }
 
     private func commitmentStatus(_ reached: Int) -> Commitment.Status {
-        if reached > Self.workoutStep { return .met }
-        if reached > 9 { return .renegotiated }
-        return .pending
+        if reached > Self.proofStep { return .met }
+        // `renegotiated` from the start: the move in `reschedules` happened
+        // hours before the script opens, which is the only time it is allowed.
+        return .renegotiated
     }
 
     private func stakeStatus(_ reached: Int) -> Stake.Status {
-        if reached > 12 { return .released }
+        if reached > Self.releaseStep { return .released }
         if reached > 1 { return .held }
         return .none
     }

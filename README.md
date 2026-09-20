@@ -1,16 +1,20 @@
 # Snap
 
-Your gym bro, in your texts. He knows when you said you'd train, he sees whether you did, and he's holding your money either way.
+Your gym bro in your texts. Snap knows when you said you'd work out, holds your money until you send a pic from the gym, and can tell when the pic is a screenshot.
 
 Built at Hack the North 2026 by two people.
 
 **Live:** `https://snap.snap-backend.workers.dev` · [API contract](docs/API.md) · [design decisions](docs/DESIGN.md)
 
+commitment → deadline passes with no pic → agent evaluates context → proactive text → reply (or a 👍) → personalized response → pic arrives and checks out → stake returned
+
+The photo is the verifier: a picture with you in it, on the gym floor. The vision model judges it, a screenshot doesn't pass, and every image is fingerprinted so the same one can't be spent twice. HealthKit sits underneath as a silent fallback for the day you train and forget to send anything.
+
 ---
 
 ## What it does
 
-You text him a plan. He offers you a stake. He wakes himself up when the deadline passes, reads your history before deciding whether your excuse earns a reschedule, and settles the money off what your Apple Watch actually recorded.
+You text him a plan. He offers you a stake. He wakes himself up when the deadline passes, reads your history before deciding whether your excuse earns a reschedule, and settles the money off a picture you send from the gym — with your Watch as a silent backup.
 
 ```
 USER > gym at 7 tonight
@@ -32,11 +36,13 @@ SNAP > nah bro, can't push this any further. your sol's already on the line.
 SNAP > ayyyeee!!! you did it bro!
 ```
 
-**It never asks whether you trained.** HealthKit is the referee. A workout counts only if it ran 30 minutes or longer, is one of 12 accepted types, and `wasUserEntered` is false — so opening Health → Add Data and inventing a session cannot release money. When a workout doesn't count, the trace says why: `doesn't count as training`, `under 30 min`, `typed in by hand`.
+**Two verifiers, and neither is your word for it.** A stake is released by a photo the vision model accepts — a real person, visibly training, not a screenshot, above 0.6 confidence, and never an image already spent — or by a covering HealthKit workout underneath. A workout counts only if it ran 30 minutes or longer, averages 2 active kcal/min, is one of 12 accepted types, and `wasUserEntered` is false, so opening Health → Add Data and inventing a session cannot release money. Whatever fails says why in the trace: `doesn't count as training`, `under 30 min`, `typed in by hand`, `barely moved`.
+
+The fingerprint catches resending Monday's selfie and nothing cleverer — a re-crop hashes differently and gets through. That is why the watch is still there underneath.
 
 ## Model proposes, backend disposes
 
-The model has six tools and cannot move money with any of them. Every proposed call goes through a pure guard function first, and settlement isn't the model's decision at all — whether a workout covers a commitment is something HealthKit answered, and end of day is something the clock answered. Both settle in code; the model only gets to do the talking.
+The model has six tools and cannot move money with any of them. Every proposed call goes through a pure guard function first, and settlement isn't the model's decision at all — whether a photo is proof is something the vision verdict answered, whether a workout covers a commitment is something HealthKit answered, and end of day is something the clock answered. All three settle in code; the model only gets to do the talking, and it is handed the outcome rather than asked for one.
 
 The guard that matters most is the slash. Both models we tested tried to take the money at the 20-minute grace mark. It refused every time, because grace is a warning and the money moves at the end of the user's local day.
 
@@ -91,8 +97,6 @@ Agent behaviour, measured through the deployed Worker, 4 trials per phrase:
 A named time with no amount produces an **offer**, not a stake. Nobody's money moves without an explicit yes.
 
 ## Also built
-
-**Photos.** Send him a gym selfie and he reacts to it — and never treats it as proof. The watch decides; a photo is a hype beat.
 
 **Competitions.** 1v1, group pots and a solo weekly pot, settled from HealthKit. Winners get 100% of their own stake back plus an equal share of what the skippers forfeited; the 15% rake comes out of the pot and never touches a winner.
 
