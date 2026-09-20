@@ -10,6 +10,7 @@ import HealthKit
 @MainActor
 final class WorkoutSync {
     private static let anchorKey = "hkAnchor"
+    private static let floorKey = "hkSyncFloor"
     private static let workoutType = HKObjectType.workoutType()
 
     /// Only workouts from the last week are ever interesting to Snap, so every query is
@@ -153,7 +154,7 @@ final class WorkoutSync {
 
     private func fetch(from anchor: HKQueryAnchor?) async throws -> ([WorkoutDTO], HKQueryAnchor?) {
         let predicate = HKQuery.predicateForSamples(
-            withStart: Date().addingTimeInterval(-Self.lookback),
+            withStart: Self.windowStart(),
             end: nil
         )
 
@@ -304,6 +305,32 @@ final class WorkoutSync {
         }
     }
     #endif
+
+    // MARK: - The window
+
+    /// Where a sync starts looking.
+    ///
+    /// Normally a week back, so a new install's "2/4 this week" is true on the day
+    /// it is installed rather than starting at zero and lying.
+    ///
+    /// After a reset it is the moment of the reset instead. Reset drops the anchor,
+    /// and an anchorless query against a week-wide predicate hands the brand-new
+    /// account every workout of the last seven days — so you would wipe the app,
+    /// onboard again, and Snap would open already knowing about this morning's
+    /// session. Nothing survived the reset; the phone put it back. The floor is what
+    /// makes a fresh start actually fresh.
+    static func windowStart(now: Date = Date()) -> Date {
+        let rolling = now.addingTimeInterval(-lookback)
+        guard let floor = syncFloor else { return rolling }
+        return max(rolling, floor)
+    }
+
+    /// Set on reset, and never cleared — a later onboarding is still the same phone
+    /// on the same day, and the workouts before it are still not this account's.
+    static var syncFloor: Date? {
+        get { UserDefaults.standard.object(forKey: floorKey) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: floorKey) }
+    }
 
     // MARK: - Anchor
 
