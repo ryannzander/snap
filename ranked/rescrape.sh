@@ -101,5 +101,6 @@ done
 GH="https://raw.githack.com/ryannzander/snap/claude/amazing-babbage-hveamd/ranked/index.html"
 code=$(curl -sS -o /dev/null -m 60 -w '%{http_code}' "$GH" || echo 000)
 echo "githack $code   $GH"
+echo "short        https://tinyurl.com/htnranked"
 
 echo "=== done $(date -u '+%H:%M:%SZ') ==="

@@ -17,6 +17,8 @@ updates it:
 
 <https://raw.githack.com/ryannzander/snap/claude/amazing-babbage-hveamd/ranked/index.html>
 
+Shortened for sharing: <https://tinyurl.com/htnranked>
+
 Its CDN is rate limited and asks not to be used for heavy production traffic. For a link
 that will get real traffic, pin a commit on the caching host instead — permanent, but it
 will not pick up later refreshes:

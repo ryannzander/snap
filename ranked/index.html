@@ -61,6 +61,11 @@ svg{display:block}
 .copybtn:hover{border-color:var(--muted);color:var(--ink)}
 
 /* ---------- project search ---------- */
+.firstrun{display:flex;align-items:center;gap:10px;justify-content:center;font-size:13px;
+  color:var(--muted);background:var(--surface);border-bottom:1px solid var(--line2);padding:8px 16px}
+.firstrun kbd{font:inherit;border:1px solid var(--line2);border-radius:4px;padding:0 5px;color:var(--ink)}
+.firstrun button{border:0;background:none;color:var(--muted);font-size:17px;line-height:1;cursor:pointer;padding:0 2px}
+.firstrun button:hover{color:var(--ink)}
 .finder{position:relative;flex:1;max-width:380px;min-width:0}
 .finder .fi{display:flex;align-items:center;gap:9px;background:var(--sunk);border:1px solid transparent;
   border-radius:10px;padding:0 11px;height:38px;transition:border-color .12s,background .12s}
@@ -379,6 +384,11 @@ textarea.ta:focus{border-color:var(--accent)}
   <span class="stampsm" id="stamp">HTN 2026</span>
 </header>
 
+<div class="firstrun" id="firstrun" hidden>
+  <span>Showing the top-ranked project. Search above, or press <kbd>/</kbd>, to pick yours.</span>
+  <button id="firstrunX" aria-label="Dismiss">&times;</button>
+</div>
+
 <nav class="dock" aria-label="Views">
   <button data-v="odds" class="on">Odds</button>
   <button data-v="field">Field</button>
@@ -653,7 +663,7 @@ const BY = Object.fromEntries(DATA.projects.map(p => [p.slug, p]));
 const TRACKS = DATA.tracks, TBY = Object.fromEntries(TRACKS.map(t => [t.id, t]));
 const N = DATA.projects.length, MOG = 15;
 
-let me = DATA.projects.find(p => p.name === 'Snap') || DATA.projects[0];
+let me = DATA.projects.find(p => p.rank === 1) || DATA.projects[0], picked = false;
 let track = TBY['finalist'], showAll = false, sortKey = 'score';
 
 const $ = i => document.getElementById(i);
@@ -662,12 +672,12 @@ const ord = n => { const s = ['th','st','nd','rd'], v = n % 100; return n + (s[(
 const med = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y), m = s.length >> 1;
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
 
-try { const a = localStorage.getItem('ctd.p'); if (a && BY[a]) me = BY[a];
+try { const a = localStorage.getItem('ctd.p'); if (a && BY[a]) { me = BY[a]; picked = true; }
       const b = localStorage.getItem('ctd.t'); if (b && TBY[b]) track = TBY[b]; } catch (e) {}
 let bootView = null;
 try {
   const q = new URLSearchParams(location.search);
-  if (q.get('p') && BY[q.get('p')]) me = BY[q.get('p')];
+  if (q.get('p') && BY[q.get('p')]) { me = BY[q.get('p')]; picked = true; }
   if (q.get('t') && TBY[q.get('t')]) track = TBY[q.get('t')];
   if (q.get('v')) bootView = q.get('v');
 } catch (e) {}
@@ -680,7 +690,8 @@ function syncURL(){
     history.replaceState(null, '', location.pathname + '?' + q.toString());
   } catch (e) {}
 }
-const keep = () => { try { localStorage.setItem('ctd.p', me.slug); localStorage.setItem('ctd.t', track.id); } catch (e) {} };
+const keep = () => { picked = true; const fr = document.getElementById('firstrun'); if (fr) fr.hidden = true;
+  try { localStorage.setItem('ctd.p', me.slug); localStorage.setItem('ctd.t', track.id); } catch (e) {} };
 
 const entry = (t, s) => t.entries.find(e => e.slug === s) || null;
 const seat = (t, s) => { const i = t.entries.findIndex(e => e.slug === s); return i < 0 ? null : i + 1; };
@@ -1857,6 +1868,9 @@ if (bootView && ['field','table','scout','rate'].indexOf(bootView) >= 0){
 }
 $('stampFoot').textContent = N + ' submissions, last scraped ' +
   new Date(DATA.generated).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) + '.';
+if (!picked) { const fr = $('firstrun'); if (fr) { fr.hidden = false;
+  $('firstrunX').onclick = () => { fr.hidden = true; }; } }
+
 render();
 hookHover();
 addEventListener('resize', () => { shut(); plot(); describeChart(); });
