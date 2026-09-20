@@ -2,6 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 
 import {
   buildDays,
+  countMovesThisWeek,
   countVerifiedThisWeek,
   recentMessages,
   renderContext,
@@ -59,6 +60,7 @@ import { issueToken, secureEquals } from './ids';
 import { endOfLocalDay, localTimeToInstant, parseIso, startOfWeek } from './time';
 import type {
   Commitment,
+  Reschedule,
   StateResponse,
   TopUpResponse,
   TraceEvent,
@@ -202,7 +204,16 @@ interface StoredWorkout extends WorkoutInput {
 /** A commitment plus the bookkeeping the agent needs but the app never sees. */
 interface StoredCommitment extends Commitment {
   createdAt: string;
+  /**
+   * Kept for commitments stored before the log existed. `rescheduleCount`
+   * prefers the log and falls back to this, so nothing needs migrating.
+   */
   renegotiations: number;
+}
+
+/** How many times this session has been moved — the log, or the old counter. */
+function rescheduleCount(commitment: { reschedules?: Reschedule[]; renegotiations?: number }): number {
+  return commitment.reschedules?.length ?? commitment.renegotiations ?? 0;
 }
 
 /**
@@ -1212,6 +1223,7 @@ export class UserAgent extends DurableObject<Env> {
       graceMin: DEFAULT_GRACE_MIN,
       status: 'missed',
       stake: { lamports: 50_000_000, status: 'slashed', txSig: null },
+      reschedules: [],
       // No pic yesterday and nothing on the watch either — which is exactly
       // why the money went. The agent reads this back as "you said that
       // yesterday".
@@ -2162,6 +2174,7 @@ not a system rejecting them.`,
       graceMin: DEFAULT_GRACE_MIN,
       status: 'pending',
       stake: { lamports: proposal.lamports, status: 'held', txSig: null },
+      reschedules: [],
       proof: null,
       verifiedBy: null,
       createdAt: this.nowIso(),
@@ -2305,7 +2318,7 @@ not a system rejecting them.`,
         const existing = commitments.find((c) => c.id === id) ?? null;
         const guard = guardReschedule(
           call.arguments,
-          existing,
+          existing && { ...toWireCommitment(existing), renegotiations: rescheduleCount(existing) },
           now,
           profile.timezone,
           this.endOfDayFor(existing, profile),
@@ -2316,7 +2329,13 @@ not a system rejecting them.`,
           ...existing,
           dueAt: guard.value.dueAt,
           status: 'renegotiated',
-          renegotiations: existing.renegotiations + 1,
+          // Both: the log is the record, the counter keeps working for
+          // anything still reading it.
+          reschedules: [
+            ...(existing.reschedules ?? []),
+            { at: this.nowIso(), from: existing.dueAt, to: guard.value.dueAt },
+          ],
+          renegotiations: rescheduleCount(existing) + 1,
         };
         await this.ctx.storage.put(KEY.commitment(existing.id), moved);
 
@@ -2466,8 +2485,9 @@ not a system rejecting them.`,
       lastSevenDays: buildDays(now, profile.timezone, workouts, commitments.map(toWireCommitment)),
       openCommitments: commitments
         .filter((c) => c.status === 'pending' || c.status === 'renegotiated')
-        .map((c) => ({ ...toWireCommitment(c), renegotiations: c.renegotiations })),
+        .map((c) => ({ ...toWireCommitment(c), renegotiations: rescheduleCount(c) })),
       standingOffer: await this.standingOffer(),
+      movesThisWeek: countMovesThisWeek(now, profile.timezone, commitments),
       wallet: { balanceLamports: await this.balance(), heldLamports: await this.heldLamports() },
       recentMessages: recentMessages([...events.values()]),
     };
@@ -2589,6 +2609,11 @@ function toWireCommitment(stored: StoredCommitment): Commitment {
     status: stored.status,
     // Projected field by field too: step 6 hangs Solana vault bookkeeping off
     // the stake record, and none of that belongs on the wire.
+    reschedules: (stored.reschedules ?? []).map((move) => ({
+      at: move.at,
+      from: move.from,
+      to: move.to,
+    })),
     proof: stored.proof
       ? { at: stored.proof.at, description: stored.proof.description }
       : null,

@@ -35,9 +35,11 @@ actor MockAPI: SnapAPI {
         Step(.messageSent,       "you said no excuses today"),
         Step(.messageReceived,   "homework bro"),
         Step(.reactionSent,      "😂 on: homework bro"),
-        Step(.decision,          "one reschedule left · allow 30 min"),
-        Step(.messageSent,       "30 mins then. push day. go."),
-        Step(.reactionReceived,  "👍 on: 30 mins then. push day. go."),
+        // The door shut an hour before the session, and they already used their
+        // one move earlier in the day. Both limits, refused out loud.
+        Step(.decision,          "refused reschedule_commitment — that session is already due"),
+        Step(.messageSent,       "nah. you moved it once already. go now"),
+        Step(.reactionReceived,  "👍 on: nah. you moved it once already. go now"),
         // The first pic is the one everybody tries. It does not pass.
         Step(.messageReceived,   "📷 sent a photo"),
         Step(.context,           "looked at the photo · a screenshot of a workout app"),
@@ -55,7 +57,6 @@ actor MockAPI: SnapAPI {
     // silently moved the stake's release two beats away from where the state
     // said it happened.
     private static let alarmStep = 2
-    private static let rescheduleStep = 10
     /// The pic that passes — the mock's stand-in for the workout beat, and what
     /// `postWorkouts` jumps to when a real HealthKit sample arrives early.
     private static let proofStep = 19
@@ -154,6 +155,16 @@ actor MockAPI: SnapAPI {
                         status: stakeStatus(reached),
                         txSig: Self.mockSignature
                     ),
+                    // One legal move, made early in the day, so the plan card has a
+                    // log line to show. The late one the script refuses is not in
+                    // here — a refused move is not a move.
+                    reschedules: [
+                        Reschedule(
+                            at: dueAt.addingTimeInterval(-3 * 3600),
+                            from: dueAt.addingTimeInterval(-3600),
+                            to: dueAt
+                        )
+                    ],
                     proof: reached > Self.proofStep && !releasedByWatch
                         ? Proof(at: Date(), description: "a sweaty guy at a squat rack, mid-set")
                         : nil,
@@ -253,8 +264,9 @@ actor MockAPI: SnapAPI {
 
     private func commitmentStatus(_ reached: Int) -> Commitment.Status {
         if reached > Self.proofStep { return .met }
-        if reached > Self.rescheduleStep { return .renegotiated }
-        return .pending
+        // `renegotiated` from the start: the move in `reschedules` happened
+        // hours before the script opens, which is the only time it is allowed.
+        return .renegotiated
     }
 
     private func stakeStatus(_ reached: Int) -> Stake.Status {

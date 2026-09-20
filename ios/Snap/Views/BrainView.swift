@@ -276,6 +276,14 @@ private struct PlanCard: View {
                         .foregroundStyle(Theme.surface)
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
+                    // The log, on the card. Moving a session is allowed; doing it
+                    // quietly is not, and a line you have to read every time you
+                    // open the app is the whole point of keeping the record.
+                    ForEach(Array(commitment.moves.enumerated()), id: \.offset) { _, move in
+                        Text(BrainView.moveLine(move))
+                            .font(Theme.body(14))
+                            .foregroundStyle(Theme.surface.opacity(0.5))
+                    }
                 }
                 verdict(for: commitment)
                 // The pic is what returns the money, so the open plan's job is to
@@ -313,11 +321,9 @@ private struct PlanCard: View {
 
     static func kicker(for status: Commitment.Status) -> String {
         switch status {
-        case .pending:      "today's plan"
-        case .renegotiated: "today's plan · rescheduled once"
-        case .met:          "today's plan"
-        case .missed:       "today's plan"
-        case .unknown:      "today's plan"
+        // The move itself is spelled out underneath now, so the kicker does not
+        // have to carry it.
+        case .pending, .renegotiated, .met, .missed, .unknown: "today's plan"
         }
     }
 
@@ -513,6 +519,14 @@ extension BrainView {
         case .unknown, nil:
             return commitment.proof.map { "pic checked out · \($0.description)" }
         }
+    }
+
+    /// `"moved 7:00 PM → 8:30 PM"`. Their clock and their locale: the times are
+    /// the ones they agreed to, so they should read the way their phone reads.
+    nonisolated static func moveLine(_ move: Reschedule) -> String {
+        let from = move.from.formatted(date: .omitted, time: .shortened)
+        let to = move.to.formatted(date: .omitted, time: .shortened)
+        return "moved \(from) → \(to)"
     }
 
     nonisolated static func spokenReaction(emoji: String, target: String?, fromSnap: Bool) -> String {

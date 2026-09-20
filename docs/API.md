@@ -67,6 +67,7 @@ Everything the app needs to draw its one screen.
       "graceMin": 20,
       "status": "pending",
       "stake": { "lamports": 50000000, "status": "held", "txSig": "…" },
+      "reschedules": [],
       "proof": null,
       "verifiedBy": null
     }
@@ -77,6 +78,8 @@ Everything the app needs to draw its one screen.
 `commitment.status`: `pending | met | missed | renegotiated`
 `stake.status`: `none | held | released | slashed`
 `commitment.verifiedBy`: `photo | watch | null`
+
+`reschedules` is every time the session was moved, oldest first: `{ "at", "from", "to" }`. The app prints the list on the plan card — moving a session is allowed, doing it quietly is not. It may be absent on a commitment stored before the log existed; treat that as empty.
 
 **The photo is the verifier.** `proof` is null until a photo the user texted passes verification, and then it is `{ "at": "…", "description": "one sentence of what the model saw" }`. An open commitment with `proof: null` is the app's cue to ask for a picture; a settled one carries `verifiedBy` so the app can say which verifier paid. `description` is shown to the user — being told what Snap thought he was looking at is the difference between a verdict and a black box.
 
@@ -92,6 +95,16 @@ Commitments come back oldest first, ordered by `dueAt`. The app shows the open o
 A workout qualifies when it runs 30 minutes or longer, `wasUserEntered` is false, and its `type` is one of: `traditionalStrengthTraining`, `functionalStrengthTraining`, `coreTraining`, `crossTraining`, `highIntensityIntervalTraining`, `running`, `cycling`, `rowing`, `elliptical`, `stairClimbing`, `swimming`, `mixedCardio`.
 
 This is deliberately the same bar that releases a stake: if a thing cannot release your money it must not fill a goal dot either. A workout still in progress (`end: null`) counts once it passes 30 minutes. Everything posted is still stored and still appears in the trace — one that does not qualify says why (`doesn't count as training`, `under 30 min`, `typed in by hand`).
+
+## Rescheduling
+
+One move per commitment, ever, **and only while more than an hour is left before the deadline**. Inside the last hour — or at any point after it has passed — the answer is no, whatever the excuse. An hour out you are rearranging your day; ten minutes out you are getting out of it, and that is the window every excuse ever invented arrives in.
+
+The new time must also be more than an hour away, or one move would hand back exactly what the window takes away, and it must still land before end of local day — the slash lands there regardless, so a move past midnight would put the deadline after the consequence.
+
+Refusals come back through the normal refusal path: the trace says `refused reschedule_commitment — <reason>` and Snap tells the user, rather than silently agreeing and then slashing on the original deadline.
+
+Every accepted move is appended to `commitment.reschedules` and shown to both sides — the app prints it on the plan card, and the agent sees each move on their clock plus a week-wide `sessions moved this week: N`, so a pattern can be called out ("third one this week bro") instead of only a per-commitment limit being enforced.
 
 ## Verification
 

@@ -76,6 +76,9 @@ struct Commitment: Decodable, Identifiable, Equatable {
     let graceMin: Int
     let status: Status
     let stake: Stake?
+    /// Every time this session was moved, oldest first. Optional on the wire so
+    /// a commitment stored before the log existed still decodes.
+    let reschedules: [Reschedule]?
     /// The photo that verified this session, once one has landed. Null before
     /// then — which is the app's cue to ask for one.
     let proof: Proof?
@@ -84,10 +87,23 @@ struct Commitment: Decodable, Identifiable, Equatable {
     /// When Snap wakes up to check on this.
     var checkAt: Date { dueAt.addingTimeInterval(Double(graceMin) * 60) }
 
+    var moves: [Reschedule] { reschedules ?? [] }
+
     /// Still waiting on a picture: open, money locked, nothing verified yet.
     var awaitingProof: Bool {
         (status == .pending || status == .renegotiated) && proof == nil && stake?.status == .held
     }
+}
+
+/// One time the session was moved. A list rather than a count because the count
+/// only answers "can they move it again", and the list is the thing worth
+/// showing someone: this is what you did, and when.
+struct Reschedule: Decodable, Equatable {
+    /// When they asked.
+    let at: Date
+    /// The deadline before and after the move.
+    let from: Date
+    let to: Date
 }
 
 /// The photo that released a stake. `description` is what the vision model saw,

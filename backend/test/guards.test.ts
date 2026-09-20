@@ -106,21 +106,54 @@ section('create_commitment');
   eq('a dollar figure does not become a stake', dollars.ok ? dollars.value.lamports : null, 50_000_000);
 }
 
-section('reschedule — DESIGN.md allows exactly one');
+section('reschedule — one per session, and only while the door is open');
 {
+  // NOW is 19:24 local. A session due at 21:00 is still movable; the one due
+  // at 19:00 is not, because it is already past.
+  const later = commitment({ dueAt: '2026-09-20T01:00:00Z' });   // 21:00 local
+  const soon = commitment({ dueAt: '2026-09-20T00:00:00Z' });    // 20:00 local, 36 min out
+
   allows(
-    'first reschedule, later the same day',
-    guardReschedule({ hour: 22, reason: 'homework' }, commitment(), NOW, TZ, EOD),
+    'asked well before it, moved later the same day',
+    guardReschedule({ hour: 22, reason: 'homework' }, later, NOW, TZ, EOD),
+  );
+
+  // The rule the whole change is about. Every excuse ever invented arrives in
+  // the last ten minutes, so the door shuts an hour out.
+  denies(
+    'inside the last hour',
+    guardReschedule({ hour: 22, reason: 'homework' }, soon, NOW, TZ, EOD),
   );
   denies(
+    'after the deadline has already passed',
+    guardReschedule({ hour: 22, reason: 'homework' }, commitment(), NOW, TZ, EOD),
+  );
+  // Exactly an hour out is still open — the boundary is "less than an hour".
+  allows(
+    'exactly an hour before',
+    guardReschedule(
+      { hour: 22, reason: 'homework' },
+      commitment({ dueAt: new Date(NOW + 60 * 60 * 1000).toISOString() }),
+      NOW,
+      TZ,
+      EOD,
+    ),
+  );
+  // Otherwise one move hands back everything the window takes away.
+  denies(
+    'moving it to a time inside the closed window',
+    guardReschedule({ hour: 19, minute: 50, reason: 'ten more minutes' }, later, NOW, TZ, EOD),
+  );
+
+  denies(
     'a second reschedule',
-    guardReschedule({ hour: 22, reason: 'again' }, commitment({ renegotiations: 1 }), NOW, TZ, EOD),
+    guardReschedule({ hour: 22, reason: 'again' }, commitment({ dueAt: '2026-09-20T01:00:00Z', renegotiations: 1 }), NOW, TZ, EOD),
   );
   denies(
     'past end of local day',
-    guardReschedule({ hour: 9, reason: 'tomorrow' }, commitment(), NOW, TZ, EOD),
+    guardReschedule({ hour: 9, reason: 'tomorrow' }, later, NOW, TZ, EOD),
   );
-  denies('without a reason for the trace', guardReschedule({ hour: 22 }, commitment(), NOW, TZ, EOD));
+  denies('without a reason for the trace', guardReschedule({ hour: 22 }, later, NOW, TZ, EOD));
   denies(
     'a commitment already met',
     guardReschedule({ hour: 22, reason: 'x' }, commitment({ status: 'met' }), NOW, TZ, EOD),
