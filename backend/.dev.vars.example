@@ -1,5 +1,10 @@
 # Copy to .dev.vars (gitignored) and fill in. Never commit the real file.
 # In production these are set with `wrangler secret put <NAME>`.
+#
+# Only needed to RUN the Worker. Typechecking and `npm test` no longer depend
+# on this file: the secret names are declared in env.d.ts, because they used to
+# be picked up from here by `wrangler types` and a fresh clone without it
+# failed to compile with twenty errors about DEBUG_KEY.
 
 # Linq Partner API bearer token, from the sandbox signup.
 LINQ_API_KEY=""

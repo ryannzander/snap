@@ -1,0 +1,102 @@
+# The check nobody was running.
+#
+# Every PR so far has been merged on a human reading a diff, and Swift in
+# particular has landed unverified more than once — two new view files were
+# registered in project.pbxproj by hand and nothing compiled them until
+# somebody opened Xcode. A macOS runner does that in three minutes.
+#
+# The repository is public, so both runners are free.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push supersedes the first: nothing is learned from finishing a run
+# against a commit that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      # postinstall runs `wrangler types`. The secrets it cannot see are
+      # declared in backend/env.d.ts, which is why this works on a clone with
+      # no .dev.vars — see the comment in that file.
+      - run: npm ci
+
+      - name: typecheck
+        run: npx tsc --noEmit
+
+      - name: test
+        run: npm test
+
+      # Catches what typecheck cannot: an import that will not bundle for the
+      # edge runtime, or a binding the config does not declare.
+      - name: bundle
+        run: npx wrangler deploy --dry-run --outdir /tmp/worker-build
+
+  ios:
+    name: ios
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      # Simulator names move between Xcode releases — a pinned "iPhone 16"
+      # fails the moment the image ships 17s, which is exactly how the local
+      # run broke. Ask the machine what it has instead.
+      - name: pick a simulator
+        id: sim
+        run: |
+          udid=$(xcrun simctl list devices available \
+            | grep "iPhone" \
+            | grep -Eo "[0-9A-F]{8}-[0-9A-F-]{27}" \
+            | head -1)
+          if [ -z "$udid" ]; then
+            echo "no iPhone simulator on this image" >&2
+            xcrun simctl list devices available >&2
+            exit 1
+          fi
+          echo "udid=$udid" >> "$GITHUB_OUTPUT"
+          echo "using simulator $udid"
+
+      # SnapUITests drives a system HealthKit permission sheet, which no
+      # unattended runner can answer. The unit tests are the ones with the
+      # assertions in them.
+      - name: build and test
+        working-directory: ios
+        run: |
+          set -o pipefail
+          run_xcodebuild() {
+            xcodebuild test \
+              -scheme Snap \
+              -skip-testing:SnapUITests \
+              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              DEVELOPMENT_TEAM=""
+          }
+          # Prettier output when the image has it; never a reason to fail a build.
+          if command -v xcbeautify >/dev/null 2>&1; then
+            run_xcodebuild | xcbeautify
+          else
+            run_xcodebuild
+          fi
