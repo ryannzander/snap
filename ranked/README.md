@@ -6,10 +6,30 @@ and tells you what to change tonight to move it.
 
 Built during the hackathon, from the public gallery only.
 
-## Deploying
+## Where it is hosted
 
 `index.html` is a single self-contained static page — the whole dataset is inlined, there
-is no build step and no server.
+is no build step and no server. Any static host works; three are set up.
+
+**githack** (live, nothing to configure). Serves the file straight off this public
+repository with the right content type, following the branch, so every re-scrape push
+updates it:
+
+<https://raw.githack.com/ryannzander/snap/claude/amazing-babbage-hveamd/ranked/index.html>
+
+Its CDN is rate limited and asks not to be used for heavy production traffic. For a link
+that will get real traffic, pin a commit on the caching host instead — permanent, but it
+will not pick up later refreshes:
+
+```
+https://rawcdn.githack.com/ryannzander/snap/<commit-sha>/ranked/index.html
+```
+
+**GitHub Pages** (one switch away, best long-term). Set **Settings > Pages > Source** to
+**GitHub Actions**; `.github/workflows/pages.yml` publishes this directory on every push
+that touches it, to <https://ryannzander.github.io/snap/>. Until that setting is on the
+workflow skips its deploy steps and says so, so CI stays green. Enabling Pages is
+admin-only — the Actions token can neither create the site nor read the setting back.
 
 **Vercel:** import this repository, set **Root Directory** to `ranked`, framework preset
 **Other**, and leave the build and output settings empty. Or from this directory:
@@ -17,6 +37,9 @@ is no build step and no server.
 ```
 npx vercel --prod
 ```
+
+Anonymous (`--temporary`) Vercel deployments expire after an hour and cannot be renewed in
+place, so they are only useful while something keeps redeploying them.
 
 Any static host works the same way (GitHub Pages, Netlify, Cloudflare Pages, `python3 -m http.server`).
 

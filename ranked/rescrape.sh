@@ -97,4 +97,9 @@ for a in 1 5 15 30; do
   echo "deploy attempt failed: $(echo "$OUT" | grep -iE 'error' | head -1)"
   sleep $a
 done
+# githack serves the pushed file directly, so the branch URL is already current.
+GH="https://raw.githack.com/ryannzander/snap/claude/amazing-babbage-hveamd/ranked/index.html"
+code=$(curl -sS -o /dev/null -m 60 -w '%{http_code}' "$GH" || echo 000)
+echo "githack $code   $GH"
+
 echo "=== done $(date -u '+%H:%M:%SZ') ==="
