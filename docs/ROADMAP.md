@@ -14,7 +14,7 @@ The market already has every piece of Snap on its own. The combination is the pr
 
 What nobody does together:
 
-1. **The photo is the referee, and it is judged, not trusted.** Everyone else who takes a photo takes it on trust or pays a human to look. Snap's vision model checks that a person is actually in a training setting, refuses screenshots, and fingerprints every image so the same picture cannot be spent twice — and HealthKit sits underneath as a fallback that pays you when you trained and forgot. No honor system, and no "did you go?"
+1. **The photo is the referee, and it is judged, not trusted.** Everyone else who takes a photo takes it on trust or pays a human to look. Snap's vision model checks that a person is actually in a training setting, refuses screenshots, and fingerprints every image so the same picture cannot be spent twice. **It does not check that the person is you** — say so out loud, because a judge will test it. Two things cover that instead: every stake names a random gesture when it locks (*3 fingers up in the pic*), which a photo you already had cannot have in it, and HealthKit sits underneath as a fallback that pays you when you trained and forgot. No honor system, and no "did you go?"
 2. **Ghosting doesn't work.** Stop replying and the money still moves. Every AI coach loses the user the moment the user goes quiet.
 3. **Judgment, not rules.** Forfeit and Beeminder are deterministic. Snap negotiates, remembers yesterday's excuse, and decides.
 4. **Anti-coach.** No plans, no macros, no encouragement. A friend who roasts you and holds your money. This ban is permanent.
@@ -22,7 +22,9 @@ What nobody does together:
 
 Not differentiators: being in iMessage (table stakes), and "it's on Solana" (a prize, not a pitch — sell what the chain enables below, not the chain).
 
-One-liner to test: *"Every accountability app takes your word for it. Snap wants the picture, and it can tell when you're lying — and it's holding five bucks."*
+One-liner to test: *"Every accountability app takes your word for it. Snap wants the picture — taken right now, with the gesture he asked for — and it's holding five bucks."*
+
+The old version ended *"and it can tell when you're lying"*. It cannot tell that the person in the photo is you, and a one-liner that overclaims is the one a judge spends the Q&A on.
 
 ## Money
 
@@ -86,6 +88,14 @@ Live challenges are the answer to that, and they are a game rather than a featur
 
 **Where it does not go.** This stays a side mode, not the main loop. Snap's claim is that it never asks — filming yourself is asking, with extra steps, and the day the core loop requires a camera is the day we become Forfeit with more steps. The daily commitment stays passive and sensor-verified; live challenges are what you do *because you want to*, on a Friday night, for money.
 
+### 5. Kaggle-shaped seasons
+
+Competitions today are a pot and a goal. The Kaggle shape adds a **public leaderboard with a deadline and a prize table** — first, second, third, and a long tail who all beat the bar.
+
+- A month-long season, one verified metric (sessions, active hours, distinct days), a live board, and a sponsor funding the top of the table.
+- **The Kaggle part that matters is the leaderboard, not the prize.** People refresh a board. A pot you cannot see yourself climbing is a bet; a board you can is a game.
+- It reuses the competition engine exactly as built — `progressFor` already computes every metric a season would rank on. What is missing is the board itself and a season long enough for it to mean something.
+
 ### What stays true across all of them
 
 - Verification is the same as the core loop: a checked photo, with HealthKit underneath. No self-report, no "trust me." A comp that can be gamed is worth nothing to a sponsor — and a pot is exactly where someone would try a recycled photo, which is what the fingerprint is for.
@@ -96,6 +106,36 @@ Live challenges are the answer to that, and they are a game rather than a featur
 ### On-chain shape (for the Solana story)
 
 The existing escrow program grows one account type: a `competition` PDA holding the pot, the rule hash, the entrant list, and the oracle key. Sponsors and entrants deposit into it; the oracle calls `settle` with the winner set and payouts go out pro rata. Same oracle model as the single-commitment stake, so it's an extension of what's demoed, not a rewrite.
+
+## Verification, the next layer: identity
+
+The gesture (built) proves the photo is from *now*. It does not prove it is *you*: a friend standing next to you could hold up three fingers. Closing that is one more layer, and it is deliberately not built yet.
+
+- **Not photo ID.** Storing a government document proves you own a document, not that you are the person in the gym photo, and it turns a hackathon demo into a compliance problem. It is the obvious idea and the wrong one.
+- **An enrolled selfie is the right one.** One face shot at onboarding, and every gym photo is compared against it by the vision model in the same call that judges the session. Same cost, one more question.
+- **It must not be a new way to lose money.** A face the model cannot match in a dim mirror selfie is `unsure`, exactly like a missing gesture — nothing moves, Snap asks again, and the watch underneath still pays you. A verifier that wrongly accuses someone who actually trained is worse than one that occasionally lets a cheat through; someone told "that isn't you" after a real session never stakes again.
+- **What it needs:** an enrollment screen in the app, a reference image held per user, and a two-image vision call. The backend already routes every photo through one place, so it drops in behind `describePhoto`.
+
+## Perks and partnerships
+
+### Perks — what a verified streak is actually worth
+
+The sponsored pot sells proof in bulk. This sells it one person at a time, and it is the cheaper thing to launch.
+
+Snap is the only app in this category that can answer *"did this person really train twelve times last month?"* with something better than a self-report. That answer is worth money to anyone selling to people who train — which is the whole industry.
+
+- **The shape:** hit a bar Snap can verify — 12 verified sessions in a month, an 8-week streak, a competition won — and a code lands in the thread. `"20% off alphalete. you earned it, don't waste it."` Not a coupon blast: a reward with a receipt behind it, sent in his voice, at the moment it means something.
+- **Why a brand pays more for this than for an ad:** a discount code given to everyone is a discount. A code that only reaches people who provably trained twelve times is customer acquisition aimed at the exact person who buys gym clothes, and the brand can audit the bar. Nobody else can issue that code honestly.
+- **Why it fits the anti-coach ban:** a perk is not advice. Snap never tells you what to train; he tells you what you earned.
+- **Tiers, if it works:** the bar rises with the reward. A free month of a gym chain for a 12-week streak costs the chain almost nothing — that person is already showing up — and it is worth more to them than any ad.
+- **What it needs:** a `perks` table keyed on the same verified counters competitions already settle from, plus the brand relationship. The verification is built; the deal is the work.
+
+### Content and referrals
+
+Same principle: pay for the thing you can verify.
+
+- **Referrals** are the clean one. A friend you brought in who *stakes and trains* is worth a cut of the rake on their first month. It settles from data Snap already holds, and it cannot be farmed by signups that never stake.
+- **Content** is the messy one. Posting a clip about Snap is not verifiable the way a workout is, so it is a manual bounty, not a mechanic — a monthly pot for the best clips, judged by us, paid in SOL. Worth doing for reach; worth being honest that it is marketing spend rather than a settled competition.
 
 ## Legal note, so it isn't a surprise later
 

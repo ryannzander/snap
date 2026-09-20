@@ -8,7 +8,9 @@ Built at Hack the North 2026 by two people.
 
 commitment → deadline passes with no pic → agent evaluates context → proactive text → reply (or a 👍) → personalized response → pic arrives and checks out → stake returned
 
-The photo is the verifier: a picture with you in it, on the gym floor. The vision model judges it, a screenshot doesn't pass, and every image is fingerprinted so the same one can't be spent twice. HealthKit sits underneath as a silent fallback for the day you train and forget to send anything.
+The photo is the verifier: a picture from the session, on the gym floor. The vision model checks that a person is really training and that the image isn't a screenshot, and every image is fingerprinted so the same one can't be spent twice.
+
+**It does not check that the person is you** — no vision model can, and we're not going to claim it. Two other things do. The stake names a random gesture when it locks — *3 fingers up in the pic* — so a photo you already had can't have it in it, because nobody knew which gesture until your money moved. And HealthKit sits underneath, on your wrist, for the day you train and forget to send anything.
 
 ---
 
@@ -36,7 +38,7 @@ SNAP > nah bro, can't push this any further. your sol's already on the line.
 SNAP > ayyyeee!!! you did it bro!
 ```
 
-**Two verifiers, and neither is your word for it.** A stake is released by a photo the vision model accepts — a real person, visibly training, not a screenshot, above 0.6 confidence, and never an image already spent — or by a covering HealthKit workout underneath. A workout counts if it ran 15 minutes or longer, averages 2 active kcal/min, is one of 12 accepted types, and `wasUserEntered` is false, so opening Health → Add Data and inventing a session cannot release money. Whatever fails says why in the trace: `doesn't count as training`, `under 15 min`, `typed in by hand`, `barely moved`.
+**Two verifiers, and neither is your word for it.** A stake is released by a photo the vision model accepts — a real person, visibly training, not a screenshot, above 0.6 confidence, and never an image already spent — or by a covering HealthKit workout underneath. A workout counts if it ran 15 minutes or longer, averages 2 active kcal/min *when the source recorded energy at all*, is one of 12 accepted types, and `wasUserEntered` is false, so opening Health → Add Data and inventing a session cannot release money. Whatever fails says why in the trace: `doesn't count as training`, `under 15 min`, `typed in by hand`, `barely moved`.
 
 **That floor is there to catch a fake, not a bad day.** You pick a target when you sign up — 30, 45 or 60 minutes — and Snap holds you to it out loud, but it never holds your money to it. Drive there, warm up, feel terrible and leave after twenty minutes and you still get paid, because turning up is the behaviour the stake is buying. "Doesn't count" is how you teach someone to stop staking. The money only moves when you did not go.
 
@@ -44,7 +46,7 @@ The fingerprint catches resending Monday's selfie and nothing cleverer — a re-
 
 ## Model proposes, backend disposes
 
-The model has six tools and cannot move money with any of them. Every proposed call goes through a pure guard function first, and settlement isn't the model's decision at all — whether a photo is proof is something the vision verdict answered, whether a workout covers a commitment is something HealthKit answered, and end of day is something the clock answered. All three settle in code; the model only gets to do the talking, and it is handed the outcome rather than asked for one.
+The model has nine tools. Three of them touch money — locking a stake, releasing one, taking one — and not one of them reaches the chain directly: every proposed call goes through a pure guard function first, and the three settlements that decide whether you keep your money aren't the model's decision at all — whether a photo is proof is something the vision verdict answered, whether a workout covers a commitment is something HealthKit answered, and end of day is something the clock answered. All three settle in code; the model only gets to do the talking, and it is handed the outcome rather than asked for one.
 
 The guard that matters most is the slash. Both models we tested tried to take the money at the 20-minute grace mark. It refused every time, because grace is a warning and the money moves at the end of the user's local day.
 
@@ -67,14 +69,14 @@ The guard that matters most is the slash. Both models we tested tried to take th
 
 ## Solana
 
-Real devnet transfers with real signatures. Stake, release and slash, each verified by fetching the transaction back from the cluster rather than trusting our own logs.
+Real devnet transfers with real signatures. Stake, release and slash, each polled to `confirmed` against the cluster rather than trusted from our own logs — and if we stop waiting before the cluster answers, the signature is kept anyway, because a receipt you can open in Explorer is worth more than our certainty.
 
 **It is custodial and we say so.** The backend holds every key, the escrow is a wallet rather than a PDA, and there is no on-chain program yet. We built the fallback path first on purpose so the loop was real end to end; the Anchor program drops in behind the same three calls.
 
 ## What's tested
 
 ```
-npm test          # 9 suites, 202 checks
+npm test          # 13 suites, 427 checks
 ```
 
 | suite | what it holds |
@@ -82,7 +84,9 @@ npm test          # 9 suites, 202 checks
 | guards | every stake rule in DESIGN.md, plus the model misbehaviours each was written for |
 | time | `startOfWeek` / `endOfLocalDay` as properties over **20,720 instants across 14 zones** |
 | competitions | the pot maths — *a winner never loses money*, asserted over eight shapes |
-| photos, webhook, redaction, money, context, brain | vision, signing, credential scrubbing, formatting, agent context, brain fallback |
+| challenge | the gesture: that a missing one never pays, and that a silent model is not a pass |
+| intensity | that the dial moves pressure and never the chain, and that a new wallet affords the mode picked |
+| photos, reactions, context, webhook, redaction, money, wallet, brain | vision, tapbacks, agent context, signing, credential scrubbing, formatting, top-ups, brain fallback |
 
 The time suite found a real bug: Egypt begins DST at midnight, so the clock reads 23:59 then 01:00 and the midnight we resolved never happens. Snap would have slashed a stake an hour before the user's day was over.
 
@@ -106,9 +110,10 @@ A named time with no amount produces an **offer**, not a stake. Nobody's money m
 
 ```bash
 cd backend
+cp .dev.vars.example .dev.vars             # `npm test` won't compile without it
 npm install
 npx wrangler dev -c wrangler.local.toml    # no Cloudflare account needed
 npm test
 ```
 
-`wrangler.local.toml` drops the `[ai]` binding, which is the only thing that forces a remote session, and sets the channel to `trace` so nothing is sent. Secrets go in `backend/.dev.vars`; never in `wrangler.toml`.
+`wrangler.local.toml` drops the `[ai]` binding, which is the only thing that forces a remote session, and sets `SNAP_CHANNEL = "trace"` so nothing is sent. That switch is checked before the Linq adapter, so a local run can't spend the sandbox's 100-a-day budget even with a real key in `.dev.vars`. Secrets go in `backend/.dev.vars`; never in `wrangler.toml`.

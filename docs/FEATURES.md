@@ -16,15 +16,16 @@ The whole product is in one sentence: **a motivator is something you can ignore.
 A Durable Object gets exactly one alarm, so wake-ups live in a key-sorted queue — `alarm:<14-digit-timestamp>:<kind>` — and a range scan finds everything due. Three kinds fire: `grace` (the first "where are you"), `end_of_day` (the money moves), `morning` (no plan today, so he asks). The agent schedules its own future.
 
 ### 2. The model can't move money
-Six tools, and none of them reach the chain. Every proposed call goes through a pure guard first — `guardCreate`, `guardOffer`, `guardAccept`, `guardReschedule`, `guardRelease`, `guardSlash`. Both models we tested tried to take the money at the grace mark; it was refused every time, because grace is a warning and the money moves at end of day.
+Nine tools. Three of them touch money and none of them reach the chain. Every proposed call goes through a pure guard first — `guardCreate`, `guardOffer`, `guardAccept`, `guardReschedule`, `guardRelease`, `guardSlash`. Both models we tested tried to take the money at the grace mark; it was refused every time, because grace is a warning and the money moves at end of day.
 
 Settlement isn't the model's call at all: whether a photo is proof, whether a workout covers a commitment, and when the day ends are answered by the vision verdict, HealthKit and the clock. The model gets handed the outcome and only does the talking — and **actions run before any talking**, so a refused reschedule can't be announced as a yes.
 
 ### 3. Two verifiers, and neither is your word for it
-- **The photo.** A vision model checks a real person is visibly training, refuses screenshots, needs 0.6 confidence, and every image is SHA-256 fingerprinted so Monday's selfie can't be spent twice.
+- **The photo.** A vision model checks a real person is visibly training, refuses screenshots, needs 0.6 confidence, and every image is SHA-256 fingerprinted so Monday's selfie can't be spent twice. **It does not check that the person is you** — say that before a judge finds it.
+- **The gesture.** Every stake names one at random the moment it locks — *3 fingers up in the pic* — and the photo has to have it. A picture you already had can't, because nobody knew which gesture until your money moved. That's what turns "prove you trained" into "prove you trained *now*", and it's the answer to the first thing a skeptical judge tries: sending a gym photo that isn't theirs. Miss the gesture and nothing moves; it's `unsure`, not an accusation, so Snap asks again instead of roasting you.
 - **HealthKit underneath.** Pays you when you trained and forgot to send anything. `wasUserEntered: true` never releases money — opening Health → Add Data and inventing a session doesn't work — and a session nobody moved in ("barely moved", under 2 active kcal/min) doesn't either.
 
-Whatever fails says why, in the trace: `doesn't count as training`, `under 15 min`, `typed in by hand`, `barely moved`.
+Whatever fails says why, in the trace: `doesn't count as training`, `under 15 min`, `typed in by hand`, `barely moved`, `i asked for 3 fingers up in the pic — can't see it`.
 
 ### 4. The floor catches fakes, not bad days
 15 minutes releases the money. It used to be 30, which punished the exact behaviour the stake is buying: drive there, warm up, feel awful, leave early — you still turned up, so you still get paid. What you were *aiming* for is the intensity target, and Snap says it out loud without ever enforcing it with money.
@@ -41,6 +42,8 @@ The app has no chat — the conversation is in iMessage. The app is onboarding, 
 
 Picked at onboarding. It moves how hard Snap pushes, and nothing else.
 
+**Known gap for the demo:** the iOS onboarding flow doesn't offer the picker yet, so a user created through the app is always `medium`. Onboard the demo user by curl with `"intensity":"hard"`, or leave the dial out of the pitch.
+
 | | session target | grace before the first nudge | stake he opens with | texts first in the morning |
 |---|---|---|---|---|
 | easy | 30 min | 45 min | 0.02 SOL | no |
@@ -54,7 +57,7 @@ It also swaps the voice he's handed for the turn. **The target is not a gate** �
 ## The money
 
 - **Yours to size.** Snap opens with the dial's number and says "or name your own" — anything from **0.01 SOL** up to 1 SOL.
-- **Real devnet transfers**, real signatures, each verified by fetching the transaction back from the cluster rather than trusting our own logs.
+- **Real devnet transfers**, real signatures, each polled to `confirmed` against the cluster rather than trusted from our own logs. If we stop waiting before the cluster answers, the signature is kept anyway — a receipt you can open in Explorer beats our certainty.
 - **Custodial, and we say so.** The backend holds the keys, the escrow is a wallet rather than a PDA, there's no on-chain program yet. The fallback path was built first on purpose so the loop was real end to end; the Anchor program drops in behind the same three calls.
 - A new wallet is funded to cover the hardest mode's stake plus fees, so picking hard never means the first offer bounces.
 
@@ -76,7 +79,7 @@ Winners get **100% of their own stake back**, plus an equal share of what the sk
 ## What's tested
 
 ```
-npm test          # 12 suites, 380 checks
+npm test          # 13 suites, 427 checks
 ```
 
 `startOfWeek` / `endOfLocalDay` are asserted as properties over **20,720 instants across 14 zones**. That suite found a real bug: Egypt begins DST at midnight, so the clock reads 23:59 then 01:00 and the midnight we resolved never happens — Snap would have slashed a stake an hour before the user's day was over.
